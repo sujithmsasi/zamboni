@@ -1,0 +1,19 @@
+# ── Dev / Test dependencies ───────────────────────────────────────────────────
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+#
+# Windows note:
+#   moto[athena,s3,glue] requires Windows Long Path support enabled.
+#   Enable via PowerShell (Admin):
+#     New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+#       -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+#   Then restart terminal.
+#
+# EC2 / CodeBuild (Linux): no issues, installs cleanly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+-r requirements.txt
+
+pytest>=7.4.0
+pytest-cov>=4.1.0
+moto[athena,s3,glue]>=5.0.0
+ruff>=0.3.0

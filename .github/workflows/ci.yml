@@ -1,0 +1,65 @@
+# =============================================================================
+# Zamboni — CI Workflow
+# Triggers on every Pull Request to dev or main.
+# Runs lint + unit tests. Blocks merge if any check fails.
+# No AWS credentials needed — moto mocks all AWS calls.
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+
+jobs:
+  lint-and-test:
+    name: Lint & Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint with ruff
+        run: ruff check . --select E,F,W,I --ignore E501
+
+      - name: Run unit tests
+        env:
+          # Mock values — no real AWS needed
+          AWS_REGION: us-west-2
+          AWS_ACCOUNT_ID: "123456789012"
+          AWS_DEFAULT_REGION: us-west-2
+          ATHENA_CATALOG: glue_catalog
+          ATHENA_DATABASE: zamboni_catalog
+          ATHENA_RESULTS_BUCKET: s3://mock-athena-results/
+          STAGING_BUCKET: s3://mock-staging/
+          ARCHIVE_BUCKET: s3://mock-archive/
+          ZAMBONI_METADATA_BUCKET: s3://mock-metadata/
+          SNS_ALERT_TOPIC_ARN: arn:aws:sns:us-west-2:123456789012:mock-alerts
+          SNS_GREENZONE_TOPIC_ARN: arn:aws:sns:us-west-2:123456789012:mock-greenzone
+          DRY_RUN_DEFAULT: "true"
+          LOG_LEVEL: WARNING
+        run: |
+          pytest tests/unit/ -v \
+            -m "not integration" \
+            --tb=short \
+            --override-ini="addopts="
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: .pytest_cache/
+          retention-days: 7
