@@ -1,0 +1,33 @@
+# =============================================================================
+# Zamboni — CodeDeploy AppSpec
+# Instructs the CodeDeploy agent on EC2 how to deploy the application.
+#
+# Hooks run in this order:
+#   BeforeInstall    → stop Streamlit service, backup .env
+#   [Install]        → CodeDeploy copies files to /opt/zamboni/
+#   AfterInstall     → restore .env, pip install, set permissions
+#   ApplicationStart → restart Streamlit, validate connectivity
+# =============================================================================
+
+version: 0.0
+os: linux
+
+files:
+  - source: /
+    destination: /opt/zamboni
+
+hooks:
+  BeforeInstall:
+    - location: deploy/scripts/before_install.sh
+      timeout: 120
+      runas: root
+
+  AfterInstall:
+    - location: deploy/scripts/after_install.sh
+      timeout: 300
+      runas: root
+
+  ApplicationStart:
+    - location: deploy/scripts/app_start.sh
+      timeout: 120
+      runas: root

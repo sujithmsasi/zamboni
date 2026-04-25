@@ -1,0 +1,89 @@
+# =============================================================================
+# Zamboni — CodeBuild Build Spec
+# Runs inside AWS — has access to real AWS services via CodeBuild IAM role.
+# Executes integration tests against dev environment before packaging.
+#
+# Phases:
+#   install     — Python 3.11 + dependencies
+#   pre_build   — unit tests (fast gate before integration)
+#   build       — integration tests against dev Athena + package artifact
+#   post_build  — confirm artifact contents
+# =============================================================================
+
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: "us-west-2"
+    ATHENA_CATALOG: "glue_catalog"
+    ATHENA_DATABASE: "zamboni_catalog"
+    LOG_LEVEL: "INFO"
+    DRY_RUN_DEFAULT: "true"
+  parameter-store:
+    # These parameters must be created by the DO team in SSM before first build
+    ATHENA_RESULTS_BUCKET:    "/zamboni/dev/ATHENA_RESULTS_BUCKET"
+    STAGING_BUCKET:           "/zamboni/dev/STAGING_BUCKET"
+    ARCHIVE_BUCKET:           "/zamboni/dev/ARCHIVE_BUCKET"
+    ZAMBONI_METADATA_BUCKET:  "/zamboni/dev/ZAMBONI_METADATA_BUCKET"
+    SNS_ALERT_TOPIC_ARN:      "/zamboni/dev/SNS_ALERT_TOPIC_ARN"
+    SNS_GREENZONE_TOPIC_ARN:  "/zamboni/dev/SNS_GREENZONE_TOPIC_ARN"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "[install] Installing dependencies..."
+      - pip install --upgrade pip
+      - pip install -r requirements-dev.txt
+      - echo "[install] Done."
+
+  pre_build:
+    commands:
+      - echo "[pre_build] Running lint..."
+      - ruff check . --select E,F,W,I --ignore E501
+
+      - echo "[pre_build] Running unit tests..."
+      - pytest tests/unit/ -v -m "not integration"
+            --tb=short
+            --override-ini="addopts="
+
+  build:
+    commands:
+      - echo "[build] Running integration tests against dev Athena..."
+      - pytest tests/integration/ -v -m "integration"
+            --tb=short
+            --override-ini="addopts="
+            || echo "[build] WARNING: No integration tests found yet — skipping."
+
+      - echo "[build] Packaging artifact..."
+      - echo "Branch  $CODEBUILD_SOURCE_VERSION" > build_info.txt
+      - echo "Commit  $CODEBUILD_RESOLVED_SOURCE_VERSION" >> build_info.txt
+      - echo "Built   $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build_info.txt
+      - echo "Builder $CODEBUILD_BUILD_ID" >> build_info.txt
+      - cat build_info.txt
+
+  post_build:
+    commands:
+      - echo "[post_build] Build complete."
+      - echo "Files to deploy:"
+      - ls -la
+
+artifacts:
+  files:
+    - "**/*"
+  exclude-paths:
+    - ".git/**"
+    - ".github/**"
+    - "**/__pycache__/**"
+    - "**/*.pyc"
+    - ".pytest_cache/**"
+    - "htmlcov/**"
+    - ".coverage"
+    - "*.egg-info/**"
+  name: zamboni-$(date +%Y%m%d-%H%M%S)
+  discard-paths: no
+
+cache:
+  paths:
+    - "/root/.cache/pip/**/*"

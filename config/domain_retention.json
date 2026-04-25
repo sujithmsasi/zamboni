@@ -1,0 +1,47 @@
+{
+  "_comment": "Archive retention policies per domain. New domains registered via Streamlit app or CLI will inherit 'default' until explicitly configured.",
+  "_note": "hot_retention_days = how long data stays in staging before archival. archive_duration_days = how long archived data is kept.",
+
+  "default": {
+    "archive_enabled": false,
+    "hot_retention_days": 30,
+    "archive_duration_days": 365,
+    "rationale": "Default for any domain not explicitly listed"
+  },
+  "ers": {
+    "archive_enabled": true,
+    "hot_retention_days": 7,
+    "archive_duration_days": 365,
+    "rationale": "High volume — data propagates to datalake same day"
+  },
+  "finance": {
+    "archive_enabled": true,
+    "hot_retention_days": 30,
+    "archive_duration_days": 365,
+    "rationale": "Month-end reconciliation window"
+  },
+  "financials": {
+    "archive_enabled": true,
+    "hot_retention_days": 30,
+    "archive_duration_days": 365,
+    "rationale": "Same as finance — regulatory buffer"
+  },
+  "membership": {
+    "archive_enabled": true,
+    "hot_retention_days": 14,
+    "archive_duration_days": 365,
+    "rationale": "Two-week buffer for pipeline re-runs"
+  },
+  "claims": {
+    "archive_enabled": true,
+    "hot_retention_days": 90,
+    "archive_duration_days": 365,
+    "rationale": "Claims can be reopened up to 90 days post-processing"
+  },
+  "travel": {
+    "archive_enabled": true,
+    "hot_retention_days": 7,
+    "archive_duration_days": 365,
+    "rationale": "Fast propagation — staging data has no value after 7 days"
+  }
+}
