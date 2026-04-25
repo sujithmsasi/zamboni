@@ -1,0 +1,215 @@
+"""
+Zamboni — HK Config
+Read hk_config per table, apply policy templates, upsert configs.
+"""
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from config.settings import HK_CONFIG_TABLE, SNAPSHOT_MIN_FLOOR
+from engine.utils.athena_client import read_sql, run_query
+from engine.utils.logger import get_logger
+
+log = get_logger(__name__)
+
+# Load policy templates once at module import
+_TEMPLATES_PATH = Path(__file__).parent.parent.parent / "config" / "policy_templates.json"
+_TEMPLATES: dict = {}
+
+
+def _load_templates() -> dict:
+    global _TEMPLATES
+    if not _TEMPLATES:
+        with open(_TEMPLATES_PATH) as f:
+            data = json.load(f)
+        # Strip comment keys
+        _TEMPLATES = {k: v for k, v in data.items() if not k.startswith("_")}
+    return _TEMPLATES
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  READ
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_hk_config(table_fqn: str) -> Optional[dict]:
+    """Return hk_config row for a table, or None if not configured."""
+    sql = f"""
+        SELECT * FROM {HK_CONFIG_TABLE}
+        WHERE table_fqn = '{table_fqn}'
+        LIMIT 1
+    """
+    df = read_sql(sql, workgroup="app")
+    if df.empty:
+        return None
+    config = df.iloc[0].to_dict()
+
+    # Enforce hard floor on snapshot_min_to_keep
+    if config.get("snapshot_min_to_keep") and config["snapshot_min_to_keep"] < SNAPSHOT_MIN_FLOOR:
+        log.warning(
+            "config.snapshot_floor_enforced",
+            table_fqn=table_fqn,
+            configured=config["snapshot_min_to_keep"],
+            enforced=SNAPSHOT_MIN_FLOOR,
+        )
+        config["snapshot_min_to_keep"] = SNAPSHOT_MIN_FLOOR
+
+    return config
+
+
+def get_policy_templates() -> dict:
+    """Return all available policy templates."""
+    return _load_templates()
+
+
+def get_template(template_name: str) -> Optional[dict]:
+    """Return a single policy template or None."""
+    return _load_templates().get(template_name)
+
+
+def infer_template(layer: str, tier: str) -> str:
+    """
+    Infer the best matching policy template given a layer and tier.
+    Used during auto-registration when no template is explicitly specified.
+    """
+    mapping = {
+        ("staging",  "critical"): "CRITICAL_HIGH_VOL",
+        ("staging",  "standard"): "STAGING_DEFAULT",
+        ("staging",  "low"):      "STAGING_DEFAULT",
+        ("datalake", "critical"): "CRITICAL_HIGH_VOL",
+        ("datalake", "standard"): "DATALAKE_DEFAULT",
+        ("datalake", "low"):      "DATALAKE_DEFAULT",
+        ("base",     "critical"): "BASE_SCD2",
+        ("base",     "standard"): "BASE_SCD2",
+        ("base",     "low"):      "BASE_SCD2",
+        ("master",   "critical"): "MASTER_DEFAULT",
+        ("master",   "standard"): "MASTER_DEFAULT",
+        ("master",   "low"):      "MASTER_DEFAULT",
+    }
+    return mapping.get((layer, tier), "STAGING_DEFAULT")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WRITE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def apply_template(
+    table_fqn: str,
+    template_name: str,
+    partition_column: Optional[str] = "partition_date",
+    partition_filter_days: Optional[int] = None,
+    sort_columns: Optional[list[str]] = None,
+    glue_job_name: Optional[str] = None,
+    dry_run: bool = False,
+) -> bool:
+    """
+    Apply a policy template to a table.
+    Creates or replaces the hk_config row.
+    Enforces SNAPSHOT_MIN_FLOOR regardless of template value.
+    """
+    templates = _load_templates()
+    if template_name not in templates:
+        raise ValueError(
+            f"Unknown template '{template_name}'. "
+            f"Available: {list(templates.keys())}"
+        )
+
+    t   = templates[template_name]
+    now = _now()
+
+    # Enforce snapshot floor
+    snap_min = max(t.get("snapshot_min_to_keep", SNAPSHOT_MIN_FLOOR), SNAPSHOT_MIN_FLOOR)
+
+    # Sort columns as SQL array literal
+    sort_arr = _to_sql_array(sort_columns)
+
+    # Window config as JSON string
+    window_json = json.dumps(t.get("window_config", {})).replace("'", "''")
+
+    # Delete existing config first (Iceberg doesn't support true UPSERT easily)
+    _delete_hk_config(table_fqn, dry_run=dry_run)
+
+    sql = f"""
+        INSERT INTO {HK_CONFIG_TABLE} VALUES (
+            '{table_fqn}',
+            '{template_name}',
+            '{t["compaction_strategy"]}',
+            {t["compaction_target_file_size_mb"]},
+            '{t["compaction_engine"]}',
+            {t["snapshot_retention_days"]},
+            {snap_min},
+            {t["orphan_file_retention_days"]},
+            '{t["run_frequency"]}',
+            '{window_json}',
+            {f"'{partition_column}'" if partition_column else "NULL"},
+            {partition_filter_days if partition_filter_days else "NULL"},
+            {sort_arr},
+            {f"'{glue_job_name}'" if glue_job_name else "NULL"},
+            TIMESTAMP '{now}',
+            false,
+            NULL
+        )
+    """
+
+    log.info(
+        "config.apply_template",
+        table_fqn=table_fqn,
+        template=template_name,
+        dry_run=dry_run,
+    )
+    run_query(sql, workgroup="app", dry_run=dry_run)
+    return True
+
+
+def update_config_field(
+    table_fqn: str,
+    field: str,
+    value,
+    override_notes: str = "",
+    dry_run: bool = False,
+) -> bool:
+    """
+    Update a single field in hk_config.
+    Marks manually_overridden = true.
+    """
+    now         = _now()
+    value_sql   = f"'{value}'" if isinstance(value, str) else str(value).lower() if isinstance(value, bool) else str(value)
+    notes_sql   = f"'{_esc(override_notes)}'" if override_notes else "override_notes"
+
+    sql = f"""
+        UPDATE {HK_CONFIG_TABLE}
+        SET {field}              = {value_sql},
+            manually_overridden  = true,
+            override_notes       = {notes_sql},
+            template_applied_at  = TIMESTAMP '{now}'
+        WHERE table_fqn = '{table_fqn}'
+    """
+    log.info("config.update_field", table_fqn=table_fqn, field=field, dry_run=dry_run)
+    run_query(sql, workgroup="app", dry_run=dry_run)
+    return True
+
+
+def _delete_hk_config(table_fqn: str, dry_run: bool = False) -> None:
+    """Delete existing hk_config row — called before INSERT during apply_template."""
+    sql = f"DELETE FROM {HK_CONFIG_TABLE} WHERE table_fqn = '{table_fqn}'"
+    run_query(sql, workgroup="app", dry_run=dry_run)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _esc(value: str) -> str:
+    return str(value).replace("'", "''")
+
+
+def _to_sql_array(items: Optional[list[str]]) -> str:
+    """Convert a Python list to a SQL ARRAY literal, or NULL."""
+    if not items:
+        return "NULL"
+    quoted = ", ".join(f"'{i}'" for i in items)
+    return f"ARRAY[{quoted}]"
