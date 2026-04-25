@@ -1,0 +1,110 @@
+{
+  "_comment": "Zamboni policy templates — applied to tables on registration. All snapshot_min_to_keep values respect the hard floor of 30.",
+
+  "STAGING_DEFAULT": {
+    "description": "Default for staging layer — high churn, short retention",
+    "compaction_strategy": "binpack",
+    "compaction_target_file_size_mb": 128,
+    "compaction_engine": "athena",
+    "snapshot_retention_days": 3,
+    "snapshot_min_to_keep": 30,
+    "orphan_file_retention_days": 2,
+    "run_frequency": "daily",
+    "window_config": {
+      "type": "post_batch",
+      "timezone": "America/Los_Angeles",
+      "delay_minutes": 30,
+      "duration_hours": 4,
+      "blackout_hours": [6, 7, 8, 9, 18, 19, 20, 21]
+    }
+  },
+
+  "DATALAKE_DEFAULT": {
+    "description": "Default for datalake layer — moderate churn, medium retention",
+    "compaction_strategy": "binpack",
+    "compaction_target_file_size_mb": 256,
+    "compaction_engine": "athena",
+    "snapshot_retention_days": 7,
+    "snapshot_min_to_keep": 30,
+    "orphan_file_retention_days": 3,
+    "run_frequency": "daily",
+    "window_config": {
+      "type": "post_batch",
+      "timezone": "America/Los_Angeles",
+      "delay_minutes": 30,
+      "duration_hours": 4,
+      "blackout_hours": [6, 7, 8, 9, 18, 19, 20, 21]
+    }
+  },
+
+  "BASE_SCD2": {
+    "description": "Base layer SCD2 tables — sort compaction, longer retention",
+    "compaction_strategy": "sort",
+    "compaction_target_file_size_mb": 512,
+    "compaction_engine": "glue",
+    "snapshot_retention_days": 14,
+    "snapshot_min_to_keep": 30,
+    "orphan_file_retention_days": 5,
+    "run_frequency": "weekly",
+    "window_config": {
+      "type": "scheduled",
+      "timezone": "America/Los_Angeles",
+      "days": ["saturday"],
+      "start_time": "02:00",
+      "duration_hours": 6
+    }
+  },
+
+  "MASTER_DEFAULT": {
+    "description": "Master layer — zorder compaction, long retention",
+    "compaction_strategy": "zorder",
+    "compaction_target_file_size_mb": 512,
+    "compaction_engine": "glue",
+    "snapshot_retention_days": 30,
+    "snapshot_min_to_keep": 30,
+    "orphan_file_retention_days": 7,
+    "run_frequency": "weekly",
+    "window_config": {
+      "type": "scheduled",
+      "timezone": "America/Los_Angeles",
+      "days": ["saturday"],
+      "start_time": "04:00",
+      "duration_hours": 6
+    }
+  },
+
+  "CRITICAL_HIGH_VOL": {
+    "description": "Critical high-volume tables — run on every trigger",
+    "compaction_strategy": "binpack",
+    "compaction_target_file_size_mb": 256,
+    "compaction_engine": "athena",
+    "snapshot_retention_days": 5,
+    "snapshot_min_to_keep": 30,
+    "orphan_file_retention_days": 3,
+    "run_frequency": "every_trigger",
+    "window_config": {
+      "type": "post_batch",
+      "timezone": "America/Los_Angeles",
+      "delay_minutes": 15,
+      "duration_hours": 8
+    }
+  },
+
+  "NON_PROD_DEFAULT": {
+    "description": "Non-production tables — lightweight, weekly",
+    "compaction_strategy": "binpack",
+    "compaction_target_file_size_mb": 128,
+    "compaction_engine": "athena",
+    "snapshot_retention_days": 3,
+    "snapshot_min_to_keep": 30,
+    "orphan_file_retention_days": 1,
+    "run_frequency": "weekly",
+    "window_config": {
+      "type": "scheduled",
+      "timezone": "America/Los_Angeles",
+      "days": ["sunday"],
+      "start_time": "03:00",
+      "duration_hours": 6
+    }
+  }
+}
