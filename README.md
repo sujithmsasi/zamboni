@@ -9,7 +9,7 @@ and lifecycle management for Apache Iceberg tables at enterprise scale.
 
 ```bash
 # From the project root
-streamlit run app/_main.py --server.port 8501
+streamlit run app/Home.py --server.port 8501
 ```
 
 > The entrypoint is `app/_main.py`. The `_` prefix hides it from Streamlit's
@@ -40,7 +40,7 @@ zamboni/
 │   ├── scripts/     ← Control-M entry points
 │   └── cli/         ← Helper tools for engineers
 ├── app/             ← Streamlit UI — systemd service on same EC2
-│   ├── _main.py     ← Entry point (run: streamlit run app/_main.py)
+│   ├── Home.py      ← Entry point (run: streamlit run app/Home.py)
 │   ├── pages/       ← One file per module
 │   ├── components/  ← Reusable UI components
 │   └── assets/      ← Logo files (da_logo.png, da_logo_small.png)
@@ -77,7 +77,7 @@ cp .env.example .env          # fill in your values
 python -m pytest tests/unit/ -v --override-ini="addopts="
 
 # Run Streamlit app
-streamlit run app/_main.py --server.port 8501
+streamlit run app/Home.py --server.port 8501
 ```
 
 ---
