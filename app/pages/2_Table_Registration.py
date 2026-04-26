@@ -17,7 +17,7 @@ from engine.core.config import infer_template, apply_template
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 
 
-st.set_page_config(page_title="Zamboni — Register", page_icon="➕", layout="wide")
+st.set_page_config(page_title="Zamboni — Table Registration", page_icon="➕", layout="wide")
 
 if not check_login():
     st.stop()

@@ -14,7 +14,7 @@ from config.settings import DOMAIN_REGISTRY_TABLE, VALID_ENVIRONMENTS
 from engine.core import registry
 
 
-st.set_page_config(page_title="Zamboni — Domains", page_icon="📋", layout="wide")
+st.set_page_config(page_title="Zamboni — Domain Management", page_icon="📋", layout="wide")
 
 if not check_login():
     st.stop()
