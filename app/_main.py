@@ -1,7 +1,8 @@
 """
 Zamboni — Entry Point
-Run: streamlit run app/main.py
-Pages are defined in .streamlit/pages.toml
+Run with: streamlit run app/_main.py
+Pages must be in app/pages/ (relative to this file).
+The _ prefix hides this file from Streamlit's page navigation.
 """
 import streamlit as st
 from app.components.auth import check_login
@@ -24,5 +25,5 @@ check_login()
 render_sidebar()
 render_header()
 
-# Default landing page content
+# Relative to app/_main.py — pages/ folder is app/pages/
 st.switch_page("pages/0_Home.py")

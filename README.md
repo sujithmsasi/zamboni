@@ -5,6 +5,18 @@ and lifecycle management for Apache Iceberg tables at enterprise scale.
 
 ---
 
+## Running the App
+
+```bash
+# From the project root
+streamlit run app/_main.py --server.port 8501
+```
+
+> The entrypoint is `app/_main.py`. The `_` prefix hides it from Streamlit's
+> page navigation while still allowing it to be used as the entrypoint.
+
+---
+
 ## Three Engines
 
 | Engine | Purpose | Trigger |
@@ -28,8 +40,11 @@ zamboni/
 │   ├── scripts/     ← Control-M entry points
 │   └── cli/         ← Helper tools for engineers
 ├── app/             ← Streamlit UI — systemd service on same EC2
+│   ├── _main.py     ← Entry point (run: streamlit run app/_main.py)
 │   ├── pages/       ← One file per module
-│   └── components/  ← Reusable UI components
+│   ├── components/  ← Reusable UI components
+│   └── assets/      ← Logo files (da_logo.png, da_logo_small.png)
+├── glue_jobs/       ← PySpark Glue job for sort/zorder compaction
 ├── sql/             ← Athena DDL
 ├── config/          ← Settings, policy templates, domain retention
 ├── tests/           ← Unit + integration tests
@@ -48,16 +63,6 @@ zamboni/
 | Metadata Database | zamboni_catalog |
 | Layers | staging · datalake · base · master |
 
-## Athena Workgroups
-
-| Workgroup | Purpose |
-|---|---|
-| `zamboni-critical` | Critical tier HK operations |
-| `zamboni-standard` | Standard tier HK operations |
-| `zamboni-low` | Low priority HK operations |
-| `zamboni-archival` | Archival Engine |
-| `zamboni-app` | Streamlit app queries |
-
 ---
 
 ## Quick Start
@@ -65,10 +70,23 @@ zamboni/
 ```bash
 git clone https://github.com/sujithmsasi/zamboni.git
 cd zamboni && git checkout dev
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 cp .env.example .env          # fill in your values
-pytest tests/unit/ -v         # all should pass, no AWS needed
+
+# Run unit tests
+python -m pytest tests/unit/ -v --override-ini="addopts="
+
+# Run Streamlit app
+streamlit run app/_main.py --server.port 8501
 ```
+
+---
+
+## D&A Logo
+
+Place your logo files at:
+- `app/assets/da_logo.png`       — 400×80px, used in page header
+- `app/assets/da_logo_small.png` — 120×40px, used in sidebar
 
 ---
 
@@ -76,12 +94,12 @@ pytest tests/unit/ -v         # all should pass, no AWS needed
 
 | Phase | Description | Status |
 |---|---|---|
-| 1 | Foundation — structure, SQL, config, utils | 🔄 |
-| 2 | CI/CD — GitHub Actions + CodePipeline + CodeDeploy | ⏳ |
-| 3 | Core Layer | ⏳ |
-| 4 | HK Engine | ⏳ |
-| 5 | Archival Engine | ⏳ |
-| 6 | Lifecycle Engine | ⏳ |
-| 7 | Streamlit App | ⏳ |
+| 1 | Foundation | ✅ |
+| 2 | CI/CD | ✅ |
+| 3 | Core Layer | ✅ |
+| 4 | HK Engine | ✅ |
+| 5 | Archival Engine | ✅ |
+| 6 | Lifecycle Engine | ✅ |
+| 7 | Streamlit App | ✅ |
 | 8 | CLI Tools | ⏳ |
 | 9 | Hardening | ⏳ |
