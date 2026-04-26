@@ -1,9 +1,4 @@
 [[pages]]
-path = "pages/0_Home.py"
-name = "Home"
-icon = "🏠"
-
-[[pages]]
 path = "pages/1_Domain_Management.py"
 name = "Domain Management"
 icon = "📋"
