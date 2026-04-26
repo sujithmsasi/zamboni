@@ -10,6 +10,7 @@ import streamlit as st
 import pandas as pd
 
 from app.components.auth import check_login
+from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.filters import domain_filter, environment_filter
 from app.components.athena_runner import cached_read_sql
@@ -25,6 +26,7 @@ from config.settings import (
 st.set_page_config(page_title="Zamboni — Stale Resources", page_icon="🔎", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("🔎 Stale Resources")
 st.caption("Identify stale tables, orphaned S3 locations, unregistered tables, and zero-row tables wasting storage.")

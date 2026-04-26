@@ -10,6 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from app.components.auth import check_login
+from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.filters import domain_filter, layer_filter, tier_filter, environment_filter
 from app.components.athena_runner import cached_read_sql
@@ -21,6 +22,7 @@ from config.settings import STREAM_REGISTRY_TABLE, EXECUTION_LOG_TABLE
 st.set_page_config(page_title="Zamboni — Health Dashboard", page_icon="📊", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("📊 Health Dashboard")
 st.caption("Real-time fleet health analysis. Data refreshes on every page load.")

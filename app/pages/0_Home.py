@@ -7,7 +7,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 
-from app.components.auth import check_login, current_user
+from app.components.auth import check_login
+from app.components.header import render as render_header, current_user
 from app.components.sidebar import render as render_sidebar
 from app.components.kpi_cards import render_kpi_row, format_bytes, format_count
 from app.components.status_badge import status as status_badge, tier as tier_badge
@@ -22,6 +23,7 @@ st.set_page_config(page_title="Zamboni — Home", page_icon="🏠", layout="wide
 if not check_login():
     st.stop()
 render_sidebar()
+render_header()
 
 
 # ── Header ────────────────────────────────────────────────────────────────────

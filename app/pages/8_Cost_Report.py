@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from app.components.auth import check_login
+from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.filters import domain_filter
 from app.components.athena_runner import cached_read_sql
@@ -18,6 +19,7 @@ from config.settings import EXECUTION_LOG_TABLE
 st.set_page_config(page_title="Zamboni — Cost Report", page_icon="💰", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("💰 Cost Report")
 st.caption("Athena scan costs, storage reclaimed by archival and lifecycle engines. All costs are estimates.")

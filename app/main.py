@@ -1,14 +1,12 @@
 """
-Zamboni — Streamlit App Entry Point
-Run with:
-    streamlit run app/main.py --server.port 8501
-
-Streamlit auto-loads pages/ as a multi-page app.
-This file sets global config and auth, then redirects to Home.
+Zamboni — Entry Point
+Run: streamlit run app/main.py
+Pages are defined in .streamlit/pages.toml
 """
 import streamlit as st
 from app.components.auth import check_login
 from app.components.sidebar import render as render_sidebar
+from app.components.header import render as render_header
 
 st.set_page_config(
     page_title="Zamboni",
@@ -18,15 +16,13 @@ st.set_page_config(
     menu_items={
         "Get Help":     None,
         "Report a bug": None,
-        "About":        "**Zamboni** — Iceberg Table Governance Framework\nD&A Platform",
+        "About":        "**Zamboni** — Iceberg Table Governance\nD&A Platform",
     },
 )
 
-# Auth gate — stops here and shows login if not authenticated
 check_login()
-
-# Sidebar
 render_sidebar()
+render_header()
 
-# Redirect to Home page (Streamlit multi-page auto-routes via pages/)
+# Default landing page content
 st.switch_page("pages/0_Home.py")

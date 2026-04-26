@@ -1,0 +1,54 @@
+[[pages]]
+path = "pages/0_Home.py"
+name = "Home"
+icon = "🏠"
+
+[[pages]]
+path = "pages/1_Domain_Management.py"
+name = "Domain Management"
+icon = "📋"
+
+[[pages]]
+path = "pages/2_Table_Registration.py"
+name = "Table Registration"
+icon = "➕"
+
+[[pages]]
+path = "pages/3_Policy_Configuration.py"
+name = "Policy Configuration"
+icon = "⚙️"
+
+[[pages]]
+path = "pages/4_Health_Dashboard.py"
+name = "Health Dashboard"
+icon = "📊"
+
+[[pages]]
+path = "pages/5_Live_Activity.py"
+name = "Live Activity"
+icon = "🔴"
+
+[[pages]]
+path = "pages/6_Dry_Run_Viewer.py"
+name = "Dry Run Viewer"
+icon = "🧪"
+
+[[pages]]
+path = "pages/7_Execution_Log.py"
+name = "Execution Log"
+icon = "📜"
+
+[[pages]]
+path = "pages/8_Cost_Report.py"
+name = "Cost Report"
+icon = "💰"
+
+[[pages]]
+path = "pages/9_NonProd_Lifecycle.py"
+name = "NonProd Lifecycle"
+icon = ":wastebasket:"
+
+[[pages]]
+path = "pages/10_Stale_Resources.py"
+name = "Stale Resources"
+icon = "🔎"

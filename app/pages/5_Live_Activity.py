@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime, timezone
 
 from app.components.auth import check_login
+from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.athena_runner import cached_read_sql
 from app.components.status_badge import status as status_badge
@@ -17,6 +18,7 @@ from config.settings import EXECUTION_LOG_TABLE
 st.set_page_config(page_title="Zamboni — Live Activity", page_icon="🔴", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("🔴 Live Activity Monitor")
 

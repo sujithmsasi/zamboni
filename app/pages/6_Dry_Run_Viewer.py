@@ -7,6 +7,7 @@ import streamlit as st
 import json
 
 from app.components.auth import check_login
+from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.filters import domain_filter, layer_filter
 from app.components.athena_runner import cached_read_registry
@@ -19,6 +20,7 @@ from engine.core.window_evaluator import evaluate, EXECUTE
 st.set_page_config(page_title="Zamboni — Dry Run", page_icon="🧪", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("🧪 Dry Run Viewer")
 st.caption("Simulate HK Engine operations without writing anything. Use this to validate config before enabling a table.")

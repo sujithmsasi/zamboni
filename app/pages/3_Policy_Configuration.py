@@ -6,7 +6,8 @@ Apply policy templates, override fields, bulk apply by domain/layer.
 import streamlit as st
 import pandas as pd
 
-from app.components.auth import check_login, current_user
+from app.components.auth import check_login
+from app.components.header import render as render_header, current_user
 from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.filters import domain_filter, layer_filter, tier_filter
 from app.components.athena_runner import cached_read_registry, execute_write
@@ -18,6 +19,7 @@ from engine.core.config import get_policy_templates, get_template, infer_templat
 st.set_page_config(page_title="Zamboni — Policy Config", page_icon="⚙️", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("⚙️ Policy Configuration")
 st.caption("Manage housekeeping policies per table. Templates provide sensible defaults; fields can be overridden individually.")

@@ -5,7 +5,8 @@ View tables by lifecycle state, submit exemptions, view deletion history.
 import streamlit as st
 import pandas as pd
 
-from app.components.auth import check_login, current_user
+from app.components.auth import check_login
+from app.components.header import render as render_header, current_user
 from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.athena_runner import cached_read_sql, execute_write
 from app.components.status_badge import lifecycle as lifecycle_badge
@@ -15,6 +16,7 @@ from config.settings import NONPROD_REGISTRY_TABLE
 st.set_page_config(page_title="Zamboni — Non-Prod Lifecycle", page_icon="🗑️", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("🗑️ Non-Prod Lifecycle Manager")
 st.caption("Manage lifecycle states for preprod/dev/test tables. Submit exemptions to prevent deletion.")

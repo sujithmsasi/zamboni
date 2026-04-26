@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 
 from app.components.auth import check_login
+from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.filters import domain_filter, environment_filter
 from app.components.athena_runner import cached_read_sql
@@ -17,6 +18,7 @@ from config.settings import EXECUTION_LOG_TABLE
 st.set_page_config(page_title="Zamboni — Execution Log", page_icon="📜", layout="wide")
 check_login()
 render_sidebar()
+render_header()
 
 st.title("📜 Execution Log")
 st.caption("Unified audit log for all three engines. Every operation is recorded here.")
