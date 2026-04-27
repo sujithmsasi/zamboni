@@ -1,15 +1,24 @@
 """
 Zamboni — HK Engine
 The core housekeeping engine. Processes all enabled Iceberg tables:
-  1. Gate 1  — upstream batch completion check
-  2. Window  — safe window evaluation
-  3. Health  — assess what operations are needed
-  4. Circuit — skip if circuit breaker is open
-  5. Compact — bin-pack (Athena) or sort/zorder (Glue)
-  6. Vacuum  — expire snapshots + orphan file cleanup
-  7. Log     — record every outcome to execution_log
+  1. Gate 1     — upstream batch completion check
+  2. Window     — safe window evaluation
+  3. Frequency  — run_frequency + dedupe (SKIP_NOT_DUE)  [Sprint 2: H1+H2]
+  4. Circuit    — skip if circuit breaker is open
+  5. Health     — assess what operations are needed
+  6. Compact    — bin-pack (Athena) or sort/zorder (Glue)
+  7. Vacuum     — expire snapshots + orphan file cleanup
+  8. Log        — per-operation records + hk_run summary [Sprint 2: H4]
+  9. Metrics    — CloudWatch publish
+
+Sprint 2 additions:
+  - run_frequency + dedupe: tables skip if run recently (SKIP_NOT_DUE)
+  - Tier-ordered parallelism: ThreadPoolExecutor per tier group [H3]
+  - Operation-level log records: separate rows for compaction/vacuum/orphan [H4]
+  - dry_run_until ramp-up: per-table dry_run flag from is_in_dry_run_ramp [C2]
 """
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from engine.core import (
@@ -32,91 +41,119 @@ from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# ── run_frequency thresholds ──────────────────────────────────────────────────
+# Hours of buffer added so a 24h "daily" window isn't broken by a 25-min drift
+_FREQUENCY_HOURS = {
+    "every_trigger": 0,    # always run
+    "daily":         20,   # run if last run > 20h ago
+    "weekly":        160,  # run if last run > 160h ago (6.7 days)
+}
+
+# ── Parallelism by tier ───────────────────────────────────────────────────────
+_TIER_WORKERS = {
+    "critical": 5,
+    "standard": 10,
+    "low":       3,
+}
+
 
 class HKEngine(BaseEngine):
     """
     HK Engine — automated compaction, snapshot expiry, orphan file cleanup.
-    Triggered post-batch via Control-M or EventBridge.
+    Triggered hourly by EventBridge (or post-batch via Control-M).
+    Self-regulating: tables that are not due, outside their window, or
+    already healthy are skipped automatically.
     """
 
     def run(
         self,
         domain: Optional[str] = None,
-        layer: Optional[str] = None,
-        tier: Optional[str] = None,
+        layer:  Optional[str] = None,
+        tier:   Optional[str] = None,
         table_fqn: Optional[str] = None,
         environment: str = "prod",
     ) -> dict:
         """
         Run HK Engine.
 
-        Scope options (mutually exclusive — use one):
-          - table_fqn   : process a single table
-          - domain+layer: process all tables in a domain/layer
-          - domain      : process all tables in a domain
-          - (none)      : process all enabled tables
+        Scope (use one):
+          table_fqn            — single table
+          domain + layer/tier  — filtered subset
+          (none)               — all enabled tables
 
-        Args:
-            domain:      Filter by domain
-            layer:       Filter by layer
-            tier:        Filter by tier
-            table_fqn:   Process a single specific table
-            environment: Target environment (default: prod)
-
-        Returns:
-            Run summary dict
+        Returns run summary dict.
         """
         self._log_start(
             scope=table_fqn or domain or "all",
             environment=environment,
-            domain=domain,
-            layer=layer,
-            tier=tier,
+            domain=domain, layer=layer, tier=tier,
         )
 
-        # ── Fetch tables to process ───────────────────────────────────────────
+        # ── Fetch tables ──────────────────────────────────────────────────────
         if table_fqn:
-            row = registry.get_table(table_fqn)
+            row    = registry.get_table(table_fqn)
             tables = [row] if row else []
         else:
             tables = registry.get_enabled_tables(
                 environment=environment,
-                domain=domain,
-                tier=tier,
-                layer=layer,
+                domain=domain, tier=tier, layer=layer,
             )
 
         log.info("hk_engine.tables_fetched", count=len(tables), run_id=self.run_id)
 
-        # ── Process each table ────────────────────────────────────────────────
-        succeeded    = 0
-        failed       = 0
-        skipped      = 0
-        failed_tables= []
+        succeeded     = 0
+        failed        = 0
+        skipped       = 0
+        failed_tables = []
 
-        for table_row in tables:
-            fqn = table_row["table_fqn"]
-            try:
-                outcome = self._process_table(table_row)
-                if outcome == "succeeded":
-                    succeeded += 1
-                elif outcome == "skipped":
-                    skipped += 1
-                elif outcome == "failed":
-                    failed += 1
-                    failed_tables.append(fqn)
-            except Exception as e:
-                failed += 1
-                failed_tables.append(fqn)
-                self._log_table_error(fqn, e)
-                self._write_log(
-                    table_row=table_row,
-                    operation="hk_run",
-                    status="FAILURE",
-                    error_message=str(e),
-                )
+        # ── Tier-ordered parallel processing (H3) ─────────────────────────────
+        # Process critical first, then standard, then low.
+        # Each tier runs with its own thread pool so critical never waits on low.
+        for tier_name in ("critical", "standard", "low", None):
+            if tier_name is None:
+                tier_tables = [t for t in tables if t.get("tier") not in ("critical","standard","low")]
+            else:
+                tier_tables = [t for t in tables if t.get("tier") == tier_name]
 
-        # ── Summary alert if failures ─────────────────────────────────────────
+            if not tier_tables:
+                continue
+
+            max_workers = _TIER_WORKERS.get(tier_name or "standard", 5)
+            log.info(
+                "hk_engine.tier_batch",
+                tier=tier_name, count=len(tier_tables),
+                max_workers=max_workers, run_id=self.run_id,
+            )
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(self._process_table, table_row): table_row
+                    for table_row in tier_tables
+                }
+                for future in as_completed(futures):
+                    table_row = futures[future]
+                    fqn       = table_row["table_fqn"]
+                    try:
+                        outcome = future.result()
+                        if outcome == "succeeded":
+                            succeeded += 1
+                        elif outcome == "skipped":
+                            skipped += 1
+                        elif outcome == "failed":
+                            failed += 1
+                            failed_tables.append(fqn)
+                    except Exception as e:
+                        failed += 1
+                        failed_tables.append(fqn)
+                        self._log_table_error(fqn, e)
+                        self._write_log(
+                            table_row=table_row,
+                            operation="hk_run",
+                            status="FAILURE",
+                            error_message=str(e),
+                        )
+
+        # ── Summary alert on failures ─────────────────────────────────────────
         if failed_tables and not self.dry_run:
             notifier.send_engine_failure_summary(
                 engine="hk",
@@ -132,9 +169,9 @@ class HKEngine(BaseEngine):
         )
         self._log_complete(result)
         publish_engine_run(
-            engine='hk', run_id=self.run_id,
+            engine="hk", run_id=self.run_id,
             succeeded=succeeded, failed=failed, skipped=skipped,
-            duration_s=result.get('elapsed_seconds', 0),
+            duration_s=result.get("elapsed_seconds", 0),
             dry_run=self.dry_run,
         )
         return result
@@ -143,13 +180,16 @@ class HKEngine(BaseEngine):
 
     def _process_table(self, table_row: dict) -> str:
         """
-        Process a single table through all HK gates and operations.
+        Process one table through all gates and operations.
         Returns: 'succeeded' | 'skipped' | 'failed'
         """
         fqn  = table_row["table_fqn"]
         tier = table_row.get("tier", "standard")
 
         log.info("hk_engine.processing", table_fqn=fqn, tier=tier, run_id=self.run_id)
+
+        # ── Ramp-up check: per-table dry_run ─────────────────────────────────
+        table_dry_run = self.dry_run or is_in_dry_run_ramp(table_row)
 
         # ── Get HK config ─────────────────────────────────────────────────────
         hk_config = get_hk_config(fqn)
@@ -163,30 +203,32 @@ class HKEngine(BaseEngine):
         if upstream_job and table_row.get("dependent_job_type") == "glue":
             if not is_upstream_job_complete(upstream_job):
                 self._log_table_skip(fqn, "SKIP_UPSTREAM_PENDING")
-                self._write_log(
-                    table_row, "hk_run", "SKIPPED",
-                    skip_reason="SKIP_UPSTREAM_PENDING"
-                )
+                self._write_log(table_row, "hk_run", "SKIPPED",
+                                skip_reason="SKIP_UPSTREAM_PENDING")
                 return "skipped"
 
-        # ── Gate 2 — Safe window check ────────────────────────────────────────
-        window_json = hk_config.get("window_config", "")
-        force       = table_row.get("force_run", False)
-        decision    = evaluate(window_json, force=force)
-
+        # ── Gate 2 — Safe window ──────────────────────────────────────────────
+        decision = evaluate(
+            hk_config.get("window_config", ""),
+            force=table_row.get("force_run", False),
+        )
         if decision != EXECUTE:
             self._log_table_skip(fqn, decision)
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason=decision)
             return "skipped"
 
-        # ── Gate 3 — Circuit breaker ──────────────────────────────────────────
-        cb_state = circuit_breaker.check(fqn)
-        if cb_state == circuit_breaker.OPEN:
+        # ── Gate 3 — run_frequency + dedupe (H1 + H2) ────────────────────────
+        due, skip_reason = self._is_due(fqn, hk_config)
+        if not due:
+            self._log_table_skip(fqn, skip_reason)
+            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason=skip_reason)
+            return "skipped"
+
+        # ── Gate 4 — Circuit breaker ──────────────────────────────────────────
+        if circuit_breaker.check(fqn) == circuit_breaker.OPEN:
             self._log_table_skip(fqn, "SKIP_CIRCUIT_OPEN")
-            self._write_log(
-                table_row, "hk_run", "SKIPPED",
-                skip_reason="SKIP_CIRCUIT_OPEN"
-            )
+            self._write_log(table_row, "hk_run", "SKIPPED",
+                            skip_reason="SKIP_CIRCUIT_OPEN")
             return "skipped"
 
         # ── Health check ──────────────────────────────────────────────────────
@@ -196,7 +238,7 @@ class HKEngine(BaseEngine):
         if not health.check_success:
             self._write_log(
                 table_row, "hk_run", "FAILURE",
-                error_message=f"Health check failed: {health.check_error}"
+                error_message=f"Health check failed: {health.check_error}",
             )
             return "failed"
 
@@ -206,62 +248,98 @@ class HKEngine(BaseEngine):
             return "skipped"
 
         # ── Operations ────────────────────────────────────────────────────────
-        # Determine effective dry_run for this table:
-        # If in ramp-up window, treat as dry_run regardless of engine setting
-        table_dry_run = self.dry_run or is_in_dry_run_ramp(table_row)
-
-        started_at = datetime.now(timezone.utc)
-        op_errors  = []
+        started_at     = datetime.now(timezone.utc)
+        op_errors      = []
+        total_bytes_scanned = 0
 
         compaction_result = {}
         vacuum_result     = {}
         orphan_result     = {}
 
-        # Compaction
+        # ── Compaction ────────────────────────────────────────────────────────
         if health.needs_compaction:
+            op_start = datetime.now(timezone.utc)
             try:
                 compaction_result = compaction.run_compaction(
-                    table_fqn=fqn,
-                    hk_config=hk_config,
-                    health=health,
-                    tier=tier,
-                    dry_run=table_dry_run,
+                    table_fqn=fqn, hk_config=hk_config,
+                    health=health, tier=tier, dry_run=table_dry_run,
                 )
+                op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
             except Exception as e:
                 op_errors.append(f"compaction: {e}")
+                compaction_result = {}
+                op_status = "FAILURE"
                 log.error("hk_engine.compaction_error", table_fqn=fqn, error=str(e))
 
-        # Snapshot expiry
+            # Per-operation log record (H4)
+            self._write_log(
+                table_row, "compaction", op_status,
+                started_at=op_start,
+                completed_at=datetime.now(timezone.utc),
+                files_compacted=compaction_result.get("files_compacted"),
+                bytes_rewritten=compaction_result.get("bytes_rewritten"),
+                athena_query_id=compaction_result.get("athena_query_id"),
+                bytes_scanned=compaction_result.get("bytes_scanned", 0),
+                error_message=op_errors[-1] if op_status == "FAILURE" else None,
+            )
+            total_bytes_scanned += compaction_result.get("bytes_scanned", 0)
+
+        # ── Snapshot expiry ───────────────────────────────────────────────────
         if health.needs_vacuum:
+            op_start = datetime.now(timezone.utc)
             try:
                 vacuum_result = vacuum.run_expire_snapshots(
-                    table_fqn=fqn,
-                    hk_config=hk_config,
-                    health=health,
-                    tier=tier,
-                    dry_run=table_dry_run,
+                    table_fqn=fqn, hk_config=hk_config,
+                    health=health, tier=tier, dry_run=table_dry_run,
                 )
+                op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
             except Exception as e:
                 op_errors.append(f"vacuum: {e}")
+                vacuum_result = {}
+                op_status = "FAILURE"
                 log.error("hk_engine.vacuum_error", table_fqn=fqn, error=str(e))
 
-        # Orphan cleanup
+            self._write_log(
+                table_row, "vacuum", op_status,
+                started_at=op_start,
+                completed_at=datetime.now(timezone.utc),
+                snapshots_before=health.snapshot_count,
+                athena_query_id=vacuum_result.get("athena_query_id"),
+                bytes_scanned=vacuum_result.get("bytes_scanned", 0),
+                error_message=op_errors[-1] if op_status == "FAILURE" else None,
+            )
+            total_bytes_scanned += vacuum_result.get("bytes_scanned", 0)
+
+        # ── Orphan cleanup ────────────────────────────────────────────────────
         if health.needs_orphan_cleanup:
+            op_start = datetime.now(timezone.utc)
             try:
                 orphan_result = vacuum.run_orphan_cleanup(
-                    table_fqn=fqn,
-                    hk_config=hk_config,
-                    tier=tier,
-                    dry_run=table_dry_run,
+                    table_fqn=fqn, hk_config=hk_config,
+                    tier=tier, dry_run=table_dry_run,
                 )
+                op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
             except Exception as e:
                 op_errors.append(f"orphan_cleanup: {e}")
+                orphan_result = {}
+                op_status = "FAILURE"
                 log.error("hk_engine.orphan_error", table_fqn=fqn, error=str(e))
 
-        completed_at = datetime.now(timezone.utc)
-        status = "FAILURE" if op_errors else ("DRY_RUN" if table_dry_run else "SUCCESS")
+            self._write_log(
+                table_row, "orphan_cleanup", op_status,
+                started_at=op_start,
+                completed_at=datetime.now(timezone.utc),
+                orphan_files_deleted=orphan_result.get("orphan_files_deleted"),
+                athena_query_id=orphan_result.get("athena_query_id"),
+                bytes_scanned=orphan_result.get("bytes_scanned", 0),
+                error_message=op_errors[-1] if op_status == "FAILURE" else None,
+            )
+            total_bytes_scanned += orphan_result.get("bytes_scanned", 0)
 
-        # ── Write execution log ───────────────────────────────────────────────
+        # ── Summary hk_run record ─────────────────────────────────────────────
+        completed_at = datetime.now(timezone.utc)
+        status       = "FAILURE" if op_errors else ("DRY_RUN" if table_dry_run else "SUCCESS")
+
         self._write_log(
             table_row=table_row,
             operation="hk_run",
@@ -276,20 +354,77 @@ class HKEngine(BaseEngine):
                 compaction_result.get("athena_query_id")
                 or vacuum_result.get("athena_query_id")
             ),
-            bytes_scanned=(
-                compaction_result.get("bytes_scanned", 0)
-                + vacuum_result.get("bytes_scanned", 0)
-                + orphan_result.get("bytes_scanned", 0)
-            ),
+            bytes_scanned=total_bytes_scanned,
         )
 
         # ── Circuit breaker trip check ────────────────────────────────────────
-        if op_errors and not self.dry_run:
+        if op_errors and not table_dry_run:
             failure_count = execution_log.get_failure_count(fqn)
             if circuit_breaker.should_trip(failure_count):
                 circuit_breaker.trip(fqn, failure_count, dry_run=self.dry_run)
 
         return "failed" if op_errors else "succeeded"
+
+    # ── run_frequency + dedupe (H1 + H2) ─────────────────────────────────────
+
+    def _is_due(self, table_fqn: str, hk_config: dict) -> tuple[bool, str]:
+        """
+        Check if a table is due for HK based on run_frequency.
+        Also dedupes: skips if a successful run just happened recently.
+
+        Returns: (is_due, skip_reason)
+        """
+        freq = hk_config.get("run_frequency", "daily")
+
+        if freq == "every_trigger":
+            return True, ""
+
+        threshold_hours = _FREQUENCY_HOURS.get(freq, 20)
+
+        try:
+            last = execution_log.get_last_run(table_fqn)
+        except Exception:
+            return True, ""  # Can't check — allow run
+
+        if not last:
+            return True, ""  # Never run — always due
+
+        last_completed = last.get("completed_at")
+        if not last_completed:
+            return True, ""
+
+        # Parse timestamp
+        if isinstance(last_completed, str):
+            try:
+                from dateutil import parser as dtparser
+                last_completed = dtparser.parse(last_completed)
+            except Exception:
+                return True, ""
+
+        # Make timezone-aware
+        if last_completed.tzinfo is None:
+            from pytz import utc
+            last_completed = utc.localize(last_completed)
+
+        hours_since = (
+            datetime.now(timezone.utc) - last_completed
+        ).total_seconds() / 3600
+
+        if hours_since < threshold_hours:
+            reason = (
+                f"SKIP_NOT_DUE ({freq} — last run "
+                f"{hours_since:.1f}h ago, threshold {threshold_hours}h)"
+            )
+            log.info(
+                "hk_engine.skip_not_due",
+                table_fqn=table_fqn,
+                freq=freq,
+                hours_since=round(hours_since, 1),
+                threshold=threshold_hours,
+            )
+            return False, reason
+
+        return True, ""
 
     # ── Execution log helper ──────────────────────────────────────────────────
 
