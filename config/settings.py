@@ -96,6 +96,15 @@ VALID_TIERS = ["critical", "standard", "low"]
 VALID_ENVIRONMENTS = ["prod", "preprod", "dev", "test"]
 NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 
+# ── Execution Log Write Mode (v2) ─────────────────────────────────────────────
+# Controls how engines write to the Iceberg execution_log table:
+#   parquet — Batch Parquet to S3 + add_files (preferred, fast)
+#   insert  — Per-row Athena INSERT (legacy, slow)
+#   both    — Try Parquet first, fall back to INSERT on failure
+#   auto    — (default) Use Parquet if pandas/pyarrow available, else INSERT
+EXECUTION_LOG_MODE = os.getenv("EXECUTION_LOG_MODE", "auto").lower()
+
+
 # ── CloudTrail (Lifecycle Engine activity signals) ────────────────────────────
 # Set CLOUDTRAIL_TABLE if you have CloudTrail logs in Athena.
 # If not set, activity signals fall back to Glue table CreateTime only.

@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.stream_registry (
     -- ── Lifecycle Engine Flags (non-prod) ─────────────────────────────────────
     lifecycle_enabled       BOOLEAN COMMENT 'Enable Lifecycle Engine for this table (non-prod only)',
 
+    -- ── v2 Design Fields ──────────────────────────────────────────────────────
+    processing_cadence      STRING  COMMENT 'hourly | daily | weekly | monthly. Drives hot partition filter window.',
+    properties_synced       BOOLEAN COMMENT 'true if vacuum_max_snapshot_age_seconds + vacuum_min_snapshots_to_keep ALTER TABLE has been applied',
+    last_execution_id       STRING  COMMENT 'Last successful execution ID — used for idempotency dedupe',
+
     -- ── Audit ─────────────────────────────────────────────────────────────────
     registered_at           TIMESTAMP COMMENT 'First registered',
     registered_by           STRING    COMMENT 'cli | streamlit | auto-discovery',
