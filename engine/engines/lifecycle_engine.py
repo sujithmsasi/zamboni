@@ -26,6 +26,7 @@ from engine.core.execution_log import LogEntry
 from engine.engines.base import BaseEngine
 from engine.operations.catalog_cleanup import cleanup_table, is_backup_pattern
 from engine.utils.athena_client import read_sql, run_query
+from engine.monitoring.activity_scanner import get_activity_signals
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 from engine.utils.logger import get_logger
 
@@ -256,7 +257,11 @@ class LifecycleEngine(BaseEngine):
     # ── Registry operations ───────────────────────────────────────────────────
 
     def _upsert_nonprod_registry(self, table: dict, database: str, environment: str) -> None:
-        """Insert or update a table in nonprod_registry."""
+        """
+        Insert or update a table in nonprod_registry.
+        On every scan, refreshes activity signals (last_query_at, last_write_at,
+        days_since_activity) via CloudTrail or falls back to Glue CreateTime.
+        """
         name       = table.get("Name", "")
         table_fqn  = f"glue_catalog.{database}.{name}"
         is_iceberg = is_iceberg_table(table)
@@ -265,20 +270,43 @@ class LifecycleEngine(BaseEngine):
         is_backup, pattern = is_backup_pattern(name)
         now = _now()
 
+        # ── Activity signals refresh ──────────────────────────────────────────
+        signals = get_activity_signals(
+            table_fqn=table_fqn,
+            database=database,
+            table_name=name,
+            glue_create_time=created_at,
+        )
+
+        last_query_str = (
+            f"TIMESTAMP '{signals.last_query_at.strftime('%Y-%m-%d %H:%M:%S')}'"
+            if signals.last_query_at else "NULL"
+        )
+        last_write_str = (
+            f"TIMESTAMP '{signals.last_write_at.strftime('%Y-%m-%d %H:%M:%S')}'"
+            if signals.last_write_at else "NULL"
+        )
+        days_since_str = (
+            str(signals.days_since_activity)
+            if signals.days_since_activity is not None else "NULL"
+        )
+
         # Check if already registered
         existing = self._get_registry_row(table_fqn)
 
         if existing:
-            # Update scan metadata
+            # Update scan metadata + refresh activity signals
             sql = f"""
                 UPDATE {NONPROD_REGISTRY_TABLE}
-                SET last_scanned_at = TIMESTAMP '{now}',
-                    scan_count      = scan_count + 1,
-                    updated_at      = TIMESTAMP '{now}'
+                SET last_scanned_at     = TIMESTAMP '{now}',
+                    scan_count          = scan_count + 1,
+                    last_query_at       = {last_query_str},
+                    last_write_at       = {last_write_str},
+                    days_since_activity = {days_since_str}
                 WHERE table_fqn = '{table_fqn}'
             """
         else:
-            # New table — insert
+            # New table — insert with activity signals
             created_str = (
                 f"TIMESTAMP '{created_at.strftime('%Y-%m-%d %H:%M:%S')}'"
                 if created_at else "NULL"
@@ -288,7 +316,8 @@ class LifecycleEngine(BaseEngine):
                     '{table_fqn}', '{database}', '{_esc(name)}',
                     '{environment}', '{_infer_domain(database)}', '{fmt}',
                     'ACTIVE', NULL, TIMESTAMP '{now}',
-                    NULL, NULL, {created_str}, 0,
+                    {last_query_str}, {last_write_str}, {created_str},
+                    {days_since_str},
                     NULL, NULL, false, NULL, NULL,
                     NULL, NULL,
                     NULL, false, false, 0,

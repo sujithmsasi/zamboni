@@ -203,11 +203,33 @@ def get_failure_count(table_fqn: str, days: int = 30) -> int:
     return int(df.iloc[0]["cnt"])
 
 
-def get_last_run(table_fqn: str) -> Optional[dict]:
-    """Return the most recent execution log entry for a table."""
+def get_last_run(
+    table_fqn: str,
+    operation: Optional[str] = None,
+    only_success: bool = True,
+) -> Optional[dict]:
+    """
+    Return the most recent execution log entry for a table.
+
+    v2 B.4 — by default returns only SUCCESS runs so that failed/incomplete
+    prior runs do not block retries. Pass only_success=False to get the
+    most recent run regardless of status.
+
+    Args:
+        table_fqn:    Fully qualified table name
+        operation:    Optional operation filter (compaction|vacuum|hk_run|...)
+        only_success: If True, only consider SUCCESS rows for dedupe purposes
+    """
+    conds = [f"table_fqn = '{table_fqn}'"]
+    if operation:
+        conds.append(f"operation = '{operation}'")
+    if only_success:
+        conds.append("status = 'SUCCESS'")
+    where = " AND ".join(conds)
+
     sql = f"""
         SELECT * FROM {EXECUTION_LOG_TABLE}
-        WHERE table_fqn = '{table_fqn}'
+        WHERE {where}
         ORDER BY started_at DESC
         LIMIT 1
     """

@@ -51,9 +51,16 @@ def run_compaction(
     target_mb   = hk_config.get("compaction_target_file_size_mb", 128)
     part_col    = hk_config.get("partition_column")
     part_days   = hk_config.get("partition_filter_days")
+    # v2 B.7: prefer processing_cadence (drives lookback window) when set
+    cadence     = hk_config.get("processing_cadence")
 
-    # Build partition filter if configured
-    partition_filter = build_hot_partition_filter(part_col, part_days) if part_col else None
+    # Build partition filter if configured. Cadence-driven window takes
+    # priority; legacy partition_filter_days is the fallback.
+    partition_filter = (
+        build_hot_partition_filter(
+            part_col, days=part_days, processing_cadence=cadence
+        ) if part_col else None
+    )
 
     # Dynamic routing — worker type + execution class from metrics
     routing = route(

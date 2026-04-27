@@ -448,7 +448,7 @@ td code { font-size: 12px; }
     <div class="hero-stat"><div class="val">30K+</div><div class="lbl">Tables Managed</div></div>
     <div class="hero-stat"><div class="val">3</div><div class="lbl">Engines</div></div>
     <div class="hero-stat"><div class="val">11</div><div class="lbl">UI Pages</div></div>
-    <div class="hero-stat"><div class="val">150</div><div class="lbl">Unit Tests</div></div>
+    <div class="hero-stat"><div class="val">198</div><div class="lbl">Unit Tests</div></div>
     <div class="hero-stat"><div class="val">us-west-2</div><div class="lbl">Region</div></div>
   </div>
 </div>
@@ -521,7 +521,10 @@ td code { font-size: 12px; }
            ├─ SKIP_BLACKOUT          <span class="comment">blackout_hours block</span>
            └─ EXECUTE                <span class="comment">proceed</span>
 
-  <span class="kw">Gate 3</span> — Circuit breaker open?    <span class="comment">failure_count >= threshold</span>
+  <span class="kw">Gate 3</span> — run_frequency due?      <span class="comment">get_last_run() + threshold check</span>
+           └─ SKIP_NOT_DUE           <span class="comment">daily=20h, weekly=160h since last run</span>
+
+  <span class="kw">Gate 4</span> — Circuit breaker open?    <span class="comment">failure_count >= threshold</span>
            └─ SKIP_CIRCUIT_OPEN      <span class="comment">auto-disabled after N failures</span>
 
   <span class="kw">Health</span> — Does table need HK?      <span class="comment">$snapshots + $files queries</span>
@@ -546,6 +549,9 @@ td code { font-size: 12px; }
   <tr><td><strong>Partition Pruning</strong></td><td>Compacts only last N days, not full historical table</td><td><code>partition_filter_days</code></td></tr>
   <tr><td><strong>Snapshot Hard Floor</strong></td><td>Always retains at least 30 snapshots regardless of config</td><td>hardcoded minimum</td></tr>
   <tr><td><strong>Tier-Ordered Processing</strong></td><td>Critical → Standard → Low ensures SLA tables run first</td><td><code>tier</code></td></tr>
+  <tr><td><strong>run_frequency + Dedupe</strong></td><td>SKIP_NOT_DUE if run too recently. Thresholds: every_trigger=0h, daily=20h, weekly=160h</td><td><code>run_frequency</code></td></tr>
+  <tr><td><strong>Tier Parallelism</strong></td><td>Each tier runs in its own ThreadPoolExecutor. critical=5, standard=10, low=3 workers</td><td>automatic</td></tr>
+  <tr><td><strong>Operation-Level Logging</strong></td><td>Separate execution_log rows per operation (compaction, vacuum, orphan_cleanup) + hk_run summary</td><td>automatic</td></tr>
 </table>
 
 <h3>Archival Engine — 7 Intelligent Behaviours</h3>
@@ -571,6 +577,7 @@ td code { font-size: 12px; }
   <tr><td><strong>Owner Exemption</strong></td><td>Owner submits reason → table returns to ACTIVE, full audit trail</td></tr>
   <tr><td><strong>48-Hour Final Warning</strong></td><td>PENDING_DROP sends final SNS before hard delete executes</td></tr>
   <tr><td><strong>Dual Cleanup</strong></td><td>Glue DROP TABLE + S3 prefix sweep, both must succeed</td></tr>
+  <tr><td><strong>CloudTrail Activity Signals</strong></td><td>Queries CloudTrail via Athena for last_query_at and last_write_at. Falls back to Glue CreateTime if not configured. days_since_activity updated on every scan.</td></tr>
 </table>
 
 <!-- ════════════════════════════════════════════════════════════════════ -->
@@ -785,7 +792,7 @@ td code { font-size: 12px; }
     <div class="step-body">
       <h3>Bootstrap Application</h3>
       <pre><code><span class="comment"># Run the setup script (sets up Python, pip, directory)</span>
-<span class="cmd">sudo bash /opt/zamboni/deploy/setup_ec2.sh</span>
+<span class="cmd">sudo bash deploy/setup_ec2.sh</span>
 
 <span class="comment"># Copy and configure .env</span>
 <span class="cmd">cp /opt/zamboni/.env.example /opt/zamboni/.env</span>
@@ -801,7 +808,7 @@ td code { font-size: 12px; }
 <span class="comment"># Replace with your actual bucket name in all SQL files</span>
 
 <span class="comment"># Run DDL in this order</span>
-<span class="cmd">bash /opt/zamboni/deploy/create_athena_tables.sh</span></code></pre>
+<span class="cmd">bash deploy/create_athena_tables.sh</span></code></pre>
       <p>Runs these SQL files against Athena in order:</p>
       <ol style="margin:8px 0 0 20px;color:#94a3b8;font-size:13px;">
         <li>create_domain_registry.sql</li>
@@ -903,6 +910,17 @@ ZAMBONI_METADATA_BUCKET=<span class="str">s3://your-zamboni-metadata</span>
 SNS_ALERT_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-alerts</span>
 SNS_GREENZONE_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-greenzone</span>
 
+<span class="comment"># ── CloudTrail (optional — enables accurate stale detection) ──────────────────</span>
+<span class="comment"># Set to your CloudTrail Athena table FQN if CloudTrail logs are in Athena</span>
+<span class="comment"># Without this, lifecycle engine falls back to Glue CreateTime as activity signal</span>
+CLOUDTRAIL_TABLE=<span class="comment">         # e.g. glue_catalog.logs_db.cloudtrail_events</span>
+CLOUDTRAIL_LOOKBACK_DAYS=<span class="num">90</span>
+
+<span class="comment"># ── CloudTrail (optional — enables accurate stale detection) ────────────────────</span>
+<span class="comment"># Set to your CloudTrail Athena table FQN if CloudTrail logs are in Athena.</span>
+CLOUDTRAIL_TABLE=<span class="comment">           # e.g. glue_catalog.logs_db.cloudtrail_events</span>
+CLOUDTRAIL_LOOKBACK_DAYS=<span class="num">90</span>
+
 <span class="comment"># ── Engine Behaviour ──────────────────────────────────────────────</span>
 DRY_RUN_DEFAULT=<span class="str">true</span>     <span class="comment"># Set to false when ready for live runs</span>
 LOG_LEVEL=<span class="str">INFO</span>
@@ -929,6 +947,14 @@ APP_ENV=<span class="str">prod</span>  <span class="comment"># dev | preprod | p
   <tr><td><code>MASTER_DEFAULT</code></td><td>master</td><td>zorder</td><td>Glue</td><td>30 days</td><td>weekly (Saturday 04:00)</td></tr>
   <tr><td><code>CRITICAL_HIGH_VOL</code></td><td>any</td><td>binpack</td><td>Athena</td><td>5 days</td><td>every_trigger</td></tr>
   <tr><td><code>NON_PROD_DEFAULT</code></td><td>any</td><td>binpack</td><td>Athena</td><td>3 days</td><td>weekly (Sunday 03:00)</td></tr>
+</table>
+
+<h4>run_frequency Values</h4>
+<table>
+  <tr><th>Value</th><th>Threshold</th><th>Behaviour</th></tr>
+  <tr><td><code>every_trigger</code></td><td>0h</td><td>Runs on every EventBridge trigger (every hour)</td></tr>
+  <tr><td><code>daily</code></td><td>20h</td><td>Skips with SKIP_NOT_DUE if last run &lt; 20h ago</td></tr>
+  <tr><td><code>weekly</code></td><td>160h</td><td>Skips with SKIP_NOT_DUE if last run &lt; 160h ago</td></tr>
 </table>
 
 <p>All templates enforce a <strong>snapshot hard floor of 30</strong> — regardless of template configuration, Zamboni will never expire snapshots below this count.</p>
@@ -1331,7 +1357,16 @@ ACTIVE
   <tr><td>6</td><td>Lifecycle Engine — state machine, GREENZONE, cleanup</td><td><span class="badge badge-green">✅ Complete</span></td></tr>
   <tr><td>7</td><td>Streamlit App — 11 pages, daily snapshot home</td><td><span class="badge badge-green">✅ Complete</span></td></tr>
   <tr><td>8</td><td>CLI Tools — register, dry-run, fleet-status, enable, cost</td><td><span class="badge badge-green">✅ Complete</span></td></tr>
-  <tr><td>9</td><td>Hardening — CloudWatch metrics, alarms, dashboard, load test</td><td><span class="badge badge-green">✅ Complete</span></td></tr>
+  <tr><td>9</td><td>Hardening — CloudWatch metrics, alarms, dashboard, load test</td><td><span class="badge badge-green">✅ Complete</span></td>
+  </tr>
+  <tr>
+    <td>Gap Sprint 1</td><td>dry_run_until ramp-up, policy saves, IAM restriction, test mode</td><td><span class="badge badge-green">✅ Complete</span></td>
+  </tr>
+  <tr>
+    <td>Gap Sprint 2</td><td>run_frequency, dedupe, tier parallelism, operation-level logging</td><td><span class="badge badge-green">✅ Complete</span></td>
+  </tr>
+  <tr>
+    <td>Gap Sprint 3</td><td>CloudTrail activity signals, deploy scripts, setup guide fixes</td><td><span class="badge badge-green">✅ Complete</span></td></tr>
 </table>
 
 <div style="margin-top:64px;padding-top:32px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;">
