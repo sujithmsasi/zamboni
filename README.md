@@ -78,7 +78,10 @@ cp .env.example .env
 # Edit .env with your AWS values
 
 # 3. Create Athena metadata tables (one-time)
-# Run each file in sql/ against Athena in this order:
+# Option A: automated script (reads bucket paths from .env)
+bash deploy/create_athena_tables.sh
+
+# Option B: manual — run each file in sql/ against Athena in this order:
 #   1. create_domain_registry.sql
 #   2. create_stream_registry.sql
 #   3. create_hk_config.sql
