@@ -8,6 +8,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── Test mode ─────────────────────────────────────────────────────────────────
+# Set ZAMBONI_TEST_MODE=true to run unit tests without a real .env file.
+# All required env vars fall back to safe mock values in this mode.
+_TEST = os.getenv("ZAMBONI_TEST_MODE", "false").lower() == "true"
+
+
+def _req(key: str, mock: str = "s3://mock/") -> str:
+    """Return env var or mock value in test mode; raises KeyError in production."""
+    val = os.getenv(key)
+    if val:
+        return val
+    if _TEST:
+        return mock
+    raise KeyError(
+        f"Required env var {key!r} is not set. "
+        "Copy .env.example to .env and fill in values. "
+        "For tests, set ZAMBONI_TEST_MODE=true."
+    )
+
 
 # ── AWS ───────────────────────────────────────────────────────────────────────
 AWS_REGION     = os.getenv("AWS_REGION", "us-west-2")
@@ -16,7 +35,7 @@ AWS_ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID", "")
 # ── Athena ────────────────────────────────────────────────────────────────────
 ATHENA_CATALOG        = os.getenv("ATHENA_CATALOG", "glue_catalog")
 ATHENA_DATABASE       = os.getenv("ATHENA_DATABASE", "zamboni_catalog")
-ATHENA_RESULTS_BUCKET = os.environ["ATHENA_RESULTS_BUCKET"]
+ATHENA_RESULTS_BUCKET = _req("ATHENA_RESULTS_BUCKET", "s3://mock-athena-results/")
 
 ATHENA_WORKGROUPS = {
     "critical": os.getenv("ATHENA_WG_CRITICAL", "zamboni-critical"),
@@ -49,13 +68,13 @@ NONPROD_REGISTRY_TABLE = os.getenv(
 )
 
 # ── S3 ────────────────────────────────────────────────────────────────────────
-STAGING_BUCKET          = os.environ["STAGING_BUCKET"]
-ARCHIVE_BUCKET          = os.environ["ARCHIVE_BUCKET"]
-ZAMBONI_METADATA_BUCKET = os.environ["ZAMBONI_METADATA_BUCKET"]
+STAGING_BUCKET          = _req("STAGING_BUCKET",          "s3://mock-staging/")
+ARCHIVE_BUCKET          = _req("ARCHIVE_BUCKET",          "s3://mock-archive/")
+ZAMBONI_METADATA_BUCKET = _req("ZAMBONI_METADATA_BUCKET", "s3://mock-metadata/")
 
 # ── SNS ───────────────────────────────────────────────────────────────────────
-SNS_ALERT_TOPIC_ARN    = os.environ["SNS_ALERT_TOPIC_ARN"]
-SNS_GREENZONE_TOPIC_ARN= os.environ["SNS_GREENZONE_TOPIC_ARN"]
+SNS_ALERT_TOPIC_ARN    = _req("SNS_ALERT_TOPIC_ARN",    "arn:aws:sns:us-west-2:123456789012:mock-alerts")
+SNS_GREENZONE_TOPIC_ARN= _req("SNS_GREENZONE_TOPIC_ARN","arn:aws:sns:us-west-2:123456789012:mock-greenzone")
 
 # ── Engine Behaviour ──────────────────────────────────────────────────────────
 DRY_RUN_DEFAULT           = os.getenv("DRY_RUN_DEFAULT", "true").lower() == "true"

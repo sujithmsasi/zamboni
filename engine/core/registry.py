@@ -156,6 +156,27 @@ def get_tables_by_stream(stream_id: str) -> list[dict]:
     return df.to_dict(orient="records")
 
 
+def is_in_dry_run_ramp(table_row: dict) -> bool:
+    """
+    Return True if a table is still in its dry-run ramp-up window.
+    Tables with dry_run_until >= today are evaluated through all gates
+    but HK operations are logged as DRY_RUN rather than executed.
+    Supports the ramp-up pattern: validate HK behaviour before going live.
+    """
+    from datetime import date as _date
+    dry_run_until = table_row.get("dry_run_until")
+    if dry_run_until is None:
+        return False
+    if isinstance(dry_run_until, str):
+        try:
+            dry_run_until = _date.fromisoformat(str(dry_run_until)[:10])
+        except ValueError:
+            return False
+    if isinstance(dry_run_until, _date):
+        return dry_run_until >= _date.today()
+    return False
+
+
 def get_enabled_tables(
     environment: str = "prod",
     domain: Optional[str] = None,
@@ -164,13 +185,16 @@ def get_enabled_tables(
 ) -> list[dict]:
     """
     Return tables eligible for HK Engine processing.
-    Filters: hk_enabled=true, table_format=iceberg, dry_run_until passed.
+    Includes dry_run_until tables so they are evaluated through all gates —
+    the engine logs DRY_RUN instead of executing for ramp-up tables.
+    Use is_in_dry_run_ramp(row) in the engine to check per table.
+
+    Filters: hk_enabled=true, table_format=iceberg.
     """
     conditions = [
         f"environment = '{environment}'",
         "hk_enabled = true",
         "table_format = 'iceberg'",
-        "(dry_run_until IS NULL OR dry_run_until < CURRENT_DATE)",
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")

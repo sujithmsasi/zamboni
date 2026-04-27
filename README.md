@@ -87,6 +87,7 @@ cp .env.example .env
 #   6. create_home_snapshot.sql
 
 # 4. Run unit tests (no AWS needed)
+# No env vars needed — conftest.py sets ZAMBONI_TEST_MODE=true automatically
 python -m pytest tests/unit/ -v --override-ini="addopts="
 
 # 5. Run Streamlit app
@@ -94,6 +95,21 @@ python -m streamlit run app/Home.py --server.port 8501
 ```
 
 ---
+
+
+## Scheduling (Phase 1 — EventBridge + SSM)
+
+EventBridge triggers the engines via SSM Run Command on the EC2 instance.
+The HK engine runs every hour but skips tables outside their configured safe window.
+Control-M remains compatible and can be added later for dependency chaining.
+
+| Rule | Schedule | Command |
+|---|---|---|
+| `zamboni-hk` | Every 1 hour | `python -m engine.scripts.run_hk` |
+| `zamboni-archival` | Sun 04:00 UTC | `python -m engine.scripts.run_archival` |
+| `zamboni-nonprod-scan` | Sat 02:00 UTC | `python -m engine.scripts.run_lifecycle_scan` |
+| `zamboni-nonprod-lifecycle` | Sat 03:00 UTC | `python -m engine.scripts.run_lifecycle_cycle` |
+| `zamboni-nonprod-cleanup` | Sun 05:00 UTC | `python -m engine.scripts.run_cleanup` |
 
 ## CLI Reference
 

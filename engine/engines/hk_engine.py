@@ -19,6 +19,7 @@ from engine.core import (
     notifier,
     registry,
 )
+from engine.core.registry import is_in_dry_run_ramp
 from engine.core.config import get_hk_config
 from engine.core.execution_log import LogEntry
 from engine.core.health_checker import is_healthy
@@ -205,6 +206,10 @@ class HKEngine(BaseEngine):
             return "skipped"
 
         # ── Operations ────────────────────────────────────────────────────────
+        # Determine effective dry_run for this table:
+        # If in ramp-up window, treat as dry_run regardless of engine setting
+        table_dry_run = self.dry_run or is_in_dry_run_ramp(table_row)
+
         started_at = datetime.now(timezone.utc)
         op_errors  = []
 
@@ -220,7 +225,7 @@ class HKEngine(BaseEngine):
                     hk_config=hk_config,
                     health=health,
                     tier=tier,
-                    dry_run=self.dry_run,
+                    dry_run=table_dry_run,
                 )
             except Exception as e:
                 op_errors.append(f"compaction: {e}")
@@ -234,7 +239,7 @@ class HKEngine(BaseEngine):
                     hk_config=hk_config,
                     health=health,
                     tier=tier,
-                    dry_run=self.dry_run,
+                    dry_run=table_dry_run,
                 )
             except Exception as e:
                 op_errors.append(f"vacuum: {e}")
@@ -247,14 +252,14 @@ class HKEngine(BaseEngine):
                     table_fqn=fqn,
                     hk_config=hk_config,
                     tier=tier,
-                    dry_run=self.dry_run,
+                    dry_run=table_dry_run,
                 )
             except Exception as e:
                 op_errors.append(f"orphan_cleanup: {e}")
                 log.error("hk_engine.orphan_error", table_fqn=fqn, error=str(e))
 
         completed_at = datetime.now(timezone.utc)
-        status = "FAILURE" if op_errors else ("DRY_RUN" if self.dry_run else "SUCCESS")
+        status = "FAILURE" if op_errors else ("DRY_RUN" if table_dry_run else "SUCCESS")
 
         # ── Write execution log ───────────────────────────────────────────────
         self._write_log(
