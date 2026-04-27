@@ -96,6 +96,13 @@ VALID_TIERS = ["critical", "standard", "low"]
 VALID_ENVIRONMENTS = ["prod", "preprod", "dev", "test"]
 NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 
+# ── CloudTrail (Lifecycle Engine activity signals) ────────────────────────────
+# Set CLOUDTRAIL_TABLE if you have CloudTrail logs in Athena.
+# If not set, activity signals fall back to Glue table CreateTime only.
+# Format: glue_catalog.database.table
+CLOUDTRAIL_TABLE     = os.getenv("CLOUDTRAIL_TABLE", "")
+CLOUDTRAIL_LOOKBACK_DAYS = int(os.getenv("CLOUDTRAIL_LOOKBACK_DAYS", "90"))
+
 # ── Streamlit App ─────────────────────────────────────────────────────────────
 APP_PORT = int(os.getenv("APP_PORT", "8501"))
 APP_ENV  = os.getenv("APP_ENV", "dev")

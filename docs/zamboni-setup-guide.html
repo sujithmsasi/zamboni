@@ -785,7 +785,7 @@ td code { font-size: 12px; }
     <div class="step-body">
       <h3>Bootstrap Application</h3>
       <pre><code><span class="comment"># Run the setup script (sets up Python, pip, directory)</span>
-<span class="cmd">sudo bash /opt/zamboni/deploy/setup_ec2.sh</span>
+<span class="cmd">sudo bash deploy/setup_ec2.sh</span>
 
 <span class="comment"># Copy and configure .env</span>
 <span class="cmd">cp /opt/zamboni/.env.example /opt/zamboni/.env</span>
@@ -801,7 +801,7 @@ td code { font-size: 12px; }
 <span class="comment"># Replace with your actual bucket name in all SQL files</span>
 
 <span class="comment"># Run DDL in this order</span>
-<span class="cmd">bash /opt/zamboni/deploy/create_athena_tables.sh</span></code></pre>
+<span class="cmd">bash deploy/create_athena_tables.sh</span></code></pre>
       <p>Runs these SQL files against Athena in order:</p>
       <ol style="margin:8px 0 0 20px;color:#94a3b8;font-size:13px;">
         <li>create_domain_registry.sql</li>
@@ -902,6 +902,12 @@ ZAMBONI_METADATA_BUCKET=<span class="str">s3://your-zamboni-metadata</span>
 <span class="comment"># ── SNS ───────────────────────────────────────────────────────────</span>
 SNS_ALERT_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-alerts</span>
 SNS_GREENZONE_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-greenzone</span>
+
+<span class="comment"># ── CloudTrail (optional — enables accurate stale detection) ──────────────────</span>
+<span class="comment"># Set to your CloudTrail Athena table FQN if CloudTrail logs are in Athena</span>
+<span class="comment"># Without this, lifecycle engine falls back to Glue CreateTime as activity signal</span>
+CLOUDTRAIL_TABLE=<span class="comment">         # e.g. glue_catalog.logs_db.cloudtrail_events</span>
+CLOUDTRAIL_LOOKBACK_DAYS=<span class="num">90</span>
 
 <span class="comment"># ── Engine Behaviour ──────────────────────────────────────────────</span>
 DRY_RUN_DEFAULT=<span class="str">true</span>     <span class="comment"># Set to false when ready for live runs</span>
