@@ -120,8 +120,12 @@
       ],
       "Resource": [
         "arn:aws:glue:us-west-2:ACCOUNT_ID:catalog",
-        "arn:aws:glue:us-west-2:ACCOUNT_ID:database/*",
-        "arn:aws:glue:us-west-2:ACCOUNT_ID:table/*"
+        "arn:aws:glue:us-west-2:ACCOUNT_ID:database/*_preprod",
+        "arn:aws:glue:us-west-2:ACCOUNT_ID:database/*_dev",
+        "arn:aws:glue:us-west-2:ACCOUNT_ID:database/*_test",
+        "arn:aws:glue:us-west-2:ACCOUNT_ID:table/*_preprod/*",
+        "arn:aws:glue:us-west-2:ACCOUNT_ID:table/*_dev/*",
+        "arn:aws:glue:us-west-2:ACCOUNT_ID:table/*_test/*"
       ]
     },
 

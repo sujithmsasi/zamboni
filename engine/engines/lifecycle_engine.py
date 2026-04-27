@@ -263,6 +263,13 @@ class LifecycleEngine(BaseEngine):
         fmt        = "iceberg" if is_iceberg else "hive"
         created_at = table.get("CreateTime")
         is_backup, pattern = is_backup_pattern(name)
+        last_query_at = self._get_last_query_at(table_fqn, database, name)
+        last_write_at = self._get_last_write_at(table, table_fqn)
+        days_since_activity = _days_since_activity(
+            last_query_at=last_query_at,
+            last_write_at=last_write_at,
+            created_at=created_at,
+        )
         now = _now()
 
         # Check if already registered
@@ -273,6 +280,9 @@ class LifecycleEngine(BaseEngine):
             sql = f"""
                 UPDATE {NONPROD_REGISTRY_TABLE}
                 SET last_scanned_at = TIMESTAMP '{now}',
+                    last_query_at   = {_ts_sql(last_query_at)},
+                    last_write_at   = {_ts_sql(last_write_at)},
+                    days_since_activity = {days_since_activity},
                     scan_count      = scan_count + 1,
                     updated_at      = TIMESTAMP '{now}'
                 WHERE table_fqn = '{table_fqn}'
@@ -288,7 +298,7 @@ class LifecycleEngine(BaseEngine):
                     '{table_fqn}', '{database}', '{_esc(name)}',
                     '{environment}', '{_infer_domain(database)}', '{fmt}',
                     'ACTIVE', NULL, TIMESTAMP '{now}',
-                    NULL, NULL, {created_str}, 0,
+                    {_ts_sql(last_query_at)}, {_ts_sql(last_write_at)}, {created_str}, {days_since_activity},
                     NULL, NULL, false, NULL, NULL,
                     NULL, NULL,
                     NULL, false, false, 0,
@@ -297,6 +307,24 @@ class LifecycleEngine(BaseEngine):
                 )
             """
         run_query(sql, workgroup="nonprod", dry_run=self.dry_run)
+
+    def _get_last_query_at(self, table_fqn: str, database: str, table_name: str) -> Optional[datetime]:
+        """
+        Return the most recent known query time for a table.
+        Placeholder for CloudTrail/Athena query-log integration; tests can patch it.
+        """
+        return None
+
+    def _get_last_write_at(self, table: dict, table_fqn: str) -> Optional[datetime]:
+        """
+        Return the most recent known write time for a table.
+        Falls back to Glue LastAccessTime/UpdateTime when present.
+        """
+        for key in ("LastAccessTime", "UpdateTime"):
+            value = table.get(key)
+            if isinstance(value, datetime):
+                return value
+        return None
 
     def _get_registry_row(self, table_fqn: str) -> Optional[dict]:
         sql = f"""
@@ -431,6 +459,32 @@ def _parse_ts(value) -> datetime:
         except ValueError:
             return datetime.now(timezone.utc)
     return datetime.now(timezone.utc)
+
+
+def _days_since_activity(
+    last_query_at: Optional[datetime],
+    last_write_at: Optional[datetime],
+    created_at: Optional[datetime],
+    now: Optional[datetime] = None,
+) -> int:
+    """Days since the freshest query/write signal, falling back to create time."""
+    reference = now or datetime.now(timezone.utc)
+    candidates = [
+        _parse_ts(v)
+        for v in (last_query_at, last_write_at, created_at)
+        if v is not None
+    ]
+    if not candidates:
+        return 0
+    latest = max(candidates)
+    return max((reference - latest).days, 0)
+
+
+def _ts_sql(value: Optional[datetime]) -> str:
+    if value is None:
+        return "NULL"
+    parsed = _parse_ts(value)
+    return f"TIMESTAMP '{parsed.strftime('%Y-%m-%d %H:%M:%S')}'"
 
 
 def _infer_domain(database: str) -> str:

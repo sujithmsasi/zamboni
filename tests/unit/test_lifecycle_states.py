@@ -6,6 +6,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 
 from engine.engines.lifecycle_engine import (
+    _days_since_activity,
     _infer_domain,
     _parse_ts,
     ACTIVE,
@@ -184,3 +185,19 @@ def test_pending_drop_expired_window():
     """Table should be deleted if pending_drop_expires_at is in the past."""
     drop_at = datetime.now(timezone.utc) - timedelta(hours=1)
     assert _parse_ts(drop_at) <= datetime.now(timezone.utc)
+
+
+def test_days_since_activity_uses_freshest_signal():
+    now = datetime(2026, 4, 26, tzinfo=timezone.utc)
+    created = now - timedelta(days=30)
+    last_query = now - timedelta(days=10)
+    last_write = now - timedelta(days=3)
+
+    assert _days_since_activity(last_query, last_write, created, now=now) == 3
+
+
+def test_days_since_activity_falls_back_to_created_at():
+    now = datetime(2026, 4, 26, tzinfo=timezone.utc)
+    created = now - timedelta(days=12)
+
+    assert _days_since_activity(None, None, created, now=now) == 12

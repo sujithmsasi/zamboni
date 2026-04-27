@@ -16,7 +16,10 @@ AWS_ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID", "")
 # ── Athena ────────────────────────────────────────────────────────────────────
 ATHENA_CATALOG        = os.getenv("ATHENA_CATALOG", "glue_catalog")
 ATHENA_DATABASE       = os.getenv("ATHENA_DATABASE", "zamboni_catalog")
-ATHENA_RESULTS_BUCKET = os.environ["ATHENA_RESULTS_BUCKET"]
+ATHENA_RESULTS_BUCKET = os.getenv(
+    "ATHENA_RESULTS_BUCKET",
+    "s3://zamboni-local-athena-results/zamboni/",
+)
 
 ATHENA_WORKGROUPS = {
     "critical": os.getenv("ATHENA_WG_CRITICAL", "zamboni-critical"),
@@ -49,18 +52,25 @@ NONPROD_REGISTRY_TABLE = os.getenv(
 )
 
 # ── S3 ────────────────────────────────────────────────────────────────────────
-STAGING_BUCKET          = os.environ["STAGING_BUCKET"]
-ARCHIVE_BUCKET          = os.environ["ARCHIVE_BUCKET"]
-ZAMBONI_METADATA_BUCKET = os.environ["ZAMBONI_METADATA_BUCKET"]
+STAGING_BUCKET          = os.getenv("STAGING_BUCKET", "s3://zamboni-local-staging")
+ARCHIVE_BUCKET          = os.getenv("ARCHIVE_BUCKET", "s3://zamboni-local-archive")
+ZAMBONI_METADATA_BUCKET = os.getenv("ZAMBONI_METADATA_BUCKET", "s3://zamboni-local-metadata")
 
 # ── SNS ───────────────────────────────────────────────────────────────────────
-SNS_ALERT_TOPIC_ARN    = os.environ["SNS_ALERT_TOPIC_ARN"]
-SNS_GREENZONE_TOPIC_ARN= os.environ["SNS_GREENZONE_TOPIC_ARN"]
+SNS_ALERT_TOPIC_ARN = os.getenv(
+    "SNS_ALERT_TOPIC_ARN",
+    "arn:aws:sns:us-west-2:000000000000:zamboni-alerts",
+)
+SNS_GREENZONE_TOPIC_ARN = os.getenv(
+    "SNS_GREENZONE_TOPIC_ARN",
+    "arn:aws:sns:us-west-2:000000000000:zamboni-greenzone",
+)
 
 # ── Engine Behaviour ──────────────────────────────────────────────────────────
 DRY_RUN_DEFAULT           = os.getenv("DRY_RUN_DEFAULT", "true").lower() == "true"
 LOG_LEVEL                 = os.getenv("LOG_LEVEL", "INFO")
 MAX_CONCURRENT_PARTITIONS = int(os.getenv("MAX_CONCURRENT_PARTITIONS", "10"))
+MAX_CONCURRENT_HK_TABLES  = int(os.getenv("MAX_CONCURRENT_HK_TABLES", "8"))
 CIRCUIT_BREAKER_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "3"))
 
 # ── Hard floors — never override these in config ──────────────────────────────

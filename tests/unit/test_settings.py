@@ -66,3 +66,25 @@ def test_default_database():
 def test_circuit_breaker_threshold():
     from config.settings import CIRCUIT_BREAKER_THRESHOLD
     assert CIRCUIT_BREAKER_THRESHOLD >= 1
+
+
+def test_required_aws_values_have_local_defaults():
+    from config.settings import (
+        ATHENA_RESULTS_BUCKET,
+        STAGING_BUCKET,
+        ARCHIVE_BUCKET,
+        ZAMBONI_METADATA_BUCKET,
+        SNS_ALERT_TOPIC_ARN,
+        SNS_GREENZONE_TOPIC_ARN,
+    )
+    assert ATHENA_RESULTS_BUCKET.startswith("s3://")
+    assert STAGING_BUCKET.startswith("s3://")
+    assert ARCHIVE_BUCKET.startswith("s3://")
+    assert ZAMBONI_METADATA_BUCKET.startswith("s3://")
+    assert SNS_ALERT_TOPIC_ARN.startswith("arn:aws:sns:")
+    assert SNS_GREENZONE_TOPIC_ARN.startswith("arn:aws:sns:")
+
+
+def test_hk_concurrency_default_is_positive():
+    from config.settings import MAX_CONCURRENT_HK_TABLES
+    assert MAX_CONCURRENT_HK_TABLES >= 1

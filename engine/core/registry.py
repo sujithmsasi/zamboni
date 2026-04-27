@@ -161,17 +161,20 @@ def get_enabled_tables(
     domain: Optional[str] = None,
     tier: Optional[str] = None,
     layer: Optional[str] = None,
+    include_dry_run: bool = True,
 ) -> list[dict]:
     """
     Return tables eligible for HK Engine processing.
-    Filters: hk_enabled=true, table_format=iceberg, dry_run_until passed.
+    Filters: hk_enabled=true and table_format=iceberg.
+    By default includes dry_run_until rows so HK can evaluate and log ramp-up runs.
     """
     conditions = [
         f"environment = '{environment}'",
         "hk_enabled = true",
         "table_format = 'iceberg'",
-        "(dry_run_until IS NULL OR dry_run_until < CURRENT_DATE)",
     ]
+    if not include_dry_run:
+        conditions.append("(dry_run_until IS NULL OR dry_run_until < CURRENT_DATE)")
     if domain:
         conditions.append(f"domain = '{domain}'")
     if tier:

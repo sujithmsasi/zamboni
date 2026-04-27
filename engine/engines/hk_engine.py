@@ -9,9 +9,11 @@ The core housekeeping engine. Processes all enabled Iceberg tables:
   6. Vacuum  — expire snapshots + orphan file cleanup
   7. Log     — record every outcome to execution_log
 """
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+from config.settings import MAX_CONCURRENT_HK_TABLES
 from engine.core import (
     circuit_breaker,
     execution_log,
@@ -93,27 +95,35 @@ class HKEngine(BaseEngine):
         skipped      = 0
         failed_tables= []
 
-        for table_row in tables:
-            fqn = table_row["table_fqn"]
-            try:
-                outcome = self._process_table(table_row)
-                if outcome == "succeeded":
-                    succeeded += 1
-                elif outcome == "skipped":
-                    skipped += 1
-                elif outcome == "failed":
+        max_workers = max(1, min(MAX_CONCURRENT_HK_TABLES, len(tables) or 1))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._process_table, table_row): table_row
+                for table_row in tables
+            }
+
+            for future in as_completed(futures):
+                table_row = futures[future]
+                fqn = table_row["table_fqn"]
+                try:
+                    outcome = future.result()
+                    if outcome == "succeeded":
+                        succeeded += 1
+                    elif outcome == "skipped":
+                        skipped += 1
+                    elif outcome == "failed":
+                        failed += 1
+                        failed_tables.append(fqn)
+                except Exception as e:
                     failed += 1
                     failed_tables.append(fqn)
-            except Exception as e:
-                failed += 1
-                failed_tables.append(fqn)
-                self._log_table_error(fqn, e)
-                self._write_log(
-                    table_row=table_row,
-                    operation="hk_run",
-                    status="FAILURE",
-                    error_message=str(e),
-                )
+                    self._log_table_error(fqn, e)
+                    self._write_log(
+                        table_row=table_row,
+                        operation="hk_run",
+                        status="FAILURE",
+                        error_message=str(e),
+                    )
 
         # ── Summary alert if failures ─────────────────────────────────────────
         if failed_tables and not self.dry_run:
@@ -178,6 +188,12 @@ class HKEngine(BaseEngine):
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason=decision)
             return "skipped"
 
+        frequency_skip = self._frequency_skip_reason(fqn, hk_config, force=force)
+        if frequency_skip:
+            self._log_table_skip(fqn, frequency_skip)
+            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason=frequency_skip)
+            return "skipped"
+
         # ── Gate 3 — Circuit breaker ──────────────────────────────────────────
         cb_state = circuit_breaker.check(fqn)
         if cb_state == circuit_breaker.OPEN:
@@ -207,6 +223,7 @@ class HKEngine(BaseEngine):
         # ── Operations ────────────────────────────────────────────────────────
         started_at = datetime.now(timezone.utc)
         op_errors  = []
+        effective_dry_run = self._effective_dry_run(table_row)
 
         compaction_result = {}
         vacuum_result     = {}
@@ -220,11 +237,19 @@ class HKEngine(BaseEngine):
                     hk_config=hk_config,
                     health=health,
                     tier=tier,
-                    dry_run=self.dry_run,
+                    dry_run=effective_dry_run,
+                )
+                self._write_operation_log(
+                    table_row, "compaction", compaction_result, health,
+                    effective_dry_run=effective_dry_run,
                 )
             except Exception as e:
                 op_errors.append(f"compaction: {e}")
                 log.error("hk_engine.compaction_error", table_fqn=fqn, error=str(e))
+                self._write_operation_log(
+                    table_row, "compaction", {}, health,
+                    error_message=str(e), effective_dry_run=effective_dry_run,
+                )
 
         # Snapshot expiry
         if health.needs_vacuum:
@@ -234,11 +259,19 @@ class HKEngine(BaseEngine):
                     hk_config=hk_config,
                     health=health,
                     tier=tier,
-                    dry_run=self.dry_run,
+                    dry_run=effective_dry_run,
+                )
+                self._write_operation_log(
+                    table_row, "vacuum", vacuum_result, health,
+                    effective_dry_run=effective_dry_run,
                 )
             except Exception as e:
                 op_errors.append(f"vacuum: {e}")
                 log.error("hk_engine.vacuum_error", table_fqn=fqn, error=str(e))
+                self._write_operation_log(
+                    table_row, "vacuum", {}, health,
+                    error_message=str(e), effective_dry_run=effective_dry_run,
+                )
 
         # Orphan cleanup
         if health.needs_orphan_cleanup:
@@ -247,14 +280,22 @@ class HKEngine(BaseEngine):
                     table_fqn=fqn,
                     hk_config=hk_config,
                     tier=tier,
-                    dry_run=self.dry_run,
+                    dry_run=effective_dry_run,
+                )
+                self._write_operation_log(
+                    table_row, "orphan_cleanup", orphan_result, health,
+                    effective_dry_run=effective_dry_run,
                 )
             except Exception as e:
                 op_errors.append(f"orphan_cleanup: {e}")
                 log.error("hk_engine.orphan_error", table_fqn=fqn, error=str(e))
+                self._write_operation_log(
+                    table_row, "orphan_cleanup", {}, health,
+                    error_message=str(e), effective_dry_run=effective_dry_run,
+                )
 
         completed_at = datetime.now(timezone.utc)
-        status = "FAILURE" if op_errors else ("DRY_RUN" if self.dry_run else "SUCCESS")
+        status = "FAILURE" if op_errors else ("DRY_RUN" if effective_dry_run else "SUCCESS")
 
         # ── Write execution log ───────────────────────────────────────────────
         self._write_log(
@@ -276,6 +317,7 @@ class HKEngine(BaseEngine):
                 + vacuum_result.get("bytes_scanned", 0)
                 + orphan_result.get("bytes_scanned", 0)
             ),
+            effective_dry_run=effective_dry_run,
         )
 
         # ── Circuit breaker trip check ────────────────────────────────────────
@@ -285,6 +327,91 @@ class HKEngine(BaseEngine):
                 circuit_breaker.trip(fqn, failure_count, dry_run=self.dry_run)
 
         return "failed" if op_errors else "succeeded"
+
+    def _frequency_skip_reason(
+        self,
+        table_fqn: str,
+        hk_config: dict,
+        force: bool = False,
+    ) -> Optional[str]:
+        """Return a skip reason when run_frequency says the table is not due."""
+        if force:
+            return None
+
+        frequency = (hk_config.get("run_frequency") or "every_trigger").lower()
+        if frequency == "every_trigger":
+            return None
+
+        last_run = execution_log.get_last_run(table_fqn)
+        if not last_run or last_run.get("status") not in ("SUCCESS", "DRY_RUN"):
+            return None
+
+        last_started = self._parse_dt(last_run.get("completed_at") or last_run.get("started_at"))
+        if not last_started:
+            return None
+
+        now = datetime.now(timezone.utc)
+        if frequency == "daily" and last_started.date() == now.date():
+            return "SKIP_NOT_DUE"
+        if frequency == "weekly" and now - last_started < timedelta(days=7):
+            return "SKIP_NOT_DUE"
+        return None
+
+    def _effective_dry_run(self, table_row: dict) -> bool:
+        """Global dry run or table ramp-up dry_run_until both block data changes."""
+        if self.dry_run:
+            return True
+
+        dry_run_until = table_row.get("dry_run_until")
+        if not dry_run_until:
+            return False
+
+        if isinstance(dry_run_until, datetime):
+            until = dry_run_until.date()
+        elif isinstance(dry_run_until, date):
+            until = dry_run_until
+        else:
+            try:
+                until = date.fromisoformat(str(dry_run_until)[:10])
+            except ValueError:
+                return False
+        return until >= datetime.now(timezone.utc).date()
+
+    def _parse_dt(self, value) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    def _write_operation_log(
+        self,
+        table_row: dict,
+        operation: str,
+        result: dict,
+        health,
+        error_message: Optional[str] = None,
+        effective_dry_run: bool = False,
+    ) -> None:
+        status = "FAILURE" if error_message else ("DRY_RUN" if effective_dry_run else "SUCCESS")
+        self._write_log(
+            table_row=table_row,
+            operation=operation,
+            status=status,
+            error_message=error_message,
+            snapshots_before=getattr(health, "snapshot_count", None),
+            snapshots_expired=result.get("snapshots_expired"),
+            orphan_files_deleted=result.get("orphan_files_deleted"),
+            files_compacted=result.get("files_compacted"),
+            bytes_rewritten=result.get("bytes_rewritten"),
+            athena_query_id=result.get("athena_query_id"),
+            bytes_scanned=result.get("bytes_scanned"),
+            effective_dry_run=effective_dry_run,
+        )
 
     # ── Execution log helper ──────────────────────────────────────────────────
 
@@ -297,8 +424,10 @@ class HKEngine(BaseEngine):
         error_message: Optional[str] = None,
         started_at: Optional[datetime] = None,
         completed_at: Optional[datetime] = None,
+        effective_dry_run: Optional[bool] = None,
         **metrics,
     ) -> None:
+        entry_dry_run = self.dry_run if effective_dry_run is None else effective_dry_run
         entry = LogEntry(
             run_id=self.run_id,
             engine="hk",
@@ -310,7 +439,7 @@ class HKEngine(BaseEngine):
             tier=table_row.get("tier", "standard"),
             environment=table_row.get("environment", "prod"),
             status=status,
-            dry_run=self.dry_run,
+            dry_run=entry_dry_run,
             skip_reason=skip_reason,
             error_message=error_message,
             started_at=started_at,
