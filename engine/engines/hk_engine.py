@@ -26,6 +26,7 @@ from engine.core.window_evaluator import evaluate, EXECUTE
 from engine.engines.base import BaseEngine
 from engine.operations import compaction, vacuum
 from engine.utils.glue_client import is_upstream_job_complete
+from engine.monitoring.metrics import publish_engine_run
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -129,6 +130,12 @@ class HKEngine(BaseEngine):
             skipped=skipped,
         )
         self._log_complete(result)
+        publish_engine_run(
+            engine='hk', run_id=self.run_id,
+            succeeded=succeeded, failed=failed, skipped=skipped,
+            duration_s=result.get('elapsed_seconds', 0),
+            dry_run=self.dry_run,
+        )
         return result
 
     # ── Single table processing ───────────────────────────────────────────────

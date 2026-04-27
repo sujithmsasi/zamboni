@@ -1,0 +1,112 @@
+{
+  "Comment": "Zamboni CloudWatch Alarms — deploy via deploy/cloudwatch/create_alarms.sh",
+
+  "alarms": [
+
+    {
+      "AlarmName": "Zamboni-HK-HighFailureRate",
+      "AlarmDescription": "HK Engine has more than 5 failures in a 1-hour window. Check circuit breakers and execution log.",
+      "Namespace": "Zamboni",
+      "MetricName": "Failed",
+      "Dimensions": [{"Name": "Engine", "Value": "hk"}],
+      "Statistic": "Sum",
+      "Period": 3600,
+      "EvaluationPeriods": 1,
+      "Threshold": 5,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"],
+      "OKActions":    ["REPLACE_WITH_SNS_ARN"]
+    },
+
+    {
+      "AlarmName": "Zamboni-HK-NoActivity",
+      "AlarmDescription": "HK Engine has processed zero tables in 26 hours — engine may not be running.",
+      "Namespace": "Zamboni",
+      "MetricName": "TablesProcessed",
+      "Dimensions": [{"Name": "Engine", "Value": "hk"}],
+      "Statistic": "Sum",
+      "Period": 93600,
+      "EvaluationPeriods": 1,
+      "Threshold": 0,
+      "ComparisonOperator": "LessThanOrEqualToThreshold",
+      "TreatMissingData": "breaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"]
+    },
+
+    {
+      "AlarmName": "Zamboni-CircuitBreaker-Trips",
+      "AlarmDescription": "One or more circuit breakers have tripped. Tables auto-disabled — investigation required.",
+      "Namespace": "Zamboni",
+      "MetricName": "CircuitBreakerTrips",
+      "Dimensions": [{"Name": "Engine", "Value": "hk"}],
+      "Statistic": "Sum",
+      "Period": 3600,
+      "EvaluationPeriods": 1,
+      "Threshold": 0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"]
+    },
+
+    {
+      "AlarmName": "Zamboni-HKCoverage-Low",
+      "AlarmDescription": "HK coverage has dropped below 80%. Tables may have been deregistered or disabled.",
+      "Namespace": "Zamboni",
+      "MetricName": "HKCoverage",
+      "Statistic": "Average",
+      "Period": 86400,
+      "EvaluationPeriods": 1,
+      "Threshold": 80,
+      "ComparisonOperator": "LessThanThreshold",
+      "TreatMissingData": "notBreaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"]
+    },
+
+    {
+      "AlarmName": "Zamboni-Archival-Failures",
+      "AlarmDescription": "Archival Engine has failures — partitions may not have been archived or deleted.",
+      "Namespace": "Zamboni",
+      "MetricName": "Failed",
+      "Dimensions": [{"Name": "Engine", "Value": "archival"}],
+      "Statistic": "Sum",
+      "Period": 86400,
+      "EvaluationPeriods": 1,
+      "Threshold": 0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"]
+    },
+
+    {
+      "AlarmName": "Zamboni-Lifecycle-Failures",
+      "AlarmDescription": "Lifecycle Engine has failures — non-prod tables may not be transitioning correctly.",
+      "Namespace": "Zamboni",
+      "MetricName": "Failed",
+      "Dimensions": [{"Name": "Engine", "Value": "lifecycle"}],
+      "Statistic": "Sum",
+      "Period": 86400,
+      "EvaluationPeriods": 1,
+      "Threshold": 0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"]
+    },
+
+    {
+      "AlarmName": "Zamboni-HK-SlowRun",
+      "AlarmDescription": "HK Engine p90 duration exceeded 2 hours. May indicate large table backlog or performance issue.",
+      "Namespace": "Zamboni",
+      "MetricName": "DurationSeconds",
+      "Dimensions": [{"Name": "Engine", "Value": "hk"}],
+      "ExtendedStatistic": "p90",
+      "Period": 3600,
+      "EvaluationPeriods": 2,
+      "Threshold": 7200,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching",
+      "AlarmActions": ["REPLACE_WITH_SNS_ARN"]
+    }
+
+  ]
+}

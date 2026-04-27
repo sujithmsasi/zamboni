@@ -1,0 +1,173 @@
+{
+  "Comment": "Zamboni CloudWatch Dashboard — deploy via AWS Console or CLI",
+  "DeployCommand": "aws cloudwatch put-dashboard --dashboard-name Zamboni --dashboard-body file://dashboard.json --region us-west-2",
+  "DashboardBody": {
+    "widgets": [
+
+      {
+        "type": "text",
+        "x": 0, "y": 0, "width": 24, "height": 1,
+        "properties": {
+          "markdown": "## 🧊 Zamboni — Iceberg Table Governance | [Execution Log](#) | [Streamlit App](#)"
+        }
+      },
+
+      {
+        "type": "metric",
+        "x": 0, "y": 1, "width": 4, "height": 4,
+        "properties": {
+          "title": "Tables Processed (24h)",
+          "view": "singleValue",
+          "metrics": [["Zamboni", "TablesProcessed", "Engine", "hk"]],
+          "period": 86400,
+          "stat": "Sum"
+        }
+      },
+      {
+        "type": "metric",
+        "x": 4, "y": 1, "width": 4, "height": 4,
+        "properties": {
+          "title": "Failures (24h)",
+          "view": "singleValue",
+          "metrics": [["Zamboni", "Failed", "Engine", "hk"]],
+          "period": 86400,
+          "stat": "Sum",
+          "annotations": {
+            "horizontal": [{"value": 5, "color": "#ff6961", "label": "Alert threshold"}]
+          }
+        }
+      },
+      {
+        "type": "metric",
+        "x": 8, "y": 1, "width": 4, "height": 4,
+        "properties": {
+          "title": "HK Coverage %",
+          "view": "singleValue",
+          "metrics": [["Zamboni", "HKCoverage"]],
+          "period": 86400,
+          "stat": "Average"
+        }
+      },
+      {
+        "type": "metric",
+        "x": 12, "y": 1, "width": 4, "height": 4,
+        "properties": {
+          "title": "Circuit Breaker Trips (7d)",
+          "view": "singleValue",
+          "metrics": [["Zamboni", "CircuitBreakerTrips", "Engine", "hk"]],
+          "period": 604800,
+          "stat": "Sum"
+        }
+      },
+      {
+        "type": "metric",
+        "x": 16, "y": 1, "width": 4, "height": 4,
+        "properties": {
+          "title": "Snapshots Expired (24h)",
+          "view": "singleValue",
+          "metrics": [["Zamboni", "SnapshotsExpired", "Engine", "hk"]],
+          "period": 86400,
+          "stat": "Sum"
+        }
+      },
+      {
+        "type": "metric",
+        "x": 20, "y": 1, "width": 4, "height": 4,
+        "properties": {
+          "title": "GB Archived (30d)",
+          "view": "singleValue",
+          "metrics": [["Zamboni", "BytesArchived", "Engine", "archival"]],
+          "period": 2592000,
+          "stat": "Sum"
+        }
+      },
+
+      {
+        "type": "metric",
+        "x": 0, "y": 5, "width": 12, "height": 6,
+        "properties": {
+          "title": "HK Engine — Success vs Failure (14 days)",
+          "view": "timeSeries",
+          "metrics": [
+            ["Zamboni", "Succeeded", "Engine", "hk", {"label": "Succeeded", "color": "#2ca02c"}],
+            ["Zamboni", "Failed",    "Engine", "hk", {"label": "Failed",    "color": "#d62728"}],
+            ["Zamboni", "Skipped",   "Engine", "hk", {"label": "Skipped",   "color": "#ff7f0e"}]
+          ],
+          "period": 3600,
+          "stat": "Sum",
+          "stacked": false
+        }
+      },
+      {
+        "type": "metric",
+        "x": 12, "y": 5, "width": 12, "height": 6,
+        "properties": {
+          "title": "Engine Duration (seconds)",
+          "view": "timeSeries",
+          "metrics": [
+            ["Zamboni", "DurationSeconds", "Engine", "hk",       {"label": "HK Engine"}],
+            ["Zamboni", "DurationSeconds", "Engine", "archival", {"label": "Archival Engine"}],
+            ["Zamboni", "DurationSeconds", "Engine", "lifecycle",{"label": "Lifecycle Engine"}]
+          ],
+          "period": 3600,
+          "stat": "p90"
+        }
+      },
+
+      {
+        "type": "metric",
+        "x": 0, "y": 11, "width": 8, "height": 6,
+        "properties": {
+          "title": "Archival — Partitions Archived",
+          "view": "timeSeries",
+          "metrics": [
+            ["Zamboni", "TablesProcessed", "Engine", "archival", {"label": "Partitions Archived"}]
+          ],
+          "period": 86400,
+          "stat": "Sum"
+        }
+      },
+      {
+        "type": "metric",
+        "x": 8, "y": 11, "width": 8, "height": 6,
+        "properties": {
+          "title": "Lifecycle — State Transitions",
+          "view": "timeSeries",
+          "metrics": [
+            ["Zamboni", "Succeeded", "Engine", "lifecycle", {"label": "Transitioned/Notified"}],
+            ["Zamboni", "Failed",    "Engine", "lifecycle", {"label": "Failed"}]
+          ],
+          "period": 86400,
+          "stat": "Sum"
+        }
+      },
+      {
+        "type": "metric",
+        "x": 16, "y": 11, "width": 8, "height": 6,
+        "properties": {
+          "title": "Circuit Breaker Trips by Domain",
+          "view": "timeSeries",
+          "metrics": [
+            ["Zamboni", "CircuitBreakerTrips", "Engine", "hk", "Domain", "finance"],
+            ["Zamboni", "CircuitBreakerTrips", "Engine", "hk", "Domain", "ers"],
+            ["Zamboni", "CircuitBreakerTrips", "Engine", "hk", "Domain", "membership"]
+          ],
+          "period": 3600,
+          "stat": "Sum"
+        }
+      },
+
+      {
+        "type": "log",
+        "x": 0, "y": 17, "width": 24, "height": 6,
+        "properties": {
+          "title": "Recent Engine Errors",
+          "query": "SOURCE '/zamboni/engine' | fields @timestamp, engine, table_fqn, error_message | filter level = 'error' | sort @timestamp desc | limit 50",
+          "region": "us-west-2",
+          "view": "table"
+        }
+      }
+
+    ]
+  }
+}
