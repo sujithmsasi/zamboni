@@ -9,7 +9,7 @@ and lifecycle management for Apache Iceberg tables at enterprise scale.
 
 | Engine | Purpose | Trigger |
 |---|---|---|
-| **HK Engine** | Compaction, snapshot expiry, orphan file cleanup | Post-batch via Control-M |
+| **HK Engine** | Compaction, snapshot expiry, orphan file cleanup | EventBridge (hourly) or Control-M post-batch |
 | **Archival Engine** | Export-then-delete cold staging partitions to S3 Intelligent-Tiering | Weekly |
 | **Lifecycle Engine** | Auto-discover and clean up stale non-prod tables | Weekly |
 
@@ -25,7 +25,7 @@ zamboni/
 │   ├── operations/  ← Compaction, vacuum, archival, catalog cleanup
 │   ├── strategies/  ← Binpack, sort, zorder
 │   ├── utils/       ← Athena, S3, Glue clients + logger
-│   ├── scripts/     ← Control-M entry points
+│   ├── scripts/     ← Engine entry points (EventBridge / Control-M / manual)
 │   └── cli/         ← Helper tools for engineers
 ├── app/
 │   ├── Home.py      ← Streamlit entry point
@@ -225,7 +225,7 @@ python -m engine.cli.cost_report --domain finance --days 90
 python -m engine.cli.cost_report --days 30 --export cost_report.csv
 ```
 
-### Engine Entry Points (Control-M / Manual)
+### Engine Entry Points (EventBridge / Control-M / Manual)
 
 ```bash
 # Run HK Engine — all enabled tables

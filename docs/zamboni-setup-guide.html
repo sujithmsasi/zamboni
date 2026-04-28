@@ -1,4 +1,10 @@
-<!DOCTYPE html>
+
+  <tr>
+    <td>Gap Sprint 4</td><td>v2 alignment: idempotency, property sync, hot partition, backpressure, Parquet log writer</td><td><span class="badge badge-green">&#10003; Complete</span></td>
+  </tr>
+  <tr>
+    <td>Gap Sprint 5</td><td>Parquet buffer wiring, workgroup name mapping, README/docs cleanup</td><td><span class="badge badge-green">&#10003; Complete</span></td>
+  </tr><!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -448,7 +454,7 @@ td code { font-size: 12px; }
     <div class="hero-stat"><div class="val">30K+</div><div class="lbl">Tables Managed</div></div>
     <div class="hero-stat"><div class="val">3</div><div class="lbl">Engines</div></div>
     <div class="hero-stat"><div class="val">11</div><div class="lbl">UI Pages</div></div>
-    <div class="hero-stat"><div class="val">198</div><div class="lbl">Unit Tests</div></div>
+    <div class="hero-stat"><div class="val">275</div><div class="lbl">Unit Tests</div></div>
     <div class="hero-stat"><div class="val">us-west-2</div><div class="lbl">Region</div></div>
   </div>
 </div>
@@ -552,6 +558,10 @@ td code { font-size: 12px; }
   <tr><td><strong>run_frequency + Dedupe</strong></td><td>SKIP_NOT_DUE if run too recently. Thresholds: every_trigger=0h, daily=20h, weekly=160h</td><td><code>run_frequency</code></td></tr>
   <tr><td><strong>Tier Parallelism</strong></td><td>Each tier runs in its own ThreadPoolExecutor. critical=5, standard=10, low=3 workers</td><td>automatic</td></tr>
   <tr><td><strong>Operation-Level Logging</strong></td><td>Separate execution_log rows per operation (compaction, vacuum, orphan_cleanup) + hk_run summary</td><td>automatic</td></tr>
+  <tr><td><strong>Parquet Execution Log</strong></td><td>Log entries buffered per run, written as single Parquet file to S3, registered via Iceberg add_files. Falls back to per-row Athena INSERT on failure. Controlled by EXECUTION_LOG_MODE.</td><td><code>EXECUTION_LOG_MODE</code></td></tr>
+  <tr><td><strong>Idempotency</strong></td><td>Deterministic execution_id per table+operation+window prevents duplicate dispatch across EventBridge + Control-M concurrent invocations.</td><td>automatic</td></tr>
+  <tr><td><strong>Property Sync</strong></td><td>One-time ALTER TABLE SET TBLPROPERTIES for vacuum settings when properties_synced=false. Marked synced after success -- never altered at runtime.</td><td><code>properties_synced</code></td></tr>
+  <tr><td><strong>Backpressure</strong></td><td>Checks running query count on zamboni-* workgroup before dispatch. Skips operation with SKIP_BACKPRESSURE_TIMEOUT if saturated. Fail-open if count check unavailable.</td><td>automatic</td></tr>
 </table>
 
 <h3>Archival Engine — 7 Intelligent Behaviours</h3>
@@ -714,11 +724,11 @@ td code { font-size: 12px; }
   <span class="flag">--notification-endpoint</span> <span class="str">da-team@company.com</span></code></pre>
 
 <!-- ════════════════════════════════════════════════════════════════════ -->
-<h2 id="eventbridge">EventBridge Scheduling (Phase 1)</h2>
+<h2 id="eventbridge">Scheduling — Phase 1: EventBridge + SSM</h2>
 
 <div class="callout info">
   <div class="callout-icon">💡</div>
-  <div class="callout-body"><strong>Why EventBridge, not Control-M?</strong><p>For Phase 1 release, EventBridge + SSM Run Command is the simplest scheduling option. The engine evaluates all per-table safe windows and upstream dependencies internally — the scheduler just needs to trigger the engine. Control-M can be added later for dependency chaining without any engine code changes.</p></div>
+  <div class="callout-body"><strong>Why EventBridge, not Control-M?</strong><p>For Phase 1 release, EventBridge + SSM Run Command is the Phase 1 default — zero per-pipeline Control-M config needed. The engine evaluates all per-table safe windows and upstream dependencies internally — the scheduler just needs to trigger the engine. Control-M can be added later for dependency chaining without any engine code changes.</p></div>
 </div>
 
 <p>Create the following EventBridge rules using SSM Run Command as the target. The HK engine runs every hour but skips tables outside their configured windows.</p>
@@ -910,7 +920,14 @@ ZAMBONI_METADATA_BUCKET=<span class="str">s3://your-zamboni-metadata</span>
 SNS_ALERT_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-alerts</span>
 SNS_GREENZONE_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-greenzone</span>
 
-<span class="comment"># ── CloudTrail (optional — enables accurate stale detection) ──────────────────</span>
+<span class="comment"># ── <span class="comment"># -- Execution Log Write Mode ------------------------------------------------</span>
+<span class="comment"># auto    = Parquet + add_files when available, INSERT fallback (default)</span>
+<span class="comment"># parquet = Parquet + add_files only</span>
+<span class="comment"># insert  = per-row Athena INSERT (legacy)</span>
+<span class="comment"># both    = Parquet first, INSERT fallback</span>
+EXECUTION_LOG_MODE=<span class="num">auto</span>
+
+CloudTrail (optional — enables accurate stale detection) ──────────────────</span>
 <span class="comment"># Set to your CloudTrail Athena table FQN if CloudTrail logs are in Athena</span>
 <span class="comment"># Without this, lifecycle engine falls back to Glue CreateTime as activity signal</span>
 CLOUDTRAIL_TABLE=<span class="comment">         # e.g. glue_catalog.logs_db.cloudtrail_events</span>

@@ -46,6 +46,7 @@ from engine.operations import compaction, vacuum
 from engine.utils.glue_client import is_upstream_job_complete
 from engine.monitoring.metrics import publish_engine_run
 from engine.core.execution_log_parquet import ParquetLogBuffer
+from config.settings import EXECUTION_LOG_MODE
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -64,6 +65,14 @@ _TIER_WORKERS = {
     "critical": 5,
     "standard": 10,
     "low":       3,
+}
+
+# ── Tier alias to actual Athena workgroup name (Gap 2) ────────────────────────
+# Backpressure checks must use real Athena workgroup names, not tier aliases.
+_TIER_TO_WORKGROUP = {
+    "critical": "zamboni-critical",
+    "standard": "zamboni-standard",
+    "low":      "zamboni-low",
 }
 
 
@@ -111,8 +120,11 @@ class HKEngine(BaseEngine):
 
         log.info("hk_engine.tables_fetched", count=len(tables), run_id=self.run_id)
 
-        # D.10-12 — batch Parquet log buffer; flushed once at end of run
-        log_buffer = ParquetLogBuffer(run_id=self.run_id, engine="hk")
+        # D.10-12 — batch Parquet log buffer; flushed once at end of run.
+        # Store on instance so _write_log can route to it without threading
+        # log_buffer through every call site (Gap 1).
+        self._log_buffer = ParquetLogBuffer(run_id=self.run_id, engine="hk")
+        log_buffer = self._log_buffer  # local alias for flush call below
 
         succeeded     = 0
         failed        = 0
@@ -183,7 +195,7 @@ class HKEngine(BaseEngine):
         self._log_complete(result)
 
         # Flush buffered log entries (Parquet/insert depending on mode)
-        flush_result = log_buffer.flush(dry_run=self.dry_run)
+        flush_result = self._log_buffer.flush(dry_run=self.dry_run)
         log.info(
             "hk_engine.log_buffer_flushed",
             mode=flush_result.get("mode"),
@@ -271,7 +283,7 @@ class HKEngine(BaseEngine):
         # ── B.6 — Property sync (v2) ─────────────────────────────────────────
         # If table hasn't had vacuum properties applied, ALTER TABLE once.
         if needs_property_sync(table_row):
-            workgroup_for_alter = tier if tier in ("critical","standard","low") else "standard"
+            workgroup_for_alter = _TIER_TO_WORKGROUP.get(tier, "zamboni-standard")
             sync_result = apply_vacuum_properties(
                 fqn, hk_config, workgroup_for_alter,
                 dry_run=table_dry_run,
@@ -286,7 +298,8 @@ class HKEngine(BaseEngine):
             )
 
         # ── Health check ──────────────────────────────────────────────────────
-        workgroup = tier if tier in ("critical", "standard", "low") else "standard"
+        # Real Athena workgroup name for backpressure + health checks (Gap 2)
+        workgroup = _TIER_TO_WORKGROUP.get(tier, "zamboni-standard")
         health    = health_checker.check(fqn, hk_config, workgroup=workgroup)
 
         if not health.check_success:
@@ -540,9 +553,15 @@ class HKEngine(BaseEngine):
         **metrics,
     ) -> None:
         """
-        Write a log entry. effective_dry_run is the per-table dry_run flag
-        (global OR ramp-up) — when None, falls back to engine-level dry_run.
-        Critical for ramp-up correctness (v2 A.2).
+        Write a log entry.
+
+        Routing (Gap 1):
+          - EXECUTION_LOG_MODE = insert          -> execution_log.write() directly
+          - EXECUTION_LOG_MODE = parquet/both/auto -> self._log_buffer.append()
+            Buffer is flushed once at end of run() — no duplicate writes.
+
+        effective_dry_run is the per-table dry_run flag (global OR ramp-up).
+        When None it falls back to engine-level self.dry_run (v2 A.2).
         """
         eff_dry = effective_dry_run if effective_dry_run is not None else self.dry_run
         entry = LogEntry(
@@ -563,4 +582,15 @@ class HKEngine(BaseEngine):
             completed_at=completed_at,
             **metrics,
         )
-        execution_log.write(entry, dry_run=eff_dry)
+        mode = (EXECUTION_LOG_MODE or "auto").lower()
+        if mode == "insert":
+            # Legacy path — write immediately via Athena INSERT
+            execution_log.write(entry, dry_run=eff_dry)
+        else:
+            # Parquet/both/auto — buffer during run, flush once at end
+            log_buf = getattr(self, "_log_buffer", None)
+            if log_buf is not None:
+                log_buf.append(entry)
+            else:
+                # Fallback: no buffer on instance (e.g. called outside run())
+                execution_log.write(entry, dry_run=eff_dry)

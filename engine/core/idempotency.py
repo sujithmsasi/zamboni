@@ -1,15 +1,22 @@
 """
-Zamboni — Idempotency Helper
-v2 Section "13) Idempotency" — strict idempotency key per operation:
-    run_id + table_fqn + operation + window_id
+Zamboni -- Idempotency Helper
+v2 Section "13) Idempotency" -- strict idempotency key per operation.
 
-Used to prevent duplicate dispatch on retry or overlapping runs.
+Identity key (what IS hashed):
+    table_fqn + operation + window_id
+
+NOT hashed (accepted for backward compatibility only):
+    run_id -- excluded from hash so two different engine invocations
+    (e.g. EventBridge safety-net + Control-M trigger) that process the
+    same table in the same window produce the SAME execution_id and
+    correctly dedupe via check_already_executed().
+
 The execution_id is stored in:
-  - execution_log.run_id (for audit trail per row)
-  - stream_registry.last_execution_id (for fast skip dedupe lookup)
+  - execution_log.run_id  (audit trail per row)
+  - stream_registry.last_execution_id  (fast skip dedupe on next run)
 
-Backward compatible — silently no-ops if last_execution_id column doesn't
-exist in older environments.
+Backward compatible -- silently no-ops if last_execution_id column
+does not exist in older environments.
 """
 import hashlib
 from datetime import datetime, timezone
