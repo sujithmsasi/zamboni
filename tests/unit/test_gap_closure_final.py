@@ -14,14 +14,14 @@ import pandas as pd
 
 def test_gap1_after_install_uses_home_py():
     """deploy/scripts/after_install.sh must reference app/Home.py as ExecStart."""
-    with open("deploy/scripts/after_install.sh") as f:
+    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
         content = f.read()
     assert "app/Home.py" in content, "app/Home.py not found in after_install.sh"
 
 
 def test_gap1_after_install_no_main_py():
     """deploy/scripts/after_install.sh must NOT reference app/main.py."""
-    with open("deploy/scripts/after_install.sh") as f:
+    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
         content = f.read()
     assert "app/main.py" not in content, "app/main.py still present in after_install.sh"
 
@@ -264,7 +264,7 @@ def test_gap5_is_in_dry_run_ramp_none():
 
 def test_gap6_parquet_buffer_wired_in_hk_engine():
     """ParquetLogBuffer must be imported and used in HK Engine."""
-    with open("engine/engines/hk_engine.py") as f:
+    with open("engine/engines/hk_engine.py", encoding='utf-8') as f:
         content = f.read()
     assert "ParquetLogBuffer" in content, \
         "ParquetLogBuffer not imported/used in HK Engine"
@@ -278,7 +278,7 @@ def test_gap6_entry_to_dict_has_all_ddl_columns():
     from engine.core.execution_log import LogEntry
     import re
 
-    with open("sql/create_execution_log.sql") as f:
+    with open("sql/create_execution_log.sql", encoding='utf-8') as f:
         ddl = f.read()
     ddl_cols = set(re.findall(r'^\s{4}(\w+)\s+\w+', ddl, re.MULTILINE))
 
@@ -365,7 +365,7 @@ def test_gap6_parquet_buffer_strict_mode_does_not_fallback():
 
 def test_gap7_readme_eventbridge_is_phase1_primary():
     """README must document EventBridge as Phase 1 primary scheduling."""
-    with open("README.md") as f:
+    with open("README.md", encoding='utf-8') as f:
         content = f.read()
     assert "Phase 1" in content
     assert "EventBridge" in content
@@ -373,7 +373,7 @@ def test_gap7_readme_eventbridge_is_phase1_primary():
 
 def test_gap7_readme_controlm_documented_as_optional():
     """README must NOT imply Control-M is the only scheduling option."""
-    with open("README.md") as f:
+    with open("README.md", encoding='utf-8') as f:
         content = f.read()
     # Control-M is mentioned (as optional Phase 2) but not as the only option
     # Confirm EventBridge is also present and Phase 1 reference exists
@@ -385,7 +385,7 @@ def test_gap7_readme_controlm_documented_as_optional():
 
 def test_gap7_readme_no_ecs_fargate():
     """README must not reference ECS Fargate (orchestrator is on EC2)."""
-    with open("README.md") as f:
+    with open("README.md", encoding='utf-8') as f:
         content = f.read()
     assert "ECS Fargate" not in content
     assert "ecs.amazonaws" not in content.lower()

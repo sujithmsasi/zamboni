@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 # ── A.1: systemd entrypoint ───────────────────────────────────────────────────
 
 def test_after_install_uses_home_py():
-    with open("deploy/scripts/after_install.sh") as f:
+    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
         content = f.read()
     assert "app/Home.py" in content
     assert "app/main.py" not in content
@@ -314,25 +314,25 @@ def test_parquet_writer_falls_back_to_insert_mode():
 # ── E.13: DDL fields ─────────────────────────────────────────────────────────
 
 def test_stream_registry_ddl_has_processing_cadence():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "processing_cadence" in ddl
 
 
 def test_stream_registry_ddl_has_properties_synced():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "properties_synced" in ddl
 
 
 def test_stream_registry_ddl_has_last_execution_id():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "last_execution_id" in ddl
 
 
 def test_stream_registry_ddl_has_dry_run_until():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "dry_run_until" in ddl
 
@@ -341,7 +341,7 @@ def test_stream_registry_ddl_has_dry_run_until():
 
 def test_readme_no_ecs_fargate_references():
     """README must not reference Fargate/ECS — orchestrator is on EC2."""
-    with open("README.md") as f:
+    with open("README.md", encoding='utf-8') as f:
         readme = f.read()
     assert "Fargate" not in readme
     # ECS in 'EC2' is fine; but standalone ECS reference would not be

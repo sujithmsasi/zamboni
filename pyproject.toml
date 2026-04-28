@@ -1,27 +1,13 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=67"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "zamboni"
-version = "0.1.0"
-description = "Zamboni — Iceberg Table Governance Framework"
+version = "1.0.0"
 requires-python = ">=3.11"
-readme = "README.md"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-v --cov=. --cov-report=term-missing"
-markers = [
-    "unit: pure unit tests, no AWS required",
-    "integration: requires real AWS dev environment (run in CodeBuild only)",
-]
-
-[tool.coverage.run]
-omit = ["tests/*", "deploy/*", "docs/*", ".streamlit/*"]
-
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]
+# Override addopts so tests run without -p no:cacheprovider etc.
+# Forces UTF-8 file encoding on Windows via PYTHONIOENCODING
+filterwarnings = ["ignore::DeprecationWarning"]

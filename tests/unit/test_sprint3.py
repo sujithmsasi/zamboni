@@ -188,7 +188,7 @@ def test_create_athena_tables_script_exists():
 
 def test_setup_ec2_references_correct_entrypoint():
     """setup_ec2.sh should reference app/Home.py not app/main.py."""
-    with open("deploy/setup_ec2.sh") as f:
+    with open("deploy/setup_ec2.sh", encoding='utf-8') as f:
         content = f.read()
     assert "app/Home.py" in content
     assert "app/main.py" not in content
@@ -196,14 +196,14 @@ def test_setup_ec2_references_correct_entrypoint():
 
 def test_setup_ec2_is_executable_script():
     """setup_ec2.sh should have bash shebang."""
-    with open("deploy/setup_ec2.sh") as f:
+    with open("deploy/setup_ec2.sh", encoding='utf-8') as f:
         first_line = f.readline()
     assert "bash" in first_line or "sh" in first_line
 
 
 def test_create_athena_tables_references_sql_files():
     """create_athena_tables.sh should reference all 6 SQL DDL files."""
-    with open("deploy/create_athena_tables.sh") as f:
+    with open("deploy/create_athena_tables.sh", encoding='utf-8') as f:
         content = f.read()
     required_tables = [
         "create_domain_registry.sql",
@@ -222,7 +222,7 @@ def test_create_athena_tables_references_sql_files():
 
 def test_lifecycle_engine_imports_activity_scanner():
     """Lifecycle engine should import activity scanner."""
-    with open("engine/engines/lifecycle_engine.py") as f:
+    with open("engine/engines/lifecycle_engine.py", encoding='utf-8') as f:
         content = f.read()
     assert "activity_scanner" in content or "get_activity_signals" in content, \
         "lifecycle_engine.py does not import activity_scanner"
@@ -230,7 +230,7 @@ def test_lifecycle_engine_imports_activity_scanner():
 
 def test_upsert_updates_activity_signals():
     """_upsert_nonprod_registry should update last_query_at and last_write_at."""
-    with open("engine/engines/lifecycle_engine.py") as f:
+    with open("engine/engines/lifecycle_engine.py", encoding='utf-8') as f:
         content = f.read()
     assert "last_query_at" in content
     assert "last_write_at" in content

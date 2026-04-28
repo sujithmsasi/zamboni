@@ -105,7 +105,7 @@ def test_streamlit_entrypoint_exists():
 
 def test_systemd_service_uses_correct_entrypoint():
     """deploy/scripts/after_install.sh must reference app/Home.py not app/main.py."""
-    with open("deploy/scripts/after_install.sh") as f:
+    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
         content = f.read()
     assert "app/Home.py" in content, \
         "after_install.sh still references old entrypoint — should be app/Home.py"
@@ -118,7 +118,7 @@ def test_systemd_service_uses_correct_entrypoint():
 def test_iam_delete_table_restricted_to_nonprod():
     """IAM policy must NOT allow glue:DeleteTable on wildcard * resources."""
     import json
-    with open("deploy/iam_policy.json") as f:
+    with open("deploy/iam_policy.json", encoding='utf-8') as f:
         content = f.read()
     # Remove comment lines for JSON parsing
     lines = [l for l in content.splitlines() if not l.strip().startswith("//")]
