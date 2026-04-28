@@ -70,7 +70,7 @@ Type=simple
 User=ec2-user
 WorkingDirectory=/opt/zamboni
 EnvironmentFile=/opt/zamboni/.env
-ExecStart=/usr/local/bin/streamlit run app/main.py \
+ExecStart=/usr/local/bin/streamlit run app/Home.py \
     --server.port 8501 \
     --server.address 0.0.0.0 \
     --server.headless true \

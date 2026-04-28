@@ -185,16 +185,21 @@ def get_enabled_tables(
 ) -> list[dict]:
     """
     Return tables eligible for HK Engine processing.
-    Includes dry_run_until tables so they are evaluated through all gates —
-    the engine logs DRY_RUN instead of executing for ramp-up tables.
-    Use is_in_dry_run_ramp(row) in the engine to check per table.
 
-    Filters: hk_enabled=true, table_format=iceberg.
+    Includes TWO groups:
+      A) Tables with hk_enabled=true — fully enabled
+      B) Tables with hk_enabled=false BUT dry_run_until >= today — ramp-up
+         evaluation: gates run, operations log DRY_RUN instead of executing.
+
+    Use is_in_dry_run_ramp(row) in the engine to distinguish group B.
+
+    Filters: table_format=iceberg, environment, domain, tier, layer as given.
     """
     conditions = [
         f"environment = '{environment}'",
-        "hk_enabled = true",
         "table_format = 'iceberg'",
+        # Include both: fully enabled tables OR active dry_run_until ramp-up
+        "(hk_enabled = true OR (dry_run_until IS NOT NULL AND dry_run_until >= CURRENT_DATE))",
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")

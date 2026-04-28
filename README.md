@@ -100,11 +100,22 @@ python -m streamlit run app/Home.py --server.port 8501
 ---
 
 
-## Scheduling (Phase 1 — EventBridge + SSM)
+## Scheduling
+
+### Phase 1 — EventBridge + SSM (default, no Control-M HK jobs needed)
 
 EventBridge triggers the engines via SSM Run Command on the EC2 instance.
-The HK engine runs every hour but skips tables outside their configured safe window.
-Control-M remains compatible and can be added later for dependency chaining.
+The HK engine runs every hour but self-regulates — skipping tables outside
+their safe window or not yet due per `run_frequency`. Zero per-pipeline
+Control-M config required.
+
+### Phase 2 (optional) — Control-M + EventBridge safety net
+
+Control-M can trigger engines directly via SSH after batch jobs complete,
+using `dependent_on_controlm_job` for upstream dependency chaining.
+EventBridge continues as a safety-net (every 6h, `scope=all`).
+The engine dedupes automatically — duplicate invocations produce SKIP_NOT_DUE.
+No engine code changes required to switch trigger models.
 
 | Rule | Schedule | Command |
 |---|---|---|

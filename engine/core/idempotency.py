@@ -27,23 +27,29 @@ def build_execution_id(
     window_id: Optional[str] = None,
 ) -> str:
     """
-    Build a deterministic execution_id from the operation context.
-    Two runs of the same logical operation in the same window will have
-    identical execution_ids — this is what enables dedupe.
+    Build a deterministic execution_id from logical operation identity.
+    Stable across run_ids — same table+operation+window always yields the
+    same execution_id regardless of which engine invocation produced it.
+    This enables cross-run dedupe: EventBridge safety-net + Control-M
+    triggers for the same window produce the same ID.
+
+    NOTE: run_id is accepted for backward compatibility but is NOT hashed.
 
     Args:
-        run_id:    Engine run identifier (e.g. "hk-20260427-153000")
+        run_id:    Engine run identifier — accepted but NOT included in hash
         table_fqn: Fully qualified table name
         operation: compaction | vacuum | orphan_cleanup | hk_run | property_sync
-        window_id: Optional window identifier (e.g. "2026-04-27-postbatch")
-                   If None, falls back to today's date string.
+        window_id: Window identifier (e.g. "20260427"). Defaults to UTC date.
 
     Returns:
-        deterministic SHA1-based execution ID, e.g.
+        Deterministic SHA1-based execution ID, e.g.
         "exec_a1b2c3d4e5f6_finance_staging_compaction_20260427"
     """
     win = window_id or datetime.now(timezone.utc).strftime("%Y%m%d")
-    raw = f"{run_id}|{table_fqn}|{operation}|{win}"
+    # run_id intentionally excluded — hash must represent logical operation
+    # identity (table+operation+window) so two concurrent engine invocations
+    # for the same table produce the same execution_id and dedupe correctly.
+    raw = f"{table_fqn}|{operation}|{win}"
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
     table_short = table_fqn.split(".")[-1][:30]
     return f"exec_{digest}_{table_short}_{operation}_{win}"
