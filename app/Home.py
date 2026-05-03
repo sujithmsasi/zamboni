@@ -3,20 +3,26 @@ Zamboni — Home Page
 Daily cached snapshot + small live activity zone.
 First user of the day triggers snapshot generation. Others read cache.
 """
-import streamlit as st
-import pandas as pd
-from datetime import datetime, timezone
+import sys
+from pathlib import Path
 
+# Ensure project root is on sys.path so 'app.*' imports resolve
+# regardless of which directory Streamlit is launched from.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+import pandas as pd
+import streamlit as st
+
+from app.components.athena_runner import cached_read_sql
 from app.components.auth import check_login, current_user
 from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar
-from app.components.kpi_cards import render_kpi_row, format_bytes, format_count
-from app.components.status_badge import status as status_badge, tier as tier_badge
 from app.components.home_snapshot import get_or_generate
-from app.components.athena_runner import cached_read_sql
-
+from app.components.kpi_cards import format_bytes, format_count, render_kpi_row
+from app.components.sidebar import render as render_sidebar
+from app.components.status_badge import status as status_badge
 from config.settings import EXECUTION_LOG_TABLE
-
 
 st.set_page_config(page_title="Zamboni — Home", page_icon="🏠", layout="wide")
 

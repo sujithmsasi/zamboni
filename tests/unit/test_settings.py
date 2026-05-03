@@ -2,9 +2,6 @@
 Unit tests for config/settings.py
 Validates constants and structure — no AWS required.
 """
-import pytest
-from unittest.mock import patch
-import os
 
 
 def test_valid_layers():
@@ -24,7 +21,7 @@ def test_valid_tiers():
 
 
 def test_valid_environments():
-    from config.settings import VALID_ENVIRONMENTS, NONPROD_ENVIRONMENTS
+    from config.settings import NONPROD_ENVIRONMENTS, VALID_ENVIRONMENTS
     assert "prod" in VALID_ENVIRONMENTS
     assert "prod" not in NONPROD_ENVIRONMENTS
     assert "dev"  in NONPROD_ENVIRONMENTS

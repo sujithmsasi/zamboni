@@ -2,16 +2,17 @@
 Unit tests for engine/utils/partition_utils.py
 No AWS required — pure logic tests.
 """
-import pytest
 from datetime import date
-from engine.utils.partition_utils import (
-    build_hot_partition_filter,
-    build_cold_partition_filter,
-    parse_table_fqn,
-    build_archive_s3_prefix,
-    date_range,
-)
 
+import pytest
+
+from engine.utils.partition_utils import (
+    build_archive_s3_prefix,
+    build_cold_partition_filter,
+    build_hot_partition_filter,
+    date_range,
+    parse_table_fqn,
+)
 
 # ── build_hot_partition_filter ────────────────────────────────────────────────
 

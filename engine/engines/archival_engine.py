@@ -10,18 +10,18 @@ Flow per table:
   4. Log every partition outcome to execution_log
   5. Alert on failures
 """
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from typing import Optional
 
 from config.settings import MAX_CONCURRENT_PARTITIONS
 from engine.core import execution_log, notifier, registry
 from engine.core.execution_log import LogEntry
 from engine.engines.base import BaseEngine
 from engine.operations.archival import (
+    _resolve_partition_column,
     archive_partition,
     discover_cold_partitions,
-    _resolve_partition_column,
 )
 from engine.utils.logger import get_logger
 
@@ -36,7 +36,7 @@ class ArchivalEngine(BaseEngine):
 
     def run(
         self,
-        domain: Optional[str] = None,
+        domain: str | None = None,
         environment: str = "prod",
     ) -> dict:
         """
@@ -108,7 +108,7 @@ class ArchivalEngine(BaseEngine):
         """
         fqn             = table_row["table_fqn"]
         retention_days  = table_row.get("archive_retention_days") or 30
-        tier            = table_row.get("tier", "standard")
+        table_row.get("tier", "standard")
         workgroup       = "archival"
 
         # Resolve partition column

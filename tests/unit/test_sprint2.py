@@ -3,10 +3,8 @@ Sprint 2 gap closure tests.
 Covers: run_frequency (H1), dedupe/SKIP_NOT_DUE (H2), tier parallelism
 config (H3), operation-level logging structure (H4).
 """
-import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
-
+from datetime import UTC, datetime, timedelta, timezone
+from unittest.mock import patch
 
 # ── H1 + H2: run_frequency + dedupe ──────────────────────────────────────────
 
@@ -22,7 +20,7 @@ class TestIsDue:
 
     def test_every_trigger_always_due(self):
         engine = self._engine()
-        with patch("engine.engines.hk_engine.execution_log") as mock_log:
+        with patch("engine.engines.hk_engine.execution_log"):
             due, reason = engine._is_due("t", self._config("every_trigger"))
         assert due is True
         assert reason == ""
@@ -36,7 +34,7 @@ class TestIsDue:
 
     def test_daily_due_when_run_22h_ago(self):
         engine = self._engine()
-        last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=22)).isoformat()
+        last_run_ts = (datetime.now(UTC) - timedelta(hours=22)).isoformat()
         with patch("engine.engines.hk_engine.execution_log") as mock_log:
             mock_log.get_last_run.return_value = {"completed_at": last_run_ts}
             due, reason = engine._is_due("t", self._config("daily"))
@@ -44,7 +42,7 @@ class TestIsDue:
 
     def test_daily_not_due_when_run_2h_ago(self):
         engine = self._engine()
-        last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        last_run_ts = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
         with patch("engine.engines.hk_engine.execution_log") as mock_log:
             mock_log.get_last_run.return_value = {"completed_at": last_run_ts}
             due, reason = engine._is_due("t", self._config("daily"))
@@ -54,7 +52,7 @@ class TestIsDue:
 
     def test_weekly_not_due_when_run_3_days_ago(self):
         engine = self._engine()
-        last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+        last_run_ts = (datetime.now(UTC) - timedelta(hours=72)).isoformat()
         with patch("engine.engines.hk_engine.execution_log") as mock_log:
             mock_log.get_last_run.return_value = {"completed_at": last_run_ts}
             due, reason = engine._is_due("t", self._config("weekly"))
@@ -63,7 +61,7 @@ class TestIsDue:
 
     def test_weekly_due_when_run_8_days_ago(self):
         engine = self._engine()
-        last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=192)).isoformat()
+        last_run_ts = (datetime.now(UTC) - timedelta(hours=192)).isoformat()
         with patch("engine.engines.hk_engine.execution_log") as mock_log:
             mock_log.get_last_run.return_value = {"completed_at": last_run_ts}
             due, reason = engine._is_due("t", self._config("weekly"))
@@ -71,7 +69,7 @@ class TestIsDue:
 
     def test_defaults_to_daily_threshold_for_unknown_freq(self):
         engine = self._engine()
-        last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        last_run_ts = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
         with patch("engine.engines.hk_engine.execution_log") as mock_log:
             mock_log.get_last_run.return_value = {"completed_at": last_run_ts}
             due, reason = engine._is_due("t", {"run_frequency": "unknown_freq"})
@@ -87,7 +85,7 @@ class TestIsDue:
 
     def test_skip_reason_includes_hours_since(self):
         engine = self._engine()
-        last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+        last_run_ts = (datetime.now(UTC) - timedelta(hours=5)).isoformat()
         with patch("engine.engines.hk_engine.execution_log") as mock_log:
             mock_log.get_last_run.return_value = {"completed_at": last_run_ts}
             due, reason = engine._is_due("t", self._config("daily"))
@@ -151,7 +149,6 @@ def test_write_log_accepts_operation_param():
 def test_write_log_passes_metrics_to_log_entry():
     """Per-operation log records should include operation-specific metrics."""
     from engine.engines.hk_engine import HKEngine
-    from engine.core.execution_log import LogEntry
     engine = HKEngine(dry_run=True)
 
     table_row = {
@@ -187,7 +184,7 @@ def test_skip_not_due_reason_format():
     """SKIP_NOT_DUE reason must be parseable for Streamlit execution log."""
     from engine.engines.hk_engine import HKEngine
     engine = HKEngine(dry_run=True)
-    last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    last_run_ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
     with patch("engine.engines.hk_engine.execution_log") as mock_log:
         mock_log.get_last_run.return_value = {"completed_at": last_run_ts}

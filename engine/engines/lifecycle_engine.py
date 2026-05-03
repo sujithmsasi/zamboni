@@ -17,16 +17,17 @@ Three Control-M jobs:
   ZAMBONI-NONPROD-LIFECYCLE → evaluate states, send notifications
   ZAMBONI-NONPROD-CLEANUP   → execute drops for PENDING_DROP tables
 """
-from datetime import datetime, timedelta, timezone, date
-from typing import Optional
+from __future__ import annotations
 
-from config.settings import NONPROD_ENVIRONMENTS, NONPROD_REGISTRY_TABLE
+from datetime import UTC, datetime, timedelta
+
+from config.settings import NONPROD_REGISTRY_TABLE
 from engine.core import execution_log, notifier
 from engine.core.execution_log import LogEntry
 from engine.engines.base import BaseEngine
+from engine.monitoring.activity_scanner import get_activity_signals
 from engine.operations.catalog_cleanup import cleanup_table, is_backup_pattern
 from engine.utils.athena_client import read_sql, run_query
-from engine.monitoring.activity_scanner import get_activity_signals
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 from engine.utils.logger import get_logger
 
@@ -59,7 +60,6 @@ class LifecycleEngine(BaseEngine):
         self._log_start(scope="scan", environment=environment)
 
         discovered = 0
-        updated    = 0
         errors     = 0
 
         databases = get_databases()
@@ -158,7 +158,7 @@ class LifecycleEngine(BaseEngine):
             try:
                 # Check if pending_drop window has expired
                 expires_at = table_row.get("pending_drop_expires_at")
-                if expires_at and _parse_ts(expires_at) > datetime.now(timezone.utc):
+                if expires_at and _parse_ts(expires_at) > datetime.now(UTC):
                     skipped += 1
                     log.info("lifecycle_engine.cleanup.not_expired", table_fqn=fqn)
                     continue
@@ -210,7 +210,7 @@ class LifecycleEngine(BaseEngine):
 
         # ── STALE_CANDIDATE → GREENZONE ───────────────────────────────────────
         if current_state == STALE_CANDIDATE:
-            expires_at = datetime.now(timezone.utc) + timedelta(days=DEFAULT_GREENZONE_DAYS)
+            expires_at = datetime.now(UTC) + timedelta(days=DEFAULT_GREENZONE_DAYS)
             self._transition(table_row, STALE_CANDIDATE, GREENZONE,
                              greenzone_expires_at=expires_at)
             # Send notification
@@ -232,8 +232,8 @@ class LifecycleEngine(BaseEngine):
                 return "transitioned"
 
             expires_at = table_row.get("greenzone_expires_at")
-            if expires_at and _parse_ts(expires_at) <= datetime.now(timezone.utc):
-                drop_at = datetime.now(timezone.utc) + timedelta(days=DEFAULT_PENDING_DROP_DAYS)
+            if expires_at and _parse_ts(expires_at) <= datetime.now(UTC):
+                drop_at = datetime.now(UTC) + timedelta(days=DEFAULT_PENDING_DROP_DAYS)
                 self._transition(table_row, GREENZONE, PENDING_DROP,
                                  pending_drop_expires_at=drop_at)
                 if not self.dry_run:
@@ -327,7 +327,7 @@ class LifecycleEngine(BaseEngine):
             """
         run_query(sql, workgroup="nonprod", dry_run=self.dry_run)
 
-    def _get_registry_row(self, table_fqn: str) -> Optional[dict]:
+    def _get_registry_row(self, table_fqn: str) -> dict | None:
         sql = f"""
             SELECT * FROM {NONPROD_REGISTRY_TABLE}
             WHERE table_fqn = '{table_fqn}' LIMIT 1
@@ -417,7 +417,7 @@ class LifecycleEngine(BaseEngine):
         table_row: dict,
         operation: str,
         status: str,
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
         bytes_reclaimed: int = 0,
     ) -> None:
         entry = LogEntry(
@@ -442,7 +442,7 @@ class LifecycleEngine(BaseEngine):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _esc(value: str) -> str:
@@ -452,14 +452,14 @@ def _esc(value: str) -> str:
 def _parse_ts(value) -> datetime:
     """Parse a timestamp string or datetime to timezone-aware datetime."""
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str):
         try:
             dt = datetime.fromisoformat(value)
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
         except ValueError:
-            return datetime.now(timezone.utc)
-    return datetime.now(timezone.utc)
+            return datetime.now(UTC)
+    return datetime.now(UTC)
 
 
 def _infer_domain(database: str) -> str:

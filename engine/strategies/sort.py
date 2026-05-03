@@ -4,9 +4,10 @@ Builds Glue job parameters for sort-based compaction.
 Sort compaction rewrites files ordered by specified columns — improves
 query performance on range predicates.
 """
-from typing import Optional
-from engine.utils.partition_utils import parse_table_fqn
+from __future__ import annotations
+
 from engine.utils.logger import get_logger
+from engine.utils.partition_utils import parse_table_fqn
 
 log = get_logger(__name__)
 
@@ -18,7 +19,7 @@ def build_glue_params(
     worker_type: str = "G.2X",
     num_workers: int = 5,
     execution_class: str = "FLEX",
-    partition_filter: Optional[str] = None,
+    partition_filter: str | None = None,
 ) -> dict:
     """
     Build Glue job parameters for sort compaction.

@@ -11,8 +11,9 @@ To use your real logo:
   Place file at: app/assets/da_logo.png
   Recommended:   400x80px PNG, transparent background
 """
-import streamlit as st
 from pathlib import Path
+
+import streamlit as st
 
 LOGO_PATH       = Path("app/assets/da_logo.png")
 LOGO_SMALL_PATH = Path("app/assets/da_logo_small.png")  # optional small version
@@ -77,7 +78,7 @@ def _render_logo(height: int = 52) -> None:
     else:
         # Gradient placeholder — replace with real logo at app/assets/da_logo.png
         st.markdown(
-            f"""
+            """
             <div style="
                 background: linear-gradient(135deg, #1e40af 0%, #0ea5e9 100%);
                 border-radius: 8px;

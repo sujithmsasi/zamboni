@@ -22,9 +22,10 @@ Deployment:
     S3 path: s3://your-zamboni-metadata-bucket/glue_jobs/zamboni_compaction.py
 """
 import sys
-from awsglue.utils import getResolvedOptions
+
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from pyspark.sql import SparkSession
 
@@ -56,7 +57,6 @@ def run_sort_compaction(
 ) -> None:
     """Sort compaction — rewrites files ordered by sort_columns."""
     sort_cols_str = ", ".join(sort_columns)
-    where_clause  = f"WHERE {partition_filter}" if partition_filter else ""
 
     print(f"[sort] Compacting {catalog}.{database}.{table}")
     print(f"[sort] Sort columns: {sort_cols_str}")
@@ -134,7 +134,7 @@ def main():
     target_file_size_mb = int(args["target_file_size_mb"])
     partition_filter    = args.get("partition_filter")
 
-    print(f"[zamboni_compaction] Starting job")
+    print("[zamboni_compaction] Starting job")
     print(f"  strategy   : {strategy}")
     print(f"  table      : {table_fqn}")
     print(f"  target_mb  : {target_file_size_mb}")

@@ -5,17 +5,18 @@ Routes to the correct compaction strategy:
   - sort     → Glue job (zamboni_compaction) with sort strategy
   - zorder   → Glue job (zamboni_compaction) with zorder strategy
 """
+from __future__ import annotations
+
 import os
 import time
-from typing import Optional
 
 import boto3
 
 from config.settings import AWS_REGION
 from engine.core.health_checker import HealthResult
-from engine.operations.dynamic_router import route, RoutingDecision
+from engine.operations.dynamic_router import RoutingDecision, route
 from engine.strategies import binpack, sort, zorder
-from engine.utils.athena_client import run_query, get_query_stats
+from engine.utils.athena_client import get_query_stats, run_query
 from engine.utils.logger import get_logger
 from engine.utils.partition_utils import build_hot_partition_filter
 
@@ -26,11 +27,12 @@ COMPACTION_GLUE_JOB = os.getenv("COMPACTION_GLUE_JOB_NAME", "zamboni-compaction"
 
 
 def run_compaction(
-    table_fqn: str,
-    hk_config: dict,
-    health: HealthResult,
-    tier: str,
-    dry_run: bool = False,
+    table_fqn:  str,
+    hk_config:  dict,
+    health:     HealthResult,
+    tier:       str,
+    dry_run:    bool       = False,
+    table_row:  dict | None = None,
 ) -> dict:
     """
     Run compaction for a table using the strategy defined in hk_config.
@@ -51,8 +53,13 @@ def run_compaction(
     target_mb   = hk_config.get("compaction_target_file_size_mb", 128)
     part_col    = hk_config.get("partition_column")
     part_days   = hk_config.get("partition_filter_days")
-    # v2 B.7: prefer processing_cadence (drives lookback window) when set
-    cadence     = hk_config.get("processing_cadence")
+    # v2 B.7 + Sprint 7 6.2: processing_cadence lives in stream_registry
+    # (table_row), not hk_config. Read from hk_config first for backward
+    # compat, then fall through to table_row which is the authoritative source.
+    cadence = (
+        hk_config.get("processing_cadence")
+        or (table_row.get("processing_cadence") if table_row else None)
+    )
 
     # Build partition filter if configured. Cadence-driven window takes
     # priority; legacy partition_filter_days is the fallback.
@@ -102,7 +109,7 @@ def run_compaction(
 def _run_athena_binpack(
     table_fqn: str,
     target_mb: int,
-    partition_filter: Optional[str],
+    partition_filter: str | None,
     routing: RoutingDecision,
     dry_run: bool,
 ) -> dict:
@@ -140,12 +147,12 @@ def _run_glue_compaction(
     strategy: str,
     columns: list[str],
     target_mb: int,
-    partition_filter: Optional[str],
+    partition_filter: str | None,
     routing: RoutingDecision,
     dry_run: bool,
 ) -> dict:
     if strategy == "sort":
-        num_workers = sort.recommend_num_workers(0, routing.worker_type)
+        sort.recommend_num_workers(0, routing.worker_type)
         job_args = sort.build_glue_params(
             table_fqn=table_fqn,
             sort_columns=columns,

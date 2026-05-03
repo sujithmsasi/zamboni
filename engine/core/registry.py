@@ -3,16 +3,17 @@ Zamboni — Registry
 Read/write operations for stream_registry and domain_registry.
 All queries go through athena_client — no direct boto3 calls here.
 """
+from __future__ import annotations
+
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from config.settings import (
-    STREAM_REGISTRY_TABLE,
     DOMAIN_REGISTRY_TABLE,
+    STREAM_REGISTRY_TABLE,
+    VALID_ENVIRONMENTS,
     VALID_LAYERS,
     VALID_TIERS,
-    VALID_ENVIRONMENTS,
 )
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.logger import get_logger
@@ -32,7 +33,7 @@ def get_all_domains(active_only: bool = True) -> list[dict]:
     return df.to_dict(orient="records")
 
 
-def get_domain(domain_name: str) -> Optional[dict]:
+def get_domain(domain_name: str) -> dict | None:
     """Return a single domain record or None."""
     sql = f"""
         SELECT * FROM {DOMAIN_REGISTRY_TABLE}
@@ -105,7 +106,7 @@ def register_domain(
 #  STREAM REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_table(table_fqn: str) -> Optional[dict]:
+def get_table(table_fqn: str) -> dict | None:
     """Return a single stream_registry row or None."""
     sql = f"""
         SELECT * FROM {STREAM_REGISTRY_TABLE}
@@ -124,7 +125,7 @@ def table_exists(table_fqn: str) -> bool:
 
 def get_tables_by_domain(
     domain: str,
-    layer: Optional[str] = None,
+    layer: str | None = None,
     environment: str = "prod",
     hk_enabled_only: bool = False,
 ) -> list[dict]:
@@ -179,22 +180,27 @@ def is_in_dry_run_ramp(table_row: dict) -> bool:
 
 def get_enabled_tables(
     environment: str = "prod",
-    domain: Optional[str] = None,
-    tier: Optional[str] = None,
-    layer: Optional[str] = None,
+    domain: str | None = None,
+    tier: str | None = None,
+    layer: str | None = None,
 ) -> list[dict]:
     """
     Return tables eligible for HK Engine processing.
-    Includes dry_run_until tables so they are evaluated through all gates —
-    the engine logs DRY_RUN instead of executing for ramp-up tables.
-    Use is_in_dry_run_ramp(row) in the engine to check per table.
 
-    Filters: hk_enabled=true, table_format=iceberg.
+    Includes TWO groups:
+      A) Tables with hk_enabled=true — fully enabled
+      B) Tables with hk_enabled=false BUT dry_run_until >= today — ramp-up
+         evaluation: gates run, operations log DRY_RUN instead of executing.
+
+    Use is_in_dry_run_ramp(row) in the engine to distinguish group B.
+
+    Filters: table_format=iceberg, environment, domain, tier, layer as given.
     """
     conditions = [
         f"environment = '{environment}'",
-        "hk_enabled = true",
         "table_format = 'iceberg'",
+        # Include both: fully enabled tables OR active dry_run_until ramp-up
+        "(hk_enabled = true OR (dry_run_until IS NOT NULL AND dry_run_until >= CURRENT_DATE))",
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")
@@ -234,12 +240,12 @@ def register_table(
     tier: str,
     environment: str = "prod",
     table_format: str = "iceberg",
-    stream_id: Optional[str] = None,
+    stream_id: str | None = None,
     owner_email: str = "",
     ci_number: str = "",
     hk_enabled: bool = False,
     archive_enabled: bool = False,
-    archive_retention_days: Optional[int] = None,
+    archive_retention_days: int | None = None,
     registered_by: str = "streamlit",
     notes: str = "",
     dry_run: bool = False,
@@ -332,7 +338,7 @@ def set_dry_run_until(table_fqn: str, until_date: str, dry_run: bool = False) ->
     return True
 
 
-def get_archivable_tables(domain: Optional[str] = None) -> list[dict]:
+def get_archivable_tables(domain: str | None = None) -> list[dict]:
     """Return staging tables with archival enabled."""
     conditions = [
         "archive_enabled = true",
@@ -354,7 +360,7 @@ def get_archivable_tables(domain: Optional[str] = None) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _esc(value: str) -> str:

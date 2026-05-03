@@ -3,9 +3,8 @@ Unit tests for engine/core/circuit_breaker.py
 Tests the pure logic — should_trip() — without AWS.
 The check() function requires execution_log (Athena) so is tested in integration.
 """
-import pytest
-from engine.core.circuit_breaker import should_trip, CLOSED, OPEN
 from config.settings import CIRCUIT_BREAKER_THRESHOLD
+from engine.core.circuit_breaker import CLOSED, OPEN, should_trip
 
 
 def test_should_not_trip_zero_failures():

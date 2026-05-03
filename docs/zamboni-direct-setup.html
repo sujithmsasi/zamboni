@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zamboni -- Direct Deployment Guide (No CodeDeploy)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:       #0a0f1e;
+  --surface:  #111827;
+  --surface2: #1a2236;
+  --border:   #1e3054;
+  --blue:     #3b82f6;
+  --blue-dim: #1d4ed8;
+  --cyan:     #22d3ee;
+  --green:    #10b981;
+  --amber:    #f59e0b;
+  --red:      #ef4444;
+  --purple:   #8b5cf6;
+  --text:     #e2e8f0;
+  --muted:    #64748b;
+  --mono:     'JetBrains Mono', monospace;
+  --sans:     'DM Sans', sans-serif;
+  --serif:    'DM Serif Display', serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.7; }
+.layout { display: flex; min-height: 100vh; }
+nav {
+  width: 270px; min-width: 270px; background: var(--surface);
+  border-right: 1px solid var(--border); position: fixed;
+  top: 0; left: 0; bottom: 0; overflow-y: auto; padding: 0 0 40px; z-index: 100;
+}
+nav::-webkit-scrollbar { width: 4px; }
+nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.nav-header { padding: 24px 20px 16px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.nav-logo { font-family: var(--serif); font-size: 20px; color: var(--cyan); display: flex; align-items: center; gap: 8px; }
+.nav-subtitle { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4px; }
+.nav-badge { display: inline-block; background: rgba(16,185,129,0.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.3); padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; margin-top: 6px; }
+.nav-section { padding: 14px 16px 4px; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+nav a { display: block; padding: 6px 20px; color: var(--muted); text-decoration: none; font-size: 13px; border-left: 2px solid transparent; transition: all 0.15s; }
+nav a:hover { color: var(--text); background: var(--surface2); border-left-color: var(--blue); }
+nav a.active { color: var(--cyan); border-left-color: var(--cyan); background: rgba(34,211,238,0.06); }
+main { margin-left: 270px; flex: 1; max-width: 960px; padding: 56px 60px; }
+h1 { font-family: var(--serif); font-size: 42px; color: #fff; line-height: 1.2; margin-bottom: 16px; }
+h2 { font-family: var(--serif); font-size: 26px; color: var(--cyan); margin: 52px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); scroll-margin-top: 24px; }
+h3 { font-size: 17px; font-weight: 600; color: #fff; margin: 28px 0 10px; scroll-margin-top: 24px; }
+h4 { font-size: 13px; font-weight: 700; color: var(--blue); text-transform: uppercase; letter-spacing: 1px; margin: 20px 0 6px; }
+p { margin-bottom: 12px; color: #cbd5e1; }
+strong { color: var(--text); font-weight: 600; }
+.hero {
+  background: linear-gradient(135deg, #0f172a 0%, #0a1628 50%, #0d1f3c 100%);
+  border: 1px solid var(--border); border-radius: 14px; padding: 44px; margin-bottom: 44px;
+  position: relative; overflow: hidden;
+}
+.hero::before { content: ''; position: absolute; top: -60px; right: -60px; width: 220px; height: 220px; background: radial-gradient(circle, rgba(16,185,129,0.07) 0%, transparent 70%); border-radius: 50%; }
+.hero-badge { display: inline-block; background: rgba(16,185,129,0.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.3); padding: 4px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 14px; }
+.hero p { font-size: 16px; color: #94a3b8; max-width: 600px; margin-bottom: 0; }
+.hero-meta { display: flex; gap: 28px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.hero-stat .val { font-size: 24px; font-weight: 700; color: var(--green); font-family: var(--mono); }
+.hero-stat .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+pre { background: #050a14; border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; overflow-x: auto; margin: 14px 0; }
+pre code { font-family: var(--mono); font-size: 13px; line-height: 1.7; color: #e2e8f0; }
+code { font-family: var(--mono); font-size: 12.5px; background: rgba(59,130,246,0.1); color: var(--cyan); padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.2); }
+pre code { background: none; border: none; padding: 0; color: inherit; }
+.comment { color: #4b5563; }
+.kw { color: #818cf8; }
+.str { color: #34d399; }
+.num { color: #fb923c; }
+.cmd { color: var(--cyan); }
+.flag { color: #f9a8d4; }
+.path { color: #fde68a; }
+.ok { color: var(--green); }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+th { background: var(--surface2); padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); border-bottom: 2px solid var(--border); }
+td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; color: #cbd5e1; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,0.02); }
+td code { font-size: 12px; }
+.callout { display: flex; gap: 12px; border-radius: 10px; padding: 14px 18px; margin: 18px 0; border-left: 3px solid; }
+.callout-icon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
+.callout-body p { margin: 0; font-size: 14px; }
+.callout-body strong { display: block; margin-bottom: 3px; font-size: 13px; }
+.callout.info { background: rgba(59,130,246,0.08); border-color: var(--blue); }
+.callout.info .callout-icon { color: var(--blue); }
+.callout.warn { background: rgba(245,158,11,0.08); border-color: var(--amber); }
+.callout.warn .callout-icon { color: var(--amber); }
+.callout.success { background: rgba(16,185,129,0.08); border-color: var(--green); }
+.callout.success .callout-icon { color: var(--green); }
+.callout.danger { background: rgba(239,68,68,0.08); border-color: var(--red); }
+.callout.danger .callout-icon { color: var(--red); }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge-green  { background: rgba(16,185,129,0.15);  color: #6ee7b7; }
+.badge-blue   { background: rgba(59,130,246,0.15);  color: #93c5fd; }
+.badge-amber  { background: rgba(245,158,11,0.15);  color: #fcd34d; }
+.badge-red    { background: rgba(239,68,68,0.15);   color: #fca5a5; }
+.steps { counter-reset: steps; }
+.step { display: flex; gap: 18px; margin-bottom: 28px; }
+.step::before { content: counter(steps); counter-increment: steps; width: 30px; height: 30px; min-width: 30px; background: var(--blue-dim); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; font-family: var(--mono); margin-top: 2px; }
+.step-body h3 { margin-top: 0; }
+.checklist { list-style: none; }
+.checklist li { padding: 7px 0; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: #94a3b8; }
+.checklist li:last-child { border-bottom: none; }
+.checklist li .check { color: var(--green); font-size: 15px; flex-shrink: 0; }
+@media print { nav { display: none; } main { margin-left: 0; padding: 32px; } }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- NAV -->
+<nav>
+  <div class="nav-header">
+    <div class="nav-logo">&#x1F9CA; Zamboni</div>
+    <div class="nav-subtitle">Direct Deployment Guide</div>
+    <div class="nav-badge">No CodeDeploy</div>
+  </div>
+
+  <div class="nav-section">Overview</div>
+  <a href="#overview">What is Zamboni?</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#prerequisites">Prerequisites</a>
+
+  <div class="nav-section">AWS Setup</div>
+  <a href="#iam">IAM Role &amp; Policy</a>
+  <a href="#athena">Athena Workgroups</a>
+  <a href="#s3">S3 Buckets</a>
+  <a href="#sns">SNS Topics</a>
+  <a href="#eventbridge">EventBridge Scheduling</a>
+
+  <div class="nav-section">EC2 Deployment</div>
+  <a href="#ec2-launch">Launch EC2</a>
+  <a href="#ec2-install">Install Dependencies</a>
+  <a href="#ec2-clone">Clone &amp; Configure</a>
+  <a href="#athena-tables">Create Metadata Tables</a>
+  <a href="#streamlit-service">Streamlit systemd Service</a>
+  <a href="#validate">Validate Setup</a>
+
+  <div class="nav-section">Updates &amp; Sync</div>
+  <a href="#update-direct">Updating the App (Direct Copy)</a>
+  <a href="#env-config">.env Configuration</a>
+  <a href="#logo">D&amp;A Logo</a>
+
+  <div class="nav-section">Configuration</div>
+  <a href="#policy-templates">Policy Templates</a>
+  <a href="#domain-retention">Domain Retention</a>
+  <a href="#window-config">Window Configuration</a>
+
+  <div class="nav-section">Engine Reference</div>
+  <a href="#hk-engine">HK Engine</a>
+  <a href="#archival-engine">Archival Engine</a>
+  <a href="#lifecycle-engine">Lifecycle Engine</a>
+
+  <div class="nav-section">CLI Reference</div>
+  <a href="#cli-register">register</a>
+  <a href="#cli-dry-run">dry_run</a>
+  <a href="#cli-fleet">fleet_status</a>
+  <a href="#cli-enable">enable</a>
+  <a href="#cli-cost">cost_report</a>
+
+  <div class="nav-section">Operations</div>
+  <a href="#onboarding">Onboarding a Domain</a>
+  <a href="#cloudwatch">CloudWatch</a>
+  <a href="#troubleshooting">Troubleshooting</a>
+</nav>
+
+<!-- MAIN -->
+<main>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">Direct Deployment -- No CodeDeploy Required</div>
+  <h1>&#x1F9CA; Zamboni</h1>
+  <p>Iceberg Table Governance Framework. This guide covers deployment via direct git clone + manual EC2 setup -- no AWS CodeDeploy or CodePipeline needed.</p>
+  <div class="hero-meta">
+    <div class="hero-stat"><div class="val">30K+</div><div class="lbl">Tables Managed</div></div>
+    <div class="hero-stat"><div class="val">3</div><div class="lbl">Engines</div></div>
+    <div class="hero-stat"><div class="val">275</div><div class="lbl">Unit Tests</div></div>
+    <div class="hero-stat"><div class="val">0</div><div class="lbl">Ruff Errors</div></div>
+    <div class="hero-stat"><div class="val">EC2</div><div class="lbl">Orchestrator</div></div>
+  </div>
+</div>
+
+<!-- OVERVIEW -->
+<h2 id="overview">What is Zamboni?</h2>
+<p>Zamboni is a self-regulating governance framework that keeps your Apache Iceberg table fleet healthy and cost-efficient. It is not a dumb batch script -- every table is evaluated through multiple intelligent gates before any operation runs.</p>
+<table>
+  <tr><th>Engine</th><th>Purpose</th><th>Trigger</th></tr>
+  <tr><td><strong>HK Engine</strong></td><td>Compaction, snapshot expiry, orphan file cleanup</td><td>EventBridge hourly (or Control-M post-batch)</td></tr>
+  <tr><td><strong>Archival Engine</strong></td><td>Export-then-Delete cold staging partitions to S3 Intelligent-Tiering</td><td>EventBridge weekly</td></tr>
+  <tr><td><strong>Lifecycle Engine</strong></td><td>Auto-discover and clean up stale non-production tables</td><td>EventBridge weekly</td></tr>
+</table>
+
+<!-- ARCHITECTURE -->
+<h2 id="architecture">Architecture</h2>
+<pre><code><span class="comment">EventBridge (hourly / weekly)</span>
+       | SSM Run Command
+       v
+<span class="comment">EC2 t3.large  (zamboni-ec2-role)</span>
+  engine/scripts/run_hk.py          <span class="comment">-- HK Engine</span>
+  engine/scripts/run_archival.py    <span class="comment">-- Archival Engine</span>
+  engine/scripts/run_lifecycle_*.py <span class="comment">-- Lifecycle Engine</span>
+  streamlit run app/Home.py         <span class="comment">-- UI (systemd, always-on)</span>
+       |              |              |
+    Athena           S3            Glue</code></pre>
+
+<p>A single EC2 instance runs both the engine processes (triggered by EventBridge) and the Streamlit app (always-on systemd service). A single IAM role <code>zamboni-ec2-role</code> provides all AWS permissions.</p>
+
+<!-- PREREQUISITES -->
+<h2 id="prerequisites">Prerequisites</h2>
+<table>
+  <tr><th>Item</th><th>Required</th><th>Notes</th></tr>
+  <tr><td>AWS Account</td><td>Yes</td><td>us-west-2 recommended</td></tr>
+  <tr><td>EC2 Instance</td><td>Yes</td><td>t3.large, Amazon Linux 2023</td></tr>
+  <tr><td>Python</td><td>3.11+</td><td>Default on Amazon Linux 2023</td></tr>
+  <tr><td>Streamlit</td><td>&ge;1.57.0</td><td>Installed via requirements.txt</td></tr>
+  <tr><td>GitHub access</td><td>Yes</td><td>SSH key or HTTPS token on EC2</td></tr>
+  <tr><td>Athena workgroups</td><td>5 required</td><td>zamboni-critical/standard/low/archival/app</td></tr>
+  <tr><td>S3 buckets</td><td>4 required</td><td>staging, archive, metadata, athena-results</td></tr>
+  <tr><td>SNS topics</td><td>2 required</td><td>zamboni-alerts, zamboni-greenzone</td></tr>
+</table>
+
+<!-- IAM -->
+<h2 id="iam">IAM Role &amp; Policy</h2>
+<p>Create one EC2 instance profile: <code>zamboni-ec2-role</code>. Attach the policy from <code>deploy/iam_policy.json</code> (replace ACCOUNT_ID and bucket names first).</p>
+<table>
+  <tr><th>Permission</th><th>Service</th><th>Resource Scope</th></tr>
+  <tr><td>Athena query execution</td><td>Athena</td><td>zamboni-* workgroups only</td></tr>
+  <tr><td>S3 read/write</td><td>S3</td><td>staging, archive, metadata, athena-results buckets</td></tr>
+  <tr><td>Glue read</td><td>Glue</td><td>All databases and tables</td></tr>
+  <tr><td>Glue DeleteTable</td><td>Glue</td><td>Non-prod databases only (*_preprod, *_dev, *_test)</td></tr>
+  <tr><td>SNS publish</td><td>SNS</td><td>zamboni-alerts, zamboni-greenzone topics</td></tr>
+  <tr><td>CloudWatch metrics/logs</td><td>CloudWatch</td><td>Zamboni namespace, /zamboni/* log groups</td></tr>
+  <tr><td>SSM parameters read</td><td>SSM</td><td>/zamboni/* parameters</td></tr>
+</table>
+<div class="callout warn">
+  <div class="callout-icon">&#x26A0;&#xFE0F;</div>
+  <div class="callout-body"><strong>Restrict Glue DeleteTable</strong><p>The IAM policy already restricts glue:DeleteTable to *_preprod, *_dev, *_test, *_uat database patterns. Never allow wildcard on production databases.</p></div>
+</div>
+<pre><code><span class="comment"># Step 1 -- substitute your real AWS Account ID into iam_policy.json</span>
+<span class="comment"># Also substitute your real bucket names for: your-athena-results, your-staging-bucket, your-archive-bucket, your-zamboni-metadata</span>
+
+<span class="comment"># On Linux/EC2:</span>
+<span class="cmd">ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)</span>
+<span class="cmd">sed -i</span> "s/ACCOUNT_ID/$ACCOUNT_ID/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-athena-results/YOUR_ACTUAL_ATHENA_BUCKET/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-staging-bucket/YOUR_ACTUAL_STAGING_BUCKET/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-archive-bucket/YOUR_ACTUAL_ARCHIVE_BUCKET/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-zamboni-metadata/YOUR_ACTUAL_METADATA_BUCKET/g" deploy/iam_policy.json
+
+<span class="comment"># Verify substitution worked (should show no ACCOUNT_ID or placeholder values)</span>
+<span class="cmd">grep -c "ACCOUNT_ID" deploy/iam_policy.json</span>    <span class="comment"># should return 0</span>
+
+<span class="comment"># Step 2 -- create the IAM role with the EC2 trust policy</span>
+<span class="comment"># (deploy/ec2-trust-policy.json is already in the repo -- no edits needed)</span>
+<span class="cmd">aws iam create-role</span> \
+  --role-name zamboni-ec2-role \
+  --assume-role-policy-document file://deploy/ec2-trust-policy.json
+
+<span class="comment"># Step 3 -- attach the inline policy</span>
+<span class="cmd">aws iam put-role-policy</span> \
+  --role-name zamboni-ec2-role \
+  --policy-name ZamboniPolicy \
+  --policy-document file://deploy/iam_policy.json
+
+<span class="comment"># Step 4 -- create instance profile and attach role</span>
+<span class="cmd">aws iam create-instance-profile</span> --instance-profile-name zamboni-ec2-profile
+<span class="cmd">aws iam add-role-to-instance-profile</span> \
+  --instance-profile-name zamboni-ec2-profile \
+  --role-name zamboni-ec2-role</code></pre>
+
+<div class="callout info">
+  <div class="callout-icon">&#x1F4CB;</div>
+  <div class="callout-body"><strong>Placeholders in iam_policy.json</strong><p>The file ships with <code>ACCOUNT_ID</code> in 23 places and generic bucket name placeholders. The <code>sed</code> commands above replace all of them in one shot. Check the file afterwards with <code>grep ACCOUNT_ID deploy/iam_policy.json</code> -- it should return nothing.</p></div>
+</div>
+
+<!-- ATHENA -->
+<h2 id="athena">Athena Workgroups</h2>
+<p>Create five workgroups in us-west-2. All queries in Zamboni are routed to the correct workgroup by tier.</p>
+<table>
+  <tr><th>Workgroup</th><th>Purpose</th><th>Scan Limit</th></tr>
+  <tr><td><code>zamboni-critical</code></td><td>Critical tier HK operations</td><td>500 GB</td></tr>
+  <tr><td><code>zamboni-standard</code></td><td>Standard tier HK operations</td><td>200 GB</td></tr>
+  <tr><td><code>zamboni-low</code></td><td>Low priority HK operations</td><td>100 GB</td></tr>
+  <tr><td><code>zamboni-archival</code></td><td>Archival Engine</td><td>500 GB</td></tr>
+  <tr><td><code>zamboni-app</code></td><td>Streamlit UI + CLI queries</td><td>50 GB</td></tr>
+</table>
+<pre><code><span class="comment"># Create each workgroup (repeat for all 5, changing name and limit)</span>
+<span class="cmd">aws athena create-work-group</span> \
+  --name zamboni-standard \
+  --configuration '{
+    "ResultConfiguration": {
+      "OutputLocation": "s3://your-athena-results/zamboni/standard/"
+    },
+    "BytesScannedCutoffPerQuery": 214748364800,
+    "PublishCloudWatchMetricsEnabled": true,
+    "EnforceWorkGroupConfiguration": true
+  }' --region us-west-2</code></pre>
+
+<!-- S3 -->
+<h2 id="s3">S3 Buckets</h2>
+<table>
+  <tr><th>Bucket Role</th><th>.env Variable</th><th>Notes</th></tr>
+  <tr><td>Staging data</td><td><code>STAGING_BUCKET</code></td><td>Where production staging Iceberg tables live</td></tr>
+  <tr><td>Archive destination</td><td><code>ARCHIVE_BUCKET</code></td><td>Enable S3 Intelligent-Tiering on this bucket</td></tr>
+  <tr><td>Zamboni metadata</td><td><code>ZAMBONI_METADATA_BUCKET</code></td><td>Stores stream_registry, execution_log, hk_config Iceberg tables</td></tr>
+  <tr><td>Athena results</td><td><code>ATHENA_RESULTS_BUCKET</code></td><td>Enable lifecycle to delete query results after 7 days</td></tr>
+</table>
+
+<!-- SNS -->
+<h2 id="sns">SNS Topics</h2>
+<table>
+  <tr><th>Topic Name</th><th>.env Variable</th><th>Used For</th></tr>
+  <tr><td><code>zamboni-alerts</code></td><td><code>SNS_ALERT_TOPIC_ARN</code></td><td>Engine failures, circuit breaker trips</td></tr>
+  <tr><td><code>zamboni-greenzone</code></td><td><code>SNS_GREENZONE_TOPIC_ARN</code></td><td>GREENZONE and PENDING_DROP notifications to domain owners</td></tr>
+</table>
+<pre><code><span class="cmd">aws sns create-topic</span> --name zamboni-alerts    --region us-west-2
+<span class="cmd">aws sns create-topic</span> --name zamboni-greenzone --region us-west-2
+<span class="cmd">aws sns subscribe</span> \
+  --topic-arn arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-alerts \
+  --protocol email --notification-endpoint da-team@company.com</code></pre>
+
+<!-- EVENTBRIDGE -->
+<h2 id="eventbridge">EventBridge Scheduling</h2>
+<div class="callout info">
+  <div class="callout-icon">&#x1F4A1;</div>
+  <div class="callout-body"><strong>Phase 1: EventBridge + SSM (default)</strong><p>EventBridge triggers engines via SSM Run Command every hour. The HK engine self-regulates via <code>run_frequency</code> and safe-window evaluation -- zero per-pipeline configuration needed. Control-M is optional (Phase 2) for post-batch dependency chaining.</p></div>
+</div>
+<table>
+  <tr><th>Rule Name</th><th>Schedule</th><th>Command</th></tr>
+  <tr><td><code>zamboni-hk</code></td><td>Every 1 hour</td><td><code>python -m engine.scripts.run_hk</code></td></tr>
+  <tr><td><code>zamboni-archival</code></td><td>cron(0 4 ? * SUN *)</td><td><code>python -m engine.scripts.run_archival</code></td></tr>
+  <tr><td><code>zamboni-nonprod-scan</code></td><td>cron(0 2 ? * SAT *)</td><td><code>python -m engine.scripts.run_lifecycle_scan</code></td></tr>
+  <tr><td><code>zamboni-nonprod-lifecycle</code></td><td>cron(0 3 ? * SAT *)</td><td><code>python -m engine.scripts.run_lifecycle_cycle</code></td></tr>
+  <tr><td><code>zamboni-nonprod-cleanup</code></td><td>cron(0 5 ? * SUN *)</td><td><code>python -m engine.scripts.run_cleanup</code></td></tr>
+</table>
+
+<!-- EC2 LAUNCH -->
+<h2 id="ec2-launch">Launch EC2 Instance</h2>
+<table>
+  <tr><th>Property</th><th>Value</th></tr>
+  <tr><td>Instance type</td><td>t3.large</td></tr>
+  <tr><td>AMI</td><td>Amazon Linux 2023 (al2023-ami-*)</td></tr>
+  <tr><td>IAM Instance Profile</td><td>zamboni-ec2-profile</td></tr>
+  <tr><td>Name tag</td><td>zamboni-prod</td></tr>
+  <tr><td>Storage</td><td>30 GB gp3</td></tr>
+  <tr><td>Security Group</td><td>Port 8501 (Streamlit) from your VPN/office IP only</td></tr>
+</table>
+
+<!-- EC2 INSTALL -->
+<h2 id="ec2-install">Install Dependencies on EC2</h2>
+<p>SSH into the EC2 instance and run:</p>
+<pre><code><span class="comment"># Update system</span>
+<span class="cmd">sudo dnf update -y</span>
+
+<span class="comment"># Python 3.11 is default on AL2023 -- verify</span>
+<span class="cmd">python3 --version</span>   <span class="comment"># should show 3.11.x</span>
+<span class="cmd">pip3 --version</span>
+
+<span class="comment"># Install git if not present</span>
+<span class="cmd">sudo dnf install -y git</span>
+
+<span class="comment"># Create app directory</span>
+<span class="cmd">sudo mkdir -p /opt/zamboni</span>
+<span class="cmd">sudo chown ec2-user:ec2-user /opt/zamboni</span>
+
+<span class="comment"># Create log directory</span>
+<span class="cmd">sudo mkdir -p /var/log/zamboni</span>
+<span class="cmd">sudo chown ec2-user:ec2-user /var/log/zamboni</span></code></pre>
+
+<!-- EC2 CLONE -->
+<h2 id="ec2-clone">Clone Repository &amp; Configure</h2>
+
+<h3>Clone</h3>
+<pre><code><span class="cmd">cd /opt/zamboni</span>
+<span class="cmd">git clone https://github.com/sujithmsasi/zamboni.git .</span>
+<span class="cmd">git checkout dev</span></code></pre>
+
+<div class="callout info">
+  <div class="callout-icon">&#x1F511;</div>
+  <div class="callout-body"><strong>SSH Key for Private Repo</strong><p>If the repo is private, add an SSH deploy key: <code>ssh-keygen -t ed25519 -C "zamboni-ec2"</code> then add the public key to GitHub Settings &rarr; Deploy Keys.</p></div>
+</div>
+
+<h3>Install Python Packages</h3>
+<pre><code><span class="cmd">cd /opt/zamboni</span>
+<span class="cmd">pip3 install -r requirements.txt</span></code></pre>
+
+<h3>Configure .env</h3>
+<pre><code><span class="cmd">cp .env.example .env</span>
+<span class="cmd">chmod 600 .env</span>
+<span class="cmd">nano .env</span>   <span class="comment"># fill in all values -- see .env Configuration section below</span></code></pre>
+
+<!-- ATHENA TABLES -->
+<h2 id="athena-tables">Create Athena Metadata Tables</h2>
+<p>Run once on first deployment. The script reads bucket paths from your <code>.env</code> file and creates all six Iceberg metadata tables.</p>
+<pre><code><span class="cmd">cd /opt/zamboni</span>
+<span class="cmd">bash deploy/create_athena_tables.sh</span></code></pre>
+
+<p>This creates the following tables in <code>glue_catalog.zamboni_catalog</code>:</p>
+<ul style="margin: 8px 0 8px 20px; color: #94a3b8; font-size: 14px; line-height: 2;">
+  <li>domain_registry</li>
+  <li>stream_registry</li>
+  <li>hk_config</li>
+  <li>execution_log</li>
+  <li>nonprod_registry</li>
+  <li>home_snapshot</li>
+</ul>
+
+<div class="callout success">
+  <div class="callout-icon">&#x2705;</div>
+  <div class="callout-body"><strong>Safe to re-run</strong><p>All DDL uses <code>CREATE TABLE IF NOT EXISTS</code> -- running the script again on an existing deployment is safe and does nothing.</p></div>
+</div>
+
+<!-- STREAMLIT SERVICE -->
+<h2 id="streamlit-service">Streamlit systemd Service</h2>
+<p>Register Zamboni as a systemd service so it starts automatically on reboot and restarts on failure.</p>
+<pre><code><span class="cmd">sudo nano /etc/systemd/system/zamboni-app.service</span></code></pre>
+
+<pre><code>[Unit]
+Description=Zamboni Streamlit App
+After=network.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/opt/zamboni
+EnvironmentFile=/opt/zamboni/.env
+ExecStart=/usr/local/bin/streamlit run app/Home.py \
+    --server.port 8501 \
+    --server.address 0.0.0.0 \
+    --server.headless true \
+    --browser.gatherUsageStats false
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/var/log/zamboni/streamlit.log
+StandardError=append:/var/log/zamboni/streamlit.log
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+<pre><code><span class="comment"># Enable and start</span>
+<span class="cmd">sudo systemctl daemon-reload</span>
+<span class="cmd">sudo systemctl enable zamboni-app</span>
+<span class="cmd">sudo systemctl start  zamboni-app</span>
+
+<span class="comment"># Check status</span>
+<span class="cmd">sudo systemctl status zamboni-app</span>
+
+<span class="comment"># View logs</span>
+<span class="cmd">tail -f /var/log/zamboni/streamlit.log</span></code></pre>
+
+<div class="callout info">
+  <div class="callout-icon">&#x1F6AB;</div>
+  <div class="callout-body"><strong>Telemetry Disabled</strong><p>The <code>--browser.gatherUsageStats false</code> flag and <code>STREAMLIT_BROWSER_GATHER_USAGE_STATS=false</code> in <code>.env</code> prevent Streamlit from sending usage data to Snowflake.</p></div>
+</div>
+
+<!-- VALIDATE -->
+<h2 id="validate">Validate Setup</h2>
+<pre><code><span class="cmd">cd /opt/zamboni</span>
+
+<span class="comment"># 1. System health check (Athena, S3, Glue, SNS)</span>
+<span class="cmd">python -m engine.monitoring.health_check</span>
+
+<span class="comment"># 2. Run unit tests</span>
+<span class="cmd">python -m pytest tests/unit/ -v --tb=short</span>
+<span class="comment"># Expected: 275 passed</span>
+
+<span class="comment"># 3. Lint check (should be 0 errors)</span>
+<span class="cmd">ruff check .</span>
+
+<span class="comment"># 4. Test Streamlit is running</span>
+<span class="cmd">curl http://localhost:8501/_stcore/health</span>
+<span class="comment"># Expected: {"status":"ok"}</span>
+
+<span class="comment"># 5. HK Engine dry run (safe -- no writes)</span>
+<span class="cmd">python -m engine.scripts.run_hk --dry-run</span></code></pre>
+
+<!-- UPDATE DIRECT -->
+<h2 id="update-direct">Updating the App (Direct Copy)</h2>
+<p>When a new zip is released, use this process to update the EC2 directly without CodeDeploy.</p>
+
+<h3>Option A -- Pull from Git (Recommended)</h3>
+<pre><code><span class="cmd">cd /opt/zamboni</span>
+
+<span class="comment"># Pull latest from dev branch</span>
+<span class="cmd">git pull origin dev</span>
+
+<span class="comment"># Install any new dependencies</span>
+<span class="cmd">pip3 install -r requirements.txt</span>
+
+<span class="comment"># Run tests to confirm nothing broken</span>
+<span class="cmd">python -m pytest tests/unit/ -v --tb=short</span>
+
+<span class="comment"># Restart Streamlit to pick up changes</span>
+<span class="cmd">sudo systemctl restart zamboni-app</span></code></pre>
+
+<h3>Option B -- Copy from Local Machine via SCP</h3>
+<p>If you don't have git on EC2 or want to push a specific zip from your Windows machine:</p>
+<pre><code><span class="comment"># From your Windows machine (PowerShell)</span>
+<span class="comment"># Step 1 -- Extract zip to C:\Users\mrsuj\Downloads\zamboni\</span>
+
+<span class="comment"># Step 2 -- SCP the entire folder to EC2</span>
+scp -r "C:\Users\mrsuj\Downloads\zamboni\zamboni\*" ec2-user@YOUR_EC2_IP:/opt/zamboni/
+
+<span class="comment"># Step 3 -- SSH into EC2 and finish</span>
+ssh ec2-user@YOUR_EC2_IP
+
+<span class="comment"># On EC2:</span>
+<span class="cmd">cd /opt/zamboni</span>
+<span class="cmd">pip3 install -r requirements.txt</span>
+<span class="cmd">python -m pytest tests/unit/ -v --tb=short</span>
+<span class="cmd">sudo systemctl restart zamboni-app</span></code></pre>
+
+<h3>Option C -- Use the copy_zamboni.ps1 Script (Windows Local Only)</h3>
+<p>The <code>copy_zamboni.ps1</code> script copies all files to your local Windows repo and runs tests before committing. It does NOT deploy to EC2 directly -- after the git push, pull on EC2 using Option A above.</p>
+<pre><code><span class="comment"># Windows PowerShell -- local sync only</span>
+powershell -ExecutionPolicy Bypass -File "C:\Users\mrsuj\Downloads\copy_zamboni.ps1"
+
+<span class="comment"># Then on EC2 -- pull the commit just pushed</span>
+ssh ec2-user@YOUR_EC2_IP "cd /opt/zamboni && git pull origin dev && sudo systemctl restart zamboni-app"</code></pre>
+
+<!-- ENV CONFIG -->
+<h2 id="env-config">.env Configuration</h2>
+<p>Copy <code>.env.example</code> to <code>.env</code> on EC2 and fill in all values. Never commit <code>.env</code> to git.</p>
+<pre><code><span class="comment"># AWS</span>
+AWS_REGION=<span class="str">us-west-2</span>
+AWS_ACCOUNT_ID=<span class="str">123456789012</span>
+
+<span class="comment"># Athena</span>
+ATHENA_CATALOG=<span class="str">glue_catalog</span>
+ATHENA_DATABASE=<span class="str">zamboni_catalog</span>
+ATHENA_RESULTS_BUCKET=<span class="str">s3://your-athena-results/zamboni/</span>
+
+<span class="comment"># Athena Workgroups</span>
+ATHENA_WG_CRITICAL=<span class="str">zamboni-critical</span>
+ATHENA_WG_STANDARD=<span class="str">zamboni-standard</span>
+ATHENA_WG_LOW=<span class="str">zamboni-low</span>
+ATHENA_WG_ARCHIVAL=<span class="str">zamboni-archival</span>
+ATHENA_WG_APP=<span class="str">zamboni-app</span>
+
+<span class="comment"># Metadata Tables</span>
+STREAM_REGISTRY_TABLE=<span class="str">glue_catalog.zamboni_catalog.stream_registry</span>
+HK_CONFIG_TABLE=<span class="str">glue_catalog.zamboni_catalog.hk_config</span>
+EXECUTION_LOG_TABLE=<span class="str">glue_catalog.zamboni_catalog.execution_log</span>
+NONPROD_REGISTRY_TABLE=<span class="str">glue_catalog.zamboni_catalog.nonprod_registry</span>
+DOMAIN_REGISTRY_TABLE=<span class="str">glue_catalog.zamboni_catalog.domain_registry</span>
+
+<span class="comment"># S3 Buckets</span>
+STAGING_BUCKET=<span class="str">s3://your-staging-bucket</span>
+ARCHIVE_BUCKET=<span class="str">s3://your-archive-bucket</span>
+ZAMBONI_METADATA_BUCKET=<span class="str">s3://your-zamboni-metadata</span>
+
+<span class="comment"># SNS</span>
+SNS_ALERT_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-alerts</span>
+SNS_GREENZONE_TOPIC_ARN=<span class="str">arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-greenzone</span>
+
+<span class="comment"># Execution Log Write Mode</span>
+<span class="comment"># auto=Parquet+add_files with INSERT fallback | insert=INSERT only | parquet=Parquet only</span>
+EXECUTION_LOG_MODE=<span class="str">auto</span>
+
+<span class="comment"># CloudTrail (optional -- enables accurate lifecycle stale detection)</span>
+CLOUDTRAIL_TABLE=                 <span class="comment"># e.g. glue_catalog.logs_db.cloudtrail_events</span>
+CLOUDTRAIL_LOOKBACK_DAYS=<span class="num">90</span>
+
+<span class="comment"># Engine behaviour</span>
+DRY_RUN_DEFAULT=<span class="str">true</span>             <span class="comment"># Set false when ready for live runs</span>
+LOG_LEVEL=<span class="str">INFO</span>
+CIRCUIT_BREAKER_THRESHOLD=<span class="num">3</span>
+MAX_CONCURRENT_PARTITIONS=<span class="num">10</span>
+
+<span class="comment"># Glue compaction job</span>
+COMPACTION_GLUE_JOB_NAME=<span class="str">zamboni-compaction</span>
+
+<span class="comment"># Streamlit telemetry -- always keep false</span>
+STREAMLIT_BROWSER_GATHER_USAGE_STATS=<span class="str">false</span>
+APP_ENV=<span class="str">prod</span>
+APP_PORT=<span class="num">8501</span></code></pre>
+
+<!-- LOGO -->
+<h2 id="logo">D&amp;A Logo</h2>
+<p>Place your logo files in <code>app/assets/</code>. Gradient placeholders are shown until files are present.</p>
+<table>
+  <tr><th>File</th><th>Size</th><th>Used In</th></tr>
+  <tr><td><code>app/assets/da_logo.png</code></td><td>400x80px</td><td>Page header (full size)</td></tr>
+  <tr><td><code>app/assets/da_logo_small.png</code></td><td>120x40px</td><td>Sidebar (compact)</td></tr>
+</table>
+<pre><code><span class="comment"># Copy from your machine to EC2</span>
+scp your_logo.png      ec2-user@YOUR_EC2_IP:/opt/zamboni/app/assets/da_logo.png
+scp your_logo_small.png ec2-user@YOUR_EC2_IP:/opt/zamboni/app/assets/da_logo_small.png
+
+<span class="comment"># Restart to pick up</span>
+<span class="cmd">sudo systemctl restart zamboni-app</span></code></pre>
+
+<!-- POLICY TEMPLATES -->
+<h2 id="policy-templates">Policy Templates</h2>
+<table>
+  <tr><th>Template</th><th>Layer</th><th>Strategy</th><th>Engine</th><th>Snap Retention</th><th>Frequency</th></tr>
+  <tr><td><code>STAGING_DEFAULT</code></td><td>staging</td><td>binpack</td><td>Athena</td><td>3 days</td><td>daily</td></tr>
+  <tr><td><code>DATALAKE_DEFAULT</code></td><td>datalake</td><td>binpack</td><td>Athena</td><td>7 days</td><td>daily</td></tr>
+  <tr><td><code>BASE_SCD2</code></td><td>base</td><td>sort</td><td>Glue</td><td>14 days</td><td>weekly</td></tr>
+  <tr><td><code>MASTER_DEFAULT</code></td><td>master</td><td>zorder</td><td>Glue</td><td>30 days</td><td>weekly</td></tr>
+  <tr><td><code>CRITICAL_HIGH_VOL</code></td><td>any</td><td>binpack</td><td>Athena</td><td>5 days</td><td>every_trigger</td></tr>
+  <tr><td><code>NON_PROD_DEFAULT</code></td><td>any</td><td>binpack</td><td>Athena</td><td>3 days</td><td>weekly</td></tr>
+</table>
+<p>Snapshot hard floor: <strong>30 snapshots minimum</strong> regardless of template setting.</p>
+<h4>run_frequency Values</h4>
+<table>
+  <tr><th>Value</th><th>Threshold</th><th>Behaviour</th></tr>
+  <tr><td><code>every_trigger</code></td><td>0h</td><td>Runs on every EventBridge trigger</td></tr>
+  <tr><td><code>daily</code></td><td>20h</td><td>Skips with SKIP_NOT_DUE if last run &lt; 20h ago</td></tr>
+  <tr><td><code>weekly</code></td><td>160h</td><td>Skips with SKIP_NOT_DUE if last run &lt; 160h ago</td></tr>
+  <tr><td><code>monthly</code></td><td>700h</td><td>Skips with SKIP_NOT_DUE if last run &lt; 700h ago</td></tr>
+</table>
+
+<!-- DOMAIN RETENTION -->
+<h2 id="domain-retention">Domain Retention Policies</h2>
+<table>
+  <tr><th>Domain</th><th>Hot Retention</th><th>Rationale</th></tr>
+  <tr><td><code>ers</code></td><td>7 days</td><td>High volume -- propagates to datalake same day</td></tr>
+  <tr><td><code>finance</code></td><td>30 days</td><td>Month-end reconciliation window</td></tr>
+  <tr><td><code>financials</code></td><td>30 days</td><td>Regulatory buffer</td></tr>
+  <tr><td><code>membership</code></td><td>14 days</td><td>Two-week buffer for pipeline re-runs</td></tr>
+  <tr><td><code>claims</code></td><td>90 days</td><td>Claims can be reopened up to 90 days post-processing</td></tr>
+  <tr><td><code>travel</code></td><td>7 days</td><td>Fast propagation</td></tr>
+  <tr><td><code>default</code></td><td>30 days</td><td>Any domain not explicitly listed</td></tr>
+</table>
+
+<!-- WINDOW CONFIG -->
+<h2 id="window-config">Window Configuration Reference</h2>
+<h4>Type: post_batch</h4>
+<pre><code>{
+  "type":           "post_batch",
+  "timezone":       "America/Los_Angeles",
+  "delay_minutes":  30,
+  "duration_hours": 4,
+  "blackout_hours": [6,7,8,9,18,19,20,21]
+}</code></pre>
+<h4>Type: scheduled</h4>
+<pre><code>{
+  "type":           "scheduled",
+  "timezone":       "America/Los_Angeles",
+  "days":           ["saturday"],
+  "start_time":     "02:00",
+  "duration_hours": 6
+}</code></pre>
+<table>
+  <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>type</code></td><td>string</td><td>post_batch or scheduled</td></tr>
+  <tr><td><code>timezone</code></td><td>string</td><td>IANA timezone e.g. America/Los_Angeles</td></tr>
+  <tr><td><code>delay_minutes</code></td><td>int</td><td>(post_batch) Minutes to wait before window opens</td></tr>
+  <tr><td><code>duration_hours</code></td><td>int</td><td>How long the window stays open</td></tr>
+  <tr><td><code>blackout_hours</code></td><td>int[]</td><td>Hours to never run (e.g. business hours)</td></tr>
+  <tr><td><code>days</code></td><td>string[]</td><td>(scheduled) Days of week</td></tr>
+  <tr><td><code>start_time</code></td><td>string</td><td>(scheduled) HH:MM start time local</td></tr>
+</table>
+
+<!-- HK ENGINE -->
+<h2 id="hk-engine">HK Engine Reference</h2>
+<pre><code><span class="cmd">python -m engine.scripts.run_hk</span> [OPTIONS]</code></pre>
+<table>
+  <tr><th>Argument</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>--table TEXT</code></td><td>None</td><td>Single table FQN</td></tr>
+  <tr><td><code>--domain TEXT</code></td><td>None</td><td>All enabled tables in a domain</td></tr>
+  <tr><td><code>--layer TEXT</code></td><td>None</td><td>Filter by layer (staging/datalake/base/master)</td></tr>
+  <tr><td><code>--tier TEXT</code></td><td>None</td><td>Filter by tier (critical/standard/low)</td></tr>
+  <tr><td><code>--environment TEXT</code></td><td>prod</td><td>Target environment</td></tr>
+  <tr><td><code>--dry-run / --no-dry-run</code></td><td>true</td><td>Evaluate gates but do not execute operations</td></tr>
+</table>
+<pre><code><span class="comment"># All enabled prod tables (dry run)</span>
+<span class="cmd">python -m engine.scripts.run_hk</span>
+
+<span class="comment"># Critical tier only -- live run</span>
+<span class="cmd">python -m engine.scripts.run_hk</span> --tier critical --no-dry-run
+
+<span class="comment"># Single table -- live run</span>
+<span class="cmd">python -m engine.scripts.run_hk</span> \
+  --table glue_catalog.finance_db.finance_staging --no-dry-run</code></pre>
+
+<!-- ARCHIVAL ENGINE -->
+<h2 id="archival-engine">Archival Engine Reference</h2>
+<pre><code><span class="cmd">python -m engine.scripts.run_archival</span> [OPTIONS]</code></pre>
+<table>
+  <tr><th>Argument</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>--domain TEXT</code></td><td>None (all)</td><td>Limit archival to a specific domain</td></tr>
+  <tr><td><code>--environment TEXT</code></td><td>prod</td><td>Target environment</td></tr>
+  <tr><td><code>--dry-run / --no-dry-run</code></td><td>true</td><td>Validate pre-archive checks but do not export or delete</td></tr>
+</table>
+<div class="callout warn">
+  <div class="callout-icon">&#x26A0;&#xFE0F;</div>
+  <div class="callout-body"><strong>archive_enabled = true required</strong><p>Tables must have <code>archive_enabled = true</code> and <code>archive_retention_days</code> set in stream_registry before the Archival Engine processes them.</p></div>
+</div>
+
+<!-- LIFECYCLE ENGINE -->
+<h2 id="lifecycle-engine">Lifecycle Engine Reference</h2>
+<p>Runs as three sequential jobs. The state machine drives non-prod tables from ACTIVE through to DROPPED.</p>
+<pre><code><span class="comment"># Job 1 -- scan and refresh activity signals</span>
+<span class="cmd">python -m engine.scripts.run_lifecycle_scan</span> --environment preprod
+
+<span class="comment"># Job 2 -- evaluate state transitions + send GREENZONE emails</span>
+<span class="cmd">python -m engine.scripts.run_lifecycle_cycle</span> --environment preprod --no-dry-run
+
+<span class="comment"># Job 3 -- delete PENDING_DROP tables (destructive!)</span>
+<span class="cmd">python -m engine.scripts.run_cleanup</span> --environment preprod --no-dry-run</code></pre>
+<pre><code>State machine:
+ACTIVE --(inactive > threshold)--> STALE_CANDIDATE
+  --> GREENZONE (SNS email, 14-day window)
+      |--> owner exempts --> ACTIVE
+      |--> window expired --> PENDING_DROP (48h final notice)
+          |--> owner exempts --> ACTIVE
+          |--> window expired --> DROPPED (Glue DROP + S3 sweep)</code></pre>
+
+<!-- CLI REGISTER -->
+<h2 id="cli-register">CLI: register</h2>
+<pre><code><span class="comment"># Discover Iceberg tables in a Glue database</span>
+<span class="cmd">python -m engine.cli.register discover</span> --db finance_db --out finance.yaml
+
+<span class="comment"># Bulk register from manifest (dry run first)</span>
+<span class="cmd">python -m engine.cli.register bulk</span> --manifest finance.yaml --dry-run
+<span class="cmd">python -m engine.cli.register bulk</span> --manifest finance.yaml --no-dry-run
+
+<span class="comment"># Check registration status</span>
+<span class="cmd">python -m engine.cli.register status</span> --db finance_db</code></pre>
+
+<!-- CLI DRY RUN -->
+<h2 id="cli-dry-run">CLI: dry_run</h2>
+<pre><code><span class="comment"># Simulate HK for a single table</span>
+<span class="cmd">python -m engine.cli.dry_run</span> --table glue_catalog.finance_db.finance_staging
+
+<span class="comment"># Simulate HK for a domain + layer with verbose SQL output</span>
+<span class="cmd">python -m engine.cli.dry_run</span> --domain finance --layer staging --verbose</code></pre>
+
+<!-- CLI FLEET STATUS -->
+<h2 id="cli-fleet">CLI: fleet_status</h2>
+<pre><code><span class="comment"># HK coverage % by domain and layer (default)</span>
+<span class="cmd">python -m engine.cli.fleet_status</span>
+
+<span class="comment"># Coverage for a specific domain</span>
+<span class="cmd">python -m engine.cli.fleet_status coverage</span> --domain finance
+
+<span class="comment"># Tables not housekept in last 14 days</span>
+<span class="cmd">python -m engine.cli.fleet_status stale</span> --days 14
+
+<span class="comment"># Execution health -- successes, failures, skips</span>
+<span class="cmd">python -m engine.cli.fleet_status health</span> --days 7</code></pre>
+
+<!-- CLI ENABLE -->
+<h2 id="cli-enable">CLI: enable</h2>
+<pre><code><span class="comment"># Enable with ramp-up period (recommended)</span>
+<span class="cmd">python -m engine.cli.enable</span> \
+  --domain finance --dry-run-until 2026-06-30 --no-dry-run
+
+<span class="comment"># Enable for real after ramp-up period passes</span>
+<span class="cmd">python -m engine.cli.enable</span> --domain finance --layer staging --no-dry-run
+
+<span class="comment"># Disable (e.g. for circuit breaker recovery)</span>
+<span class="cmd">python -m engine.cli.enable</span> \
+  --table glue_catalog.finance_db.finance_staging --disable --no-dry-run</code></pre>
+
+<!-- CLI COST REPORT -->
+<h2 id="cli-cost">CLI: cost_report</h2>
+<pre><code><span class="comment"># All domains, last 30 days</span>
+<span class="cmd">python -m engine.cli.cost_report</span>
+
+<span class="comment"># Specific domain, export to CSV</span>
+<span class="cmd">python -m engine.cli.cost_report</span> --domain finance --days 90 --export report.csv</code></pre>
+
+<!-- ONBOARDING -->
+<h2 id="onboarding">Onboarding a New Domain</h2>
+<div class="steps">
+  <div class="step"><div class="step-body">
+    <h3>Register the Domain</h3>
+    <p>Use the Streamlit app (Domain Management page) or seed directly via SQL.</p>
+  </div></div>
+  <div class="step"><div class="step-body">
+    <h3>Discover Tables</h3>
+    <pre><code><span class="cmd">python -m engine.cli.register discover</span> \
+  --db my_domain_db --out my_domain.yaml --domain my_domain</code></pre>
+  </div></div>
+  <div class="step"><div class="step-body">
+    <h3>Edit the YAML Manifest</h3>
+    <p>Set layer, tier, owner_email, ci_number, policy_template, and partition_column for each table.</p>
+  </div></div>
+  <div class="step"><div class="step-body">
+    <h3>Register Tables</h3>
+    <pre><code><span class="cmd">python -m engine.cli.register bulk</span> --manifest my_domain.yaml --dry-run
+<span class="cmd">python -m engine.cli.register bulk</span> --manifest my_domain.yaml --no-dry-run</code></pre>
+  </div></div>
+  <div class="step"><div class="step-body">
+    <h3>Validate with Dry Run</h3>
+    <pre><code><span class="cmd">python -m engine.cli.dry_run</span> --domain my_domain --verbose</code></pre>
+  </div></div>
+  <div class="step"><div class="step-body">
+    <h3>Enable with Ramp-Up Period</h3>
+    <pre><code><span class="comment"># 2-week dry-run period -- HK evaluates but never writes</span>
+<span class="cmd">python -m engine.cli.enable</span> \
+  --domain my_domain --dry-run-until 2026-06-30 --no-dry-run
+
+<span class="comment"># After 2 weeks -- enable for real</span>
+<span class="cmd">python -m engine.cli.enable</span> --domain my_domain --no-dry-run</code></pre>
+  </div></div>
+  <div class="step"><div class="step-body">
+    <h3>Monitor</h3>
+    <pre><code><span class="cmd">python -m engine.cli.fleet_status coverage</span> --domain my_domain
+<span class="cmd">python -m engine.cli.fleet_status health</span>   --domain my_domain --days 7
+<span class="cmd">python -m engine.cli.cost_report</span>           --domain my_domain</code></pre>
+  </div></div>
+</div>
+
+<!-- CLOUDWATCH -->
+<h2 id="cloudwatch">CloudWatch Dashboards &amp; Alarms</h2>
+<pre><code><span class="comment"># Create all alarms</span>
+<span class="cmd">bash deploy/cloudwatch/create_alarms.sh</span>
+
+<span class="comment"># Deploy dashboard</span>
+<span class="cmd">aws cloudwatch put-dashboard</span> \
+  --dashboard-name Zamboni \
+  --dashboard-body file://deploy/cloudwatch/dashboard.json \
+  --region us-west-2</code></pre>
+<table>
+  <tr><th>Alarm</th><th>Trigger</th></tr>
+  <tr><td><code>Zamboni-HK-HighFailureRate</code></td><td>&gt; 5 failures in 1 hour</td></tr>
+  <tr><td><code>Zamboni-HK-NoActivity</code></td><td>Zero tables processed in 26 hours</td></tr>
+  <tr><td><code>Zamboni-CircuitBreaker-Trips</code></td><td>Any circuit breaker trip</td></tr>
+  <tr><td><code>Zamboni-HKCoverage-Low</code></td><td>Coverage &lt; 80%</td></tr>
+  <tr><td><code>Zamboni-Archival-Failures</code></td><td>Any archival failure</td></tr>
+  <tr><td><code>Zamboni-Lifecycle-Failures</code></td><td>Any lifecycle failure</td></tr>
+</table>
+
+<!-- TROUBLESHOOTING -->
+<h2 id="troubleshooting">Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  <tr><td>ModuleNotFoundError: dotenv</td><td>pip install not run</td><td><code>pip3 install -r requirements.txt</code></td></tr>
+  <tr><td>KeyError: ATHENA_RESULTS_BUCKET</td><td>.env not found or not in project root</td><td>Run from <code>/opt/zamboni</code>; confirm <code>.env</code> exists</td></tr>
+  <tr><td>All tables SKIP_OUTSIDE_WINDOW</td><td>window_config timezone or hours wrong</td><td>Check timezone in hk_config; run <code>dry_run --verbose</code></td></tr>
+  <tr><td>Circuit breaker tripped</td><td>3+ consecutive failures</td><td>Fix root cause; run <code>python -m engine.cli.enable --table &lt;fqn&gt; --no-dry-run</code></td></tr>
+  <tr><td>Streamlit not loading</td><td>systemd service stopped</td><td><code>sudo systemctl status zamboni-app</code> then <code>journalctl -u zamboni-app -n 50</code></td></tr>
+  <tr><td>Athena query FAILED</td><td>Workgroup permissions or timeout</td><td>Check Athena console Query history for error detail</td></tr>
+  <tr><td>Ruff lint errors in CI</td><td>Missing ruff.toml or unsorted imports</td><td><code>ruff check . --fix</code> then commit</td></tr>
+  <tr><td>UnicodeDecodeError in tests</td><td>Windows cp1252 vs UTF-8</td><td>All file opens in tests use <code>encoding='utf-8'</code>; conftest sets PYTHONUTF8=1</td></tr>
+</table>
+
+<div style="margin-top:60px;padding-top:28px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;">
+  Zamboni -- Iceberg Table Governance Framework | D&amp;A Platform | Direct Deployment Guide | v1.0
+</div>
+
+</main>
+</div>
+
+<script>
+const sections = document.querySelectorAll('h2[id], h3[id]');
+const navLinks  = document.querySelectorAll('nav a');
+const observer  = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const link = document.querySelector('nav a[href="#' + entry.target.id + '"]');
+      if (link) link.classList.add('active');
+    }
+  });
+}, { rootMargin: '-10% 0px -80% 0px' });
+sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

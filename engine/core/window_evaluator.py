@@ -14,9 +14,10 @@ Window config JSON format:
         "start_time": "02:00"           -- scheduled only: HH:MM start
     }
 """
+from __future__ import annotations
+
 import json
 from datetime import datetime, time
-from typing import Optional
 
 import pytz
 
@@ -33,7 +34,7 @@ SKIP_WRONG_DAY      = "SKIP_WRONG_DAY"
 
 def evaluate(
     window_config_json: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     force: bool = False,
 ) -> str:
     """

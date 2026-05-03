@@ -3,23 +3,47 @@ Zamboni — Cost Report
 Per-domain Athena cost, storage reclaimed from archival + lifecycle,
 monthly trends, and top tables by scan cost.
 """
-import streamlit as st
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-from app.components.auth import check_login
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar
-from app.components.filters import domain_filter
 from app.components.athena_runner import cached_read_sql
-from app.components.kpi_cards import render_kpi_row, format_bytes
-
+from app.components.auth import check_login
+from app.components.filters import domain_filter
+from app.components.header import render as render_header
+from app.components.kpi_cards import render_kpi_row
+from app.components.sidebar import render as render_sidebar
 from config.settings import EXECUTION_LOG_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
+from engine.core.cost_explorer import get_athena_cost
+from engine.core.cost_explorer import is_enabled as ce_enabled
 
 st.set_page_config(page_title="Zamboni — Cost Report", page_icon="💰", layout="wide")
 check_login()
 render_sidebar()
 render_header()
+
+# ── Live billing banner ──────────────────────────────────────────────────────
+if ce_enabled():
+    st.success(
+        "💳 **Live Billing Mode** — Cost data from AWS Cost Explorer "
+        "(cached 24h). Manage in ⚙️ Settings → Advanced → Cost Explorer."
+    )
+    _live_cost = get_athena_cost(days=30)
+    if _live_cost.get("warning"):
+        st.warning(_live_cost["warning"])
+else:
+    st.info(
+        "📊 **Estimate Mode** — Cost derived from bytes_scanned ($5/TB). "
+        "Enable live billing in ⚙️ Settings → Advanced → Cost Explorer."
+    )
 
 st.title("💰 Cost Report")
 st.caption("Athena scan costs, storage reclaimed by archival and lifecycle engines. All costs are estimates.")
@@ -27,8 +51,10 @@ st.info("Athena pricing: $5.00 per TB scanned (us-west-2). Storage savings calcu
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 col1, col2 = st.columns([2, 2])
-with col1: sel_domain = domain_filter(key="cr_domain")
-with col2: sel_months = st.selectbox("Period", ["Last 30 days", "Last 90 days", "Last 6 months"], key="cr_period")
+with col1:
+    sel_domain = domain_filter(key="cr_domain")
+with col2:
+    sel_months = st.selectbox("Period", ["Last 30 days", "Last 90 days", "Last 6 months"], key="cr_period")
 
 period_days = {"Last 30 days": 30, "Last 90 days": 90, "Last 6 months": 180}
 days = period_days[sel_months]
@@ -185,3 +211,60 @@ try:
                            file_name="zamboni_cost_report.csv", mime="text/csv")
 except Exception as e:
     st.error(f"Top tables query failed: {e}")
+
+# ── Budget Alert ──────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("💰 Budget Alert")
+from config.platform_settings import get_setting
+
+budget_threshold = float(get_setting("budget_alert_threshold_usd_monthly", 0))
+if budget_threshold > 0:
+    st.info(
+        f"Monthly budget threshold: **${budget_threshold:,.2f}**  \n"
+        "Configure in ⚙️ Settings → General → Budget Alert Threshold."
+    )
+else:
+    st.caption(
+        "No budget threshold configured. "
+        "Set one in ⚙️ Settings → General to receive cost alerts."
+    )
+
+# ── ROI Dashboard ─────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("📈 ROI Estimate")
+st.caption("Estimated savings from Zamboni operations vs Athena scan cost.")
+col_r1, col_r2, col_r3 = st.columns(3)
+try:
+    from engine.utils.athena_client import read_sql as _read
+    roi_sql = f"""
+        SELECT
+            ROUND(SUM(bytes_scanned) / 1e12 * 5.0, 4)   AS athena_cost_usd,
+            ROUND(SUM(bytes_rewritten) / 1e9, 2)         AS gb_compacted,
+            ROUND(SUM(bytes_archived) / 1e9, 2)          AS gb_archived
+        FROM {EXECUTION_LOG_TABLE}
+        WHERE execution_date >= CURRENT_DATE - INTERVAL '30' DAY
+          AND status = 'SUCCESS'
+    """
+    roi_df = _read(roi_sql, workgroup="app")
+    if not roi_df.empty:
+        row = roi_df.iloc[0]
+        athena_cost = float(row.get("athena_cost_usd") or 0)
+        gb_compacted = float(row.get("gb_compacted") or 0)
+        gb_archived  = float(row.get("gb_archived")  or 0)
+        # Estimated savings: compaction reduces S3 API calls, archival reduces storage cost
+        storage_savings = gb_archived * (0.023 - 0.0025) * 30   # S3 Standard vs Intelligent-Tiering
+        estimated_api_savings = gb_compacted * 0.001              # rough S3 API reduction
+        net_savings = storage_savings + estimated_api_savings - athena_cost
+        col_r1.metric("Athena Cost (30d)", f"${athena_cost:.4f}")
+        col_r2.metric("Est. Storage Savings (30d)", f"${storage_savings:.4f}")
+        col_r3.metric("Net ROI (30d)", f"${net_savings:.4f}",
+                      delta="positive" if net_savings > 0 else "negative")
+        st.caption(
+            "Savings estimate: archival storage reduction (S3 Standard → Intelligent-Tiering) "
+            "+ compaction API reduction. Cost Explorer integration is Phase 2."
+        )
+except Exception as roi_e:
+    col_r1.metric("Athena Cost", "—")
+    col_r2.metric("Savings Est.", "—")
+    col_r3.metric("Net ROI", "—")
+    st.caption(f"ROI data requires Athena: {roi_e}")

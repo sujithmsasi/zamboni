@@ -5,7 +5,7 @@ Provides common structure: run_id generation, dry_run flag,
 logging, and hooks for subclasses to implement.
 """
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine.core.execution_log import new_run_id
 from engine.utils.logger import get_logger
@@ -24,7 +24,7 @@ class BaseEngine(ABC):
     def __init__(self, dry_run: bool = True):
         self.dry_run  = dry_run
         self.run_id   = new_run_id()
-        self.started_at = datetime.now(timezone.utc)
+        self.started_at = datetime.now(UTC)
         self.engine_name = self.__class__.__name__
 
         log.info(
@@ -55,7 +55,7 @@ class BaseEngine(ABC):
         )
 
     def _log_complete(self, result: dict) -> None:
-        elapsed = (datetime.now(timezone.utc) - self.started_at).total_seconds()
+        elapsed = (datetime.now(UTC) - self.started_at).total_seconds()
         log.info(
             "engine.run_complete",
             engine=self.engine_name,
@@ -100,7 +100,7 @@ class BaseEngine(ABC):
             "failed":            failed,
             "skipped":           skipped,
             "elapsed_seconds":   round(
-                (datetime.now(timezone.utc) - self.started_at).total_seconds(), 1
+                (datetime.now(UTC) - self.started_at).total_seconds(), 1
             ),
             **extra,
         }

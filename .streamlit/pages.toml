@@ -47,3 +47,13 @@ icon = "🗑️"
 path = "pages/10_Stale_Resources.py"
 name = "Stale Resources"
 icon = "🔎"
+
+[[pages]]
+path = "pages/11_Settings.py"
+name = "Settings"
+icon = "⚙️"
+
+[[pages]]
+path = "pages/12_Audit_Log.py"
+name = "Audit Log"
+icon = "🔍"

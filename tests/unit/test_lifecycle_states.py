@@ -2,20 +2,18 @@
 Unit tests for Lifecycle Engine state machine logic and helpers.
 No AWS required — pure logic tests.
 """
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 from engine.engines.lifecycle_engine import (
-    _infer_domain,
-    _parse_ts,
     ACTIVE,
-    STALE_CANDIDATE,
+    DROPPED,
     GREENZONE,
     PENDING_DROP,
-    DROPPED,
+    STALE_CANDIDATE,
+    _infer_domain,
+    _parse_ts,
 )
 from engine.operations.catalog_cleanup import is_backup_pattern
-
 
 # ── State constants ───────────────────────────────────────────────────────────
 
@@ -61,7 +59,7 @@ def test_infer_domain_unknown():
 # ── Timestamp parsing ─────────────────────────────────────────────────────────
 
 def test_parse_ts_datetime_aware():
-    dt = datetime.now(timezone.utc)
+    dt = datetime.now(UTC)
     result = _parse_ts(dt)
     assert result.tzinfo is not None
 
@@ -164,23 +162,23 @@ def test_state_machine_ordering():
 
 def test_greenzone_expiry_in_past():
     """A GREENZONE table whose expiry is in the past should move to PENDING_DROP."""
-    expired_at = datetime.now(timezone.utc) - timedelta(days=1)
-    assert _parse_ts(expired_at) <= datetime.now(timezone.utc)
+    expired_at = datetime.now(UTC) - timedelta(days=1)
+    assert _parse_ts(expired_at) <= datetime.now(UTC)
 
 
 def test_greenzone_expiry_in_future():
     """A GREENZONE table whose expiry is in the future should stay in GREENZONE."""
-    future_at = datetime.now(timezone.utc) + timedelta(days=7)
-    assert _parse_ts(future_at) > datetime.now(timezone.utc)
+    future_at = datetime.now(UTC) + timedelta(days=7)
+    assert _parse_ts(future_at) > datetime.now(UTC)
 
 
 def test_pending_drop_expiry_window():
     """48h window — table not deleted if drop time is still in the future."""
-    drop_at = datetime.now(timezone.utc) + timedelta(hours=24)
-    assert _parse_ts(drop_at) > datetime.now(timezone.utc)
+    drop_at = datetime.now(UTC) + timedelta(hours=24)
+    assert _parse_ts(drop_at) > datetime.now(UTC)
 
 
 def test_pending_drop_expired_window():
     """Table should be deleted if pending_drop_expires_at is in the past."""
-    drop_at = datetime.now(timezone.utc) - timedelta(hours=1)
-    assert _parse_ts(drop_at) <= datetime.now(timezone.utc)
+    drop_at = datetime.now(UTC) - timedelta(hours=1)
+    assert _parse_ts(drop_at) <= datetime.now(UTC)

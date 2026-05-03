@@ -8,8 +8,8 @@ Cache TTLs:
   - 30 min for stream_registry / domain_registry (changes infrequently)
   - 1 hour for snapshot data
 """
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.logger import get_logger

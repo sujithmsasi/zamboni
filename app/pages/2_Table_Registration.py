@@ -2,21 +2,28 @@
 Zamboni — Table Registration
 Browse Glue catalog, multi-select tables, register with template inference.
 """
-import streamlit as st
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import pandas as pd
+import streamlit as st
 
-from app.components.auth import check_login, current_user
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.athena_runner import cached_read_registry
+from app.components.auth import check_login, current_user
 from app.components.filters import domain_filter
-from app.components.status_badge import yes_no, layer as layer_badge
-
-from config.settings import VALID_LAYERS, VALID_TIERS, VALID_ENVIRONMENTS, STREAM_REGISTRY_TABLE
+from app.components.header import render as render_header
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
+from app.components.status_badge import yes_no
+from config.settings import STREAM_REGISTRY_TABLE, VALID_ENVIRONMENTS, VALID_LAYERS, VALID_TIERS
 from engine.core import registry
-from engine.core.config import infer_template, apply_template
+from engine.core.audit import AuditAction, AuditEvent, audit
+from engine.core.config import apply_template, infer_template
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
-
 
 st.set_page_config(page_title="Zamboni — Table Registration", page_icon="➕", layout="wide")
 
@@ -147,6 +154,18 @@ with tab_browse:
                                         st.error(f"❌ {fqn}: {e}")
 
                                 if successes:
+                                    audit(AuditEvent(
+                                        actor=current_user(),
+                                        action_type=AuditAction.TABLE_REGISTER,
+                                        page_source="2_Table_Registration",
+                                        target_type="table",
+                                        target_id=f"{domain}/{selected_db}",
+                                        domain=domain, environment=environment,
+                                        dry_run=is_dry_run(),
+                                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                        reason=notes,
+                                        after_value=f"layer={layer},tier={tier},template={template},count={successes}",
+                                    ))
                                     st.success(
                                         f"✅ Registered {successes} table(s) with template `{template}`."
                                     )
@@ -174,7 +193,12 @@ with tab_registered:
         if df.empty:
             st.info("No registered tables match your filter.")
         else:
-            df["hk_enabled"]      = df["hk_enabled"].apply(yes_no)
+            df["hk_enabled"]       = df["hk_enabled"].apply(yes_no)
+            df.rename(columns={
+                "hk_enabled":       "Housekeeping Enabled",
+                "archive_enabled":  "Archival Enabled",
+                "lifecycle_enabled":"Lifecycle Enabled",
+            }, inplace=True, errors="ignore")
             df["archive_enabled"] = df["archive_enabled"].apply(yes_no)
             df["registered_at"]   = df["registered_at"].astype(str).str[:19]
             st.dataframe(df, use_container_width=True, hide_index=True)

@@ -2,18 +2,24 @@
 Zamboni — Domain Management
 List, register, edit, activate/deactivate domains.
 """
-import streamlit as st
-import pandas as pd
+import sys
+from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+import streamlit as st
+
+from app.components.athena_runner import cached_read_registry, execute_write
 from app.components.auth import check_login, current_user
 from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
-from app.components.athena_runner import cached_read_registry, execute_write
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import yes_no
-
-from config.settings import DOMAIN_REGISTRY_TABLE, VALID_ENVIRONMENTS
+from config.settings import APP_ENV, DOMAIN_REGISTRY_TABLE, VALID_ENVIRONMENTS
 from engine.core import registry
-
+from engine.core.audit import AuditAction, AuditEvent, audit
 
 st.set_page_config(page_title="Zamboni — Domain Management", page_icon="📋", layout="wide")
 
@@ -84,6 +90,22 @@ with tab_register:
         description = st.text_area("Description")
         notes       = st.text_area("Notes")
 
+        st.divider()
+        st.markdown("**Weekly HK Digest**")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            digest_enabled = st.checkbox(
+                "Include in weekly digest email",
+                value=False,
+                help="Domain owner receives a weekly summary of HK activity.",
+            )
+        with col_d2:
+            digest_email = st.text_input(
+                "Digest recipient email (optional)",
+                placeholder="Leave blank to use Owner Email",
+                help="Override where the weekly digest is sent for this domain.",
+            )
+
         submitted = st.form_submit_button("Register Domain", type="primary")
 
         if submitted:
@@ -91,6 +113,7 @@ with tab_register:
                 st.error("Domain name, display name, and owner email are required.")
             else:
                 try:
+                    from engine.core.teams_notifier import TeamsEvent, notify_teams, should_notify
                     registry.register_domain(
                         domain_name=domain_name.strip().lower(),
                         display_name=display_name.strip(),
@@ -108,6 +131,28 @@ with tab_register:
                         notes=notes.strip(),
                         dry_run=is_dry_run(),
                     )
+                    # Fire Teams notification for domain creation
+                    if should_notify("hk_enable", is_dry_run(), "SUCCESS"):
+                        notify_teams(TeamsEvent(
+                            title=f"Domain Registered: {domain_name}",
+                            summary=f"New domain '{domain_name}' registered in Zamboni by {current_user()}",
+                            actor=current_user(),
+                            action_type="domain_create",
+                            target=domain_name,
+                            environment=APP_ENV,
+                            status="SUCCESS",
+                            reason=notes or "",
+                        ))
+                    audit(AuditEvent(
+                        actor=current_user(),
+                        action_type=AuditAction.DOMAIN_CREATE,
+                        page_source="1_Domain_Management",
+                        target_type="domain",
+                        target_id=domain_name.strip().lower(),
+                        dry_run=is_dry_run(),
+                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                        after_value=f"owner={owner_email},retention={hot_retention_days}",
+                    ))
                     st.success(f"✅ Domain '{domain_name}' registered successfully.")
                     if is_dry_run():
                         st.info("ℹ️ Dry run mode — no actual writes were made.")
@@ -163,6 +208,16 @@ with tab_edit:
                         "Domain Active",
                         value=bool(domain.get("is_active", True)),
                     )
+                    new_digest_enabled = st.checkbox(
+                        "Weekly Digest Enabled",
+                        value=bool(domain.get("digest_enabled", False)),
+                        help="Include this domain in the weekly HK digest email.",
+                    )
+                    new_digest_email = st.text_input(
+                        "Digest Email Override",
+                        value=str(domain.get("digest_email") or ""),
+                        placeholder="Leave blank to use Owner Email",
+                    )
 
                 if st.form_submit_button("Update", type="primary"):
                     try:
@@ -173,6 +228,8 @@ with tab_edit:
                                 hot_retention_days   = {int(new_hot_retention)},
                                 stale_threshold_days = {int(new_stale)},
                                 is_active            = {str(new_active).lower()},
+                                digest_enabled       = {str(new_digest_enabled).lower()},
+                                digest_email         = '{new_digest_email}',
                                 updated_at           = CURRENT_TIMESTAMP
                             WHERE domain_name = '{selected_domain}'
                         """
@@ -182,3 +239,30 @@ with tab_edit:
                             st.info("Dry run mode — no actual writes were made.")
                     except Exception as e:
                         st.error(f"Update failed: {e}")
+
+            # ── Digest Preview ──────────────────────────────────
+            st.divider()
+            st.markdown("**📬 Weekly Digest Preview**")
+            st.caption(
+                "Preview what the weekly digest would contain for this domain. "
+                "Email sending is Phase 2.2."
+            )
+            if st.button("👁️ Preview Digest", key="domain_digest_preview"):
+                from engine.core.digest import build_digest
+                with st.spinner("Building digest..."):
+                    digest = build_digest(selected_domain, days=7)
+                if "error" in digest:
+                    st.error(f"Digest failed: {digest['error']}")
+                else:
+                    s = digest.get("summary", {})
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric("Tables Touched",    int(s.get("tables_touched",    0)))
+                    d2.metric("Successes",         int(s.get("successes",         0)))
+                    d3.metric("Failures",          int(s.get("failures",          0)))
+                    d4.metric("Athena Cost (7d)",  f"${float(s.get('athena_cost_usd', 0)):.4f}")
+                    if digest.get("sla_breaches"):
+                        st.warning(f"⚠️ {len(digest['sla_breaches'])} SLA breaches this week.")
+                    if digest.get("top_failures"):
+                        st.error(f"❌ {len(digest['top_failures'])} failure types this week.")
+                    st.caption(f"Recipient: {digest.get('recipient_email', 'not configured')}")
+                    st.caption(f"Email sender: {digest.get('email_sender_status', '—')}")

@@ -11,12 +11,13 @@ Usage:
     python -m engine.cli.enable --domain finance --dry-run-until 2026-06-01
 """
 import sys
+
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
-from config.settings import VALID_LAYERS, VALID_TIERS, DRY_RUN_DEFAULT, STREAM_REGISTRY_TABLE
+from config.settings import DRY_RUN_DEFAULT, STREAM_REGISTRY_TABLE, VALID_LAYERS, VALID_TIERS
 from engine.utils.logger import get_logger
 
 log     = get_logger(__name__)
@@ -35,8 +36,8 @@ console = Console()
 @click.option("--dry-run/--no-dry-run", default=DRY_RUN_DEFAULT)
 def main(table, domain, layer, tier, env, disable, dry_run_until, dry_run):
     """Enable or disable HK Engine for tables."""
-    from engine.utils.athena_client import read_sql, run_query
-    from engine.core.registry import enable_hk, disable_hk, get_table, set_dry_run_until
+    from engine.core.registry import disable_hk, enable_hk, get_table, set_dry_run_until
+    from engine.utils.athena_client import read_sql
 
     action = "DISABLE" if disable else ("DRY-RUN-UNTIL" if dry_run_until else "ENABLE")
 
@@ -53,8 +54,10 @@ def main(table, domain, layer, tier, env, disable, dry_run_until, dry_run):
             f"environment = '{env}'",
             "table_format = 'iceberg'",
         ]
-        if layer: conditions.append(f"layer = '{layer}'")
-        if tier:  conditions.append(f"tier = '{tier}'")
+        if layer:
+            conditions.append(f"layer = '{layer}'")
+        if tier:
+            conditions.append(f"tier = '{tier}'")
         where = "WHERE " + " AND ".join(conditions)
         sql   = f"SELECT table_fqn, domain, layer, tier, hk_enabled FROM {STREAM_REGISTRY_TABLE} {where}"
         df    = read_sql(sql, workgroup="app")
@@ -83,7 +86,8 @@ def main(table, domain, layer, tier, env, disable, dry_run_until, dry_run):
     preview.add_column("Currently")
     preview.add_column("After")
 
-    for t in targets[:20]:
+    for t in targets[:
+        20]:
         current = "[green]enabled[/]" if t.get("hk_enabled") else "[red]disabled[/]"
         after   = (
             "[red]disabled[/]"     if disable else
@@ -134,7 +138,7 @@ def main(table, domain, layer, tier, env, disable, dry_run_until, dry_run):
     )
 
     if not dry_run and not disable and not dry_run_until:
-        console.print(f"\n[dim]Tip — validate before first real run:[/]")
+        console.print("\n[dim]Tip — validate before first real run:[/]")
         console.print(f"  [cyan]python -m engine.cli.dry_run --domain {domain or table}[/]")
 
 

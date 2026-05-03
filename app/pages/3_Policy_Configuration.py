@@ -4,17 +4,24 @@ View and edit per-table HK config.
 Apply policy templates, override individual fields, bulk apply by domain/layer.
 All writes honour the sidebar dry-run toggle.
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import streamlit as st
-import pandas as pd
 
+from app.components.athena_runner import cached_read_registry, clear_caches
 from app.components.auth import check_login
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.filters import domain_filter, layer_filter, tier_filter
-from app.components.athena_runner import cached_read_registry, execute_write, clear_caches
-
-from config.settings import STREAM_REGISTRY_TABLE, HK_CONFIG_TABLE
-from engine.core.config import get_policy_templates, infer_template
+from app.components.header import render as render_header
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
+from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit
+from engine.core.config import get_policy_templates
 
 st.set_page_config(page_title="Zamboni — Policy Config", page_icon="⚙️", layout="wide")
 check_login()
@@ -29,14 +36,20 @@ tab1, tab2, tab3 = st.tabs(["📋 View Configs", "✏️ Edit Single Table", "�
 # ── Tab 1: View Configs ───────────────────────────────────────────────────────
 with tab1:
     c1, c2, c3 = st.columns(3)
-    with c1: d = domain_filter(key="pc_domain")
-    with c2: l = layer_filter(key="pc_layer")
-    with c3: t = tier_filter(key="pc_tier")
+    with c1:
+        d = domain_filter(key="pc_domain")
+    with c2:
+        layer_sel = layer_filter(key="pc_layer")
+    with c3:
+        t = tier_filter(key="pc_tier")
 
     conditions = ["r.table_format = 'iceberg'", "r.hk_enabled = true"]
-    if d: conditions.append(f"r.domain = '{d}'")
-    if l: conditions.append(f"r.layer = '{l}'")
-    if t: conditions.append(f"r.tier = '{t}'")
+    if d:
+        conditions.append(f"r.domain = '{d}'")
+    if layer_sel:
+        conditions.append(f"r.layer = '{layer_sel}'")
+    if t:
+        conditions.append(f"r.tier = '{t}'")
     where = "WHERE " + " AND ".join(conditions)
 
     sql = f"""
@@ -102,7 +115,14 @@ with tab2:
                         orphan = st.number_input(
                             "Orphan Retention Days",
                             value=int(config.get("orphan_file_retention_days") or 2),
-                            min_value=1,
+                            min_value=2,
+                            help="Min 2 days — safety floor to protect in-flight writers.",
+                        )
+                        orphan_cadence = st.number_input(
+                            "Orphan Cleanup Cadence (days)",
+                            value=int(config.get("orphan_cleanup_cadence_days") or 7),
+                            min_value=0,
+                            help="How often to run orphan cleanup. 0 = disabled.",
                         )
                     with col2:
                         strategy = st.selectbox(
@@ -111,6 +131,13 @@ with tab2:
                             index=["binpack", "sort", "zorder"].index(
                                 config.get("compaction_strategy", "binpack")
                             ),
+                        )
+                        sort_order_cols = st.text_input(
+                            "Sort / Z-Order Columns (comma-separated)",
+                            value=config.get("sort_order_cols") or "",
+                            placeholder="col_a, col_b",
+                            help="Required for sort/zorder strategies. "
+                                 "Ignored for binpack.",
                         )
                         target_mb = st.number_input(
                             "Target File Size (MB)",
@@ -126,8 +153,8 @@ with tab2:
                         )
                         run_freq = st.selectbox(
                             "Run Frequency",
-                            ["daily", "weekly", "every_trigger"],
-                            index=["daily", "weekly", "every_trigger"].index(
+                            ["every_trigger", "daily", "weekly", "monthly"],
+                            index=["every_trigger", "daily", "weekly", "monthly"].index(
                                 config.get("run_frequency", "daily")
                             ),
                         )
@@ -149,7 +176,9 @@ with tab2:
                                 "snapshot_retention_days":        snap_days,
                                 "snapshot_min_to_keep":           snap_min,
                                 "orphan_file_retention_days":     orphan,
+                                "orphan_cleanup_cadence_days":    orphan_cadence,
                                 "compaction_strategy":            strategy,
+                                "sort_order_cols":                sort_order_cols,
                                 "compaction_target_file_size_mb": target_mb,
                                 "compaction_engine":              engine_choice,
                                 "run_frequency":                  run_freq,
@@ -163,6 +192,17 @@ with tab2:
                                     dry_run=is_dry_run(),
                                 )
                             clear_caches()
+                            from app.components.auth import current_user as _cu
+                            from config.settings import APP_ENV as _ENV
+                            audit(AuditEvent(
+                                actor=_cu(), action_type=AuditAction.POLICY_CHANGE,
+                                page_source="3_Policy_Configuration",
+                                target_type="table", target_id=table_fqn,
+                                environment=_ENV, dry_run=is_dry_run(),
+                                status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                reason=override_notes,
+                                after_value=str(fields),
+                            ))
                             st.success(
                                 f"✅ Config updated for `{table_fqn}`"
                                 + (" (dry run — no actual changes)" if is_dry_run() else "")
@@ -184,9 +224,12 @@ with tab3:
 
     templates = get_policy_templates()
     col1, col2, col3 = st.columns(3)
-    with col1: bulk_domain = domain_filter(include_all=False, key="bulk_domain")
-    with col2: bulk_layer  = layer_filter(include_all=False, key="bulk_layer")
-    with col3: bulk_tmpl   = st.selectbox("Template", list(templates.keys()), key="bulk_tmpl")
+    with col1:
+        bulk_domain = domain_filter(include_all=False, key="bulk_domain")
+    with col2:
+        bulk_layer  = layer_filter(include_all=False, key="bulk_layer")
+    with col3:
+        bulk_tmpl   = st.selectbox("Template", list(templates.keys()), key="bulk_tmpl")
 
     # Show template preview
     if bulk_tmpl:
@@ -266,7 +309,8 @@ with tab3:
                     )
                 else:
                     st.warning(f"Applied to {succeeded} tables, {failed} failed.")
-                    for err in errors[:5]:
+                    for err in errors[:
+                        5]:
                         st.error(err)
 
         except Exception as e:

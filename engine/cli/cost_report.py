@@ -9,11 +9,12 @@ Usage:
     python -m engine.cli.cost_report --export cost_report.csv
 """
 import sys
-import click
 from datetime import date
+
+import click
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 from config.settings import EXECUTION_LOG_TABLE
 from engine.utils.logger import get_logger
@@ -110,7 +111,7 @@ def main(domain, days, export):
     console.print(t)
 
     # ── Top tables by cost ────────────────────────────────────────────────────
-    console.print(f"\n[bold]Top 10 Tables by Athena Scan Cost[/]\n")
+    console.print("\n[bold]Top 10 Tables by Athena Scan Cost[/]\n")
 
     top_sql = f"""
         SELECT

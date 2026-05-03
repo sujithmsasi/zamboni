@@ -4,20 +4,24 @@ Full real-time fleet health analysis.
 Deep dive into snapshot counts, small files, coverage, failures.
 Always fresh — no caching (use the home snapshot for daily summary).
 """
-import streamlit as st
-import pandas as pd
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import plotly.express as px
-import plotly.graph_objects as go
+import streamlit as st
 
-from app.components.auth import check_login
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar
-from app.components.filters import domain_filter, layer_filter, tier_filter, environment_filter
 from app.components.athena_runner import cached_read_sql
-from app.components.kpi_cards import render_kpi_row, format_count, format_bytes
-from app.components.status_badge import tier as tier_badge, layer as layer_badge
-
-from config.settings import STREAM_REGISTRY_TABLE, EXECUTION_LOG_TABLE
+from app.components.auth import check_login
+from app.components.filters import domain_filter, environment_filter, layer_filter, tier_filter
+from app.components.header import render as render_header
+from app.components.kpi_cards import format_count, render_kpi_row
+from app.components.sidebar import render as render_sidebar
+from config.settings import EXECUTION_LOG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 
 st.set_page_config(page_title="Zamboni — Health Dashboard", page_icon="📊", layout="wide")
 check_login()
@@ -29,18 +33,25 @@ st.caption("Real-time fleet health analysis. Data refreshes on every page load."
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
-with col1: sel_domain = domain_filter(key="hd_domain")
-with col2: sel_layer  = layer_filter(key="hd_layer")
-with col3: sel_tier   = tier_filter(key="hd_tier")
-with col4: sel_env    = environment_filter(key="hd_env")
+with col1:
+    sel_domain = domain_filter(key="hd_domain")
+with col2:
+    sel_layer  = layer_filter(key="hd_layer")
+with col3:
+    sel_tier   = tier_filter(key="hd_tier")
+with col4:
+    sel_env    = environment_filter(key="hd_env")
 
 st.divider()
 
 # ── Fleet Coverage KPIs ───────────────────────────────────────────────────────
 conditions = [f"environment = '{sel_env}'"]
-if sel_domain: conditions.append(f"domain = '{sel_domain}'")
-if sel_layer:  conditions.append(f"layer = '{sel_layer}'")
-if sel_tier:   conditions.append(f"tier = '{sel_tier}'")
+if sel_domain:
+    conditions.append(f"domain = '{sel_domain}'")
+if sel_layer:
+    conditions.append(f"layer = '{sel_layer}'")
+if sel_tier:
+    conditions.append(f"tier = '{sel_tier}'")
 where = "WHERE " + " AND ".join(conditions)
 
 kpi_sql = f"""

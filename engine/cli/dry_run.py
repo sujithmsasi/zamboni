@@ -10,12 +10,12 @@ Usage:
     python -m engine.cli.dry_run --domain finance
 """
 import sys
-import json
+
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 
 from config.settings import VALID_LAYERS
 from engine.utils.logger import get_logger
@@ -45,10 +45,10 @@ def main(table, domain, layer, env, verbose):
         title="🧪 Dry Run",
     ))
 
-    from engine.core.registry import get_table, get_enabled_tables
-    from engine.core.config import get_hk_config
-    from engine.core.window_evaluator import evaluate, EXECUTE
     from engine.core import circuit_breaker
+    from engine.core.config import get_hk_config
+    from engine.core.registry import get_enabled_tables, get_table
+    from engine.core.window_evaluator import EXECUTE, evaluate
     from engine.utils.glue_client import is_upstream_job_complete
 
     # Fetch tables

@@ -1,0 +1,13 @@
+{
+  "_comment": "Trust policy for zamboni-ec2-role. Allows EC2 instances to assume this role.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ec2.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}

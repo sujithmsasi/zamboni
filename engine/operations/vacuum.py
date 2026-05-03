@@ -4,11 +4,11 @@ Two operations:
   1. expire_snapshots — removes old snapshots via Athena VACUUM
   2. orphan_cleanup   — removes orphan files via Athena VACUUM
 """
+from config.settings import ORPHAN_MIN_RETENTION_HOURS, SNAPSHOT_MIN_FLOOR
 from engine.core.health_checker import HealthResult
-from engine.utils.athena_client import run_query, get_query_stats
-from engine.utils.partition_utils import parse_table_fqn
+from engine.utils.athena_client import get_query_stats, run_query
 from engine.utils.logger import get_logger
-from config.settings import SNAPSHOT_MIN_FLOOR, ORPHAN_MIN_RETENTION_HOURS
+from engine.utils.partition_utils import parse_table_fqn
 
 log = get_logger(__name__)
 

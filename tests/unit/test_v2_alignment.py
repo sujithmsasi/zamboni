@@ -4,16 +4,13 @@ Covers: A.2 effective dry_run, B.3 monthly, B.4 retry preserve,
 B.5 idempotency, B.6 property sync, B.7 hot partition cadence,
 C.9 backpressure, D.10-12 Parquet log writer, E.13 DDL fields.
 """
-import os
-import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
-
+from datetime import UTC, datetime, timedelta, timezone
+from unittest.mock import patch
 
 # ── A.1: systemd entrypoint ───────────────────────────────────────────────────
 
 def test_after_install_uses_home_py():
-    with open("deploy/scripts/after_install.sh") as f:
+    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
         content = f.read()
     assert "app/Home.py" in content
     assert "app/main.py" not in content
@@ -23,8 +20,9 @@ def test_after_install_uses_home_py():
 
 def test_write_log_accepts_effective_dry_run():
     """_write_log must accept effective_dry_run param."""
-    from engine.engines.hk_engine import HKEngine
     import inspect
+
+    from engine.engines.hk_engine import HKEngine
     sig = inspect.signature(HKEngine._write_log)
     assert "effective_dry_run" in sig.parameters
 
@@ -85,7 +83,7 @@ def test_monthly_in_frequency_hours():
 def test_monthly_due_when_run_30_days_ago():
     from engine.engines.hk_engine import HKEngine
     engine = HKEngine(dry_run=True)
-    last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=720)).isoformat()
+    last_run_ts = (datetime.now(UTC) - timedelta(hours=720)).isoformat()
     with patch("engine.engines.hk_engine.execution_log") as ml:
         ml.get_last_run.return_value = {"completed_at": last_run_ts}
         due, reason = engine._is_due("t", {"run_frequency": "monthly"})
@@ -95,7 +93,7 @@ def test_monthly_due_when_run_30_days_ago():
 def test_monthly_not_due_when_run_5_days_ago():
     from engine.engines.hk_engine import HKEngine
     engine = HKEngine(dry_run=True)
-    last_run_ts = (datetime.now(timezone.utc) - timedelta(hours=120)).isoformat()
+    last_run_ts = (datetime.now(UTC) - timedelta(hours=120)).isoformat()
     with patch("engine.engines.hk_engine.execution_log") as ml:
         ml.get_last_run.return_value = {"completed_at": last_run_ts}
         due, reason = engine._is_due("t", {"run_frequency": "monthly"})
@@ -108,8 +106,9 @@ def test_monthly_not_due_when_run_5_days_ago():
 
 def test_get_last_run_default_filters_success_only():
     """get_last_run should default to only_success=True so failed runs allow retry."""
-    from engine.core.execution_log import get_last_run
     import inspect
+
+    from engine.core.execution_log import get_last_run
     sig = inspect.signature(get_last_run)
     assert "only_success" in sig.parameters
     assert sig.parameters["only_success"].default is True
@@ -199,8 +198,9 @@ def test_build_hot_partition_filter_cadence_monthly_no_filter():
 
 def test_build_hot_partition_filter_cadence_overrides_days():
     """If both cadence and days set, cadence wins."""
+    from datetime import date
+
     from engine.utils.partition_utils import build_hot_partition_filter
-    from datetime import date, timedelta
     f = build_hot_partition_filter(
         "partition_date",
         days=1,
@@ -212,8 +212,9 @@ def test_build_hot_partition_filter_cadence_overrides_days():
 
 
 def test_build_hot_partition_filter_legacy_days_still_works():
-    from engine.utils.partition_utils import build_hot_partition_filter
     from datetime import date
+
+    from engine.utils.partition_utils import build_hot_partition_filter
     f = build_hot_partition_filter(
         "partition_date", days=7,
         reference_date=date(2026, 4, 27),
@@ -274,8 +275,8 @@ def test_parquet_log_buffer_flush_empty():
 
 
 def test_parquet_log_buffer_dry_run():
-    from engine.core.execution_log_parquet import ParquetLogBuffer
     from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
     buffer = ParquetLogBuffer(run_id="dry-run-test")
     buffer.append(LogEntry(
         run_id="r", engine="hk", operation="hk_run",
@@ -296,8 +297,8 @@ def test_execution_log_mode_setting_exists():
 
 def test_parquet_writer_falls_back_to_insert_mode():
     """If mode=insert, never tries Parquet."""
-    from engine.core.execution_log_parquet import ParquetLogBuffer
     from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
     with patch("engine.core.execution_log_parquet.EXECUTION_LOG_MODE", "insert"):
         buffer = ParquetLogBuffer(run_id="insert-only")
         buffer.append(LogEntry(
@@ -314,25 +315,25 @@ def test_parquet_writer_falls_back_to_insert_mode():
 # ── E.13: DDL fields ─────────────────────────────────────────────────────────
 
 def test_stream_registry_ddl_has_processing_cadence():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "processing_cadence" in ddl
 
 
 def test_stream_registry_ddl_has_properties_synced():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "properties_synced" in ddl
 
 
 def test_stream_registry_ddl_has_last_execution_id():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "last_execution_id" in ddl
 
 
 def test_stream_registry_ddl_has_dry_run_until():
-    with open("sql/create_stream_registry.sql") as f:
+    with open("sql/create_stream_registry.sql", encoding='utf-8') as f:
         ddl = f.read()
     assert "dry_run_until" in ddl
 
@@ -341,7 +342,7 @@ def test_stream_registry_ddl_has_dry_run_until():
 
 def test_readme_no_ecs_fargate_references():
     """README must not reference Fargate/ECS — orchestrator is on EC2."""
-    with open("README.md") as f:
+    with open("README.md", encoding='utf-8') as f:
         readme = f.read()
     assert "Fargate" not in readme
     # ECS in 'EC2' is fine; but standalone ECS reference would not be

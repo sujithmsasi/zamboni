@@ -10,13 +10,13 @@ Usage:
     python -m engine.cli.fleet_status stale --days 14
 """
 import sys
+
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
-from rich.progress import track
+from rich.table import Table
 
-from config.settings import STREAM_REGISTRY_TABLE, EXECUTION_LOG_TABLE
+from config.settings import EXECUTION_LOG_TABLE, STREAM_REGISTRY_TABLE
 from engine.utils.logger import get_logger
 
 log     = get_logger(__name__)
@@ -235,7 +235,7 @@ def stale(domain, days, env):
         )
 
     console.print(t)
-    console.print(f"\n[dim]Tip: Run engine for these tables:[/]")
+    console.print("\n[dim]Tip: Run engine for these tables:[/]")
     console.print(f"  [cyan]python -m engine.scripts.run_hk --domain {domain or '<domain>'} --dry-run[/]")
 
 

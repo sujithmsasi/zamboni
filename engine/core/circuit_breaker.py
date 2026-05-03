@@ -56,7 +56,7 @@ def trip(table_fqn: str, failure_count: int, dry_run: bool = False) -> None:
         dry_run:       If True, log only — don't disable or alert
     """
     # Lazy imports
-    from engine.core import registry, notifier
+    from engine.core import notifier, registry
 
     reason = (
         f"Circuit breaker tripped after {failure_count} consecutive failures "

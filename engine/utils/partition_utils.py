@@ -3,8 +3,10 @@ Zamboni — Partition Utilities
 Date-range filters for HK Engine (hot partition window)
 and Archival Engine (cold partition discovery).
 """
+from __future__ import annotations
+
 from datetime import date, timedelta
-from typing import Optional
+
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -21,10 +23,10 @@ _CADENCE_LOOKBACK_DAYS = {
 
 def build_hot_partition_filter(
     partition_column: str,
-    days: Optional[int] = None,
-    reference_date: Optional[date] = None,
-    processing_cadence: Optional[str] = None,
-) -> Optional[str]:
+    days: int | None = None,
+    reference_date: date | None = None,
+    processing_cadence: str | None = None,
+) -> str | None:
     """
     Build a WHERE clause to restrict compaction to recently-written partitions.
     Avoids Athena's 100-partition OPTIMIZE limit on large historical tables.
@@ -67,7 +69,7 @@ def derive_hot_partitions_from_metadata(
     partition_column: str,
     workgroup: str,
     lookback_days: int = 90,
-) -> Optional[str]:
+) -> str | None:
     """
     Derive hot partition filter from Iceberg $partitions metadata.
     Falls back gracefully on any failure (returns None — caller should use
@@ -107,7 +109,7 @@ def derive_hot_partitions_from_metadata(
         return None
 
 
-def get_cadence_lookback_days(cadence: Optional[str]) -> Optional[int]:
+def get_cadence_lookback_days(cadence: str | None) -> int | None:
     """Return lookback days for a given processing cadence."""
     if not cadence:
         return None
@@ -117,7 +119,7 @@ def get_cadence_lookback_days(cadence: Optional[str]) -> Optional[int]:
 def build_cold_partition_filter(
     partition_column: str,
     retention_days: int,
-    reference_date: Optional[date] = None,
+    reference_date: date | None = None,
 ) -> str:
     """
     Build a WHERE clause to find cold (archivable) partitions.

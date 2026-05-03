@@ -10,18 +10,16 @@ Checks:
   - SNS topic exists
   - stream_registry table exists
 """
-import sys
 from dataclasses import dataclass, field
-from typing import Optional
 
 import boto3
 
 from config.settings import (
-    AWS_REGION,
     ATHENA_RESULTS_BUCKET,
-    ZAMBONI_METADATA_BUCKET,
-    STREAM_REGISTRY_TABLE,
+    AWS_REGION,
     SNS_ALERT_TOPIC_ARN,
+    STREAM_REGISTRY_TABLE,
+    ZAMBONI_METADATA_BUCKET,
 )
 from engine.utils.logger import get_logger
 

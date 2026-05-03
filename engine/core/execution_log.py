@@ -3,10 +3,11 @@ Zamboni — Execution Log
 Write and query the unified execution log for all three engines.
 Every operation — success, failure, skip, dry-run — gets a record here.
 """
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from typing import Optional
+from datetime import UTC, date, datetime
 
 from config.settings import EXECUTION_LOG_TABLE
 from engine.utils.athena_client import read_sql, run_query
@@ -34,36 +35,36 @@ class LogEntry:
     # Outcome
     status:         str          # SUCCESS | FAILURE | SKIPPED | DRY_RUN
     dry_run:        bool         = False
-    skip_reason:    Optional[str] = None
-    error_message:  Optional[str] = None
+    skip_reason:    str | None = None
+    error_message:  str | None = None
 
     # Timing
-    started_at:     Optional[datetime] = None
-    completed_at:   Optional[datetime] = None
-    duration_seconds: Optional[int]    = None
+    started_at:     datetime | None = None
+    completed_at:   datetime | None = None
+    duration_seconds: int | None    = None
 
     # Stream ID (optional)
-    stream_id:      Optional[str] = None
+    stream_id:      str | None = None
 
     # HK Engine metrics
-    snapshots_before:     Optional[int]   = None
-    snapshots_after:      Optional[int]   = None
-    snapshots_expired:    Optional[int]   = None
-    orphan_files_deleted: Optional[int]   = None
-    files_compacted:      Optional[int]   = None
-    bytes_rewritten:      Optional[int]   = None
+    snapshots_before:     int | None   = None
+    snapshots_after:      int | None   = None
+    snapshots_expired:    int | None   = None
+    orphan_files_deleted: int | None   = None
+    files_compacted:      int | None   = None
+    bytes_rewritten:      int | None   = None
 
     # Archival Engine metrics
-    partition_date:   Optional[date]  = None
-    rows_archived:    Optional[int]   = None
-    bytes_archived:   Optional[int]   = None
-    archive_s3_path:  Optional[str]   = None
-    pre_validation:   Optional[str]   = None
-    post_validation:  Optional[str]   = None
+    partition_date:   date | None  = None
+    rows_archived:    int | None   = None
+    bytes_archived:   int | None   = None
+    archive_s3_path:  str | None   = None
+    pre_validation:   str | None   = None
+    post_validation:  str | None   = None
 
     # Cost tracking
-    athena_query_id:  Optional[str]   = None
-    bytes_scanned:    Optional[int]   = None
+    athena_query_id:  str | None   = None
+    bytes_scanned:    int | None   = None
 
     # Auto-generated
     execution_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -75,7 +76,7 @@ def write(entry: LogEntry, dry_run: bool = False) -> bool:
     Write a log entry to the execution_log Iceberg table.
     Returns True on success.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Auto-fill timing if not provided
     if entry.started_at is None:
@@ -205,9 +206,9 @@ def get_failure_count(table_fqn: str, days: int = 30) -> int:
 
 def get_last_run(
     table_fqn: str,
-    operation: Optional[str] = None,
+    operation: str | None = None,
     only_success: bool = True,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Return the most recent execution log entry for a table.
 

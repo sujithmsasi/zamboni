@@ -4,9 +4,14 @@ All modules import from here. Never read os.environ directly elsewhere.
 Values loaded from .env via python-dotenv.
 """
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root regardless of working directory.
+# Looks for: <project_root>/.env  (one level up from config/)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
 # ── Test mode ─────────────────────────────────────────────────────────────────
 # Set ZAMBONI_TEST_MODE=true to run unit tests without a real .env file.
@@ -66,6 +71,7 @@ NONPROD_REGISTRY_TABLE = os.getenv(
     "NONPROD_REGISTRY_TABLE",
     "glue_catalog.zamboni_catalog.nonprod_registry"
 )
+AUDIT_LOG_TABLE = os.getenv("AUDIT_LOG_TABLE", "glue_catalog.zamboni_catalog.audit_log")
 
 # ── S3 ────────────────────────────────────────────────────────────────────────
 STAGING_BUCKET          = _req("STAGING_BUCKET",          "s3://mock-staging/")
@@ -96,12 +102,22 @@ VALID_TIERS = ["critical", "standard", "low"]
 VALID_ENVIRONMENTS = ["prod", "preprod", "dev", "test"]
 NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 
+# ── Local Mode (no AWS required) ─────────────────────────────────────────────
+# Set ZAMBONI_LOCAL_MODE=true to run against a local SQLite database.
+# Used for UI development and validation without AWS connectivity.
+ZAMBONI_LOCAL_MODE = os.getenv("ZAMBONI_LOCAL_MODE", "false").lower() == "true"
+ZAMBONI_LOCAL_DB   = os.getenv("ZAMBONI_LOCAL_DB", "zamboni_local.db")
+
 # ── Execution Log Write Mode (v2) ─────────────────────────────────────────────
 # Controls how engines write to the Iceberg execution_log table:
 #   parquet — Batch Parquet to S3 + add_files (preferred, fast)
 #   insert  — Per-row Athena INSERT (legacy, slow)
 #   both    — Try Parquet first, fall back to INSERT on failure
 #   auto    — (default) Use Parquet if pandas/pyarrow available, else INSERT
+# Athena query timeout -- queries exceeding this are cancelled automatically
+# Set to 0 to disable. Recommended: 1800 (30 min) for prod.
+ATHENA_QUERY_TIMEOUT_SECONDS: int = int(os.getenv("ATHENA_QUERY_TIMEOUT_SECONDS", "1800"))
+
 EXECUTION_LOG_MODE = os.getenv("EXECUTION_LOG_MODE", "auto").lower()
 
 

@@ -2,9 +2,10 @@
 Zamboni — Binpack Strategy
 Builds OPTIMIZE SQL for Athena bin-pack compaction.
 """
-from typing import Optional
-from engine.utils.partition_utils import parse_table_fqn
+from __future__ import annotations
+
 from engine.utils.logger import get_logger
+from engine.utils.partition_utils import parse_table_fqn
 
 log = get_logger(__name__)
 
@@ -12,7 +13,7 @@ log = get_logger(__name__)
 def build_optimize_sql(
     table_fqn: str,
     target_file_size_mb: int = 128,
-    partition_filter: Optional[str] = None,
+    partition_filter: str | None = None,
 ) -> str:
     """
     Build OPTIMIZE ... REWRITE DATA SQL for Athena.

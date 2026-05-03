@@ -15,11 +15,7 @@ This module is independent of execution_log.write() — engines call into a
 ParquetLogBuffer instance, populate it during the run, and flush at end.
 """
 import io
-import json
-import os
-import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from config.settings import (
     AWS_REGION,
@@ -201,7 +197,7 @@ class ParquetLogBuffer:
 
     def _build_s3_path(self) -> str:
         """Build S3 path: <metadata_bucket>/execution_log/_pending/<run_id>.parquet."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         bucket = ZAMBONI_METADATA_BUCKET.rstrip("/")
         return f"{bucket}/execution_log/_pending/{self.engine}_{self.run_id}_{ts}.parquet"
 
@@ -212,31 +208,65 @@ class ParquetLogBuffer:
         return bucket, key
 
     def _entry_to_dict(self, entry: LogEntry) -> dict:
-        """Serialize LogEntry to a dict matching execution_log schema."""
+        """
+        Serialize LogEntry to a dict matching execution_log Iceberg schema.
+        All DDL columns are present with safe defaults to avoid schema mismatch
+        on add_files registration. Null/missing LogEntry fields default to None.
+        """
+        now_utc = datetime.now(UTC)
+        def g(attr, default=None):
+            return getattr(entry, attr, default)
+
+        # Compute duration_seconds if both timestamps present
+        started   = g("started_at")
+        completed = g("completed_at")
+        duration_s = None
+        if started and completed:
+            try:
+                duration_s = (completed - started).total_seconds()
+            except Exception:
+                pass
+
         return {
-            "run_id":              entry.run_id,
-            "engine":              entry.engine,
-            "operation":           entry.operation,
-            "table_fqn":           entry.table_fqn,
-            "stream_id":           entry.stream_id,
-            "domain":              entry.domain,
-            "layer":               entry.layer,
-            "tier":                entry.tier,
-            "environment":         entry.environment,
-            "status":              entry.status,
-            "dry_run":             entry.dry_run,
-            "skip_reason":         entry.skip_reason,
-            "error_message":       entry.error_message,
-            "started_at":          entry.started_at,
-            "completed_at":        entry.completed_at,
-            "snapshots_before":    entry.snapshots_before,
-            "snapshots_after":     getattr(entry, "snapshots_after", None),
-            "snapshots_expired":   getattr(entry, "snapshots_expired", None),
-            "files_compacted":     entry.files_compacted,
-            "bytes_rewritten":     entry.bytes_rewritten,
-            "orphan_files_deleted":getattr(entry, "orphan_files_deleted", None),
-            "bytes_archived":      getattr(entry, "bytes_archived", None),
-            "athena_query_id":     entry.athena_query_id,
-            "bytes_scanned":       getattr(entry, "bytes_scanned", 0),
-            "execution_date":      datetime.now(timezone.utc).date().isoformat(),
+            # ── Identity ─────────────────────────────────────────
+            "execution_id":       g("execution_id", entry.run_id),
+            "run_id":             entry.run_id,
+            "engine":             entry.engine,
+            "operation":          entry.operation,
+            "table_fqn":          entry.table_fqn,
+            "stream_id":          g("stream_id"),
+            "domain":             entry.domain,
+            "layer":              entry.layer,
+            "tier":               entry.tier,
+            "environment":        entry.environment,
+            # ── Status ───────────────────────────────────────────
+            "status":             entry.status,
+            "dry_run":            bool(g("dry_run", False)),
+            "skip_reason":        g("skip_reason"),
+            "error_message":      g("error_message"),
+            # ── Timing ───────────────────────────────────────────
+            "started_at":         started,
+            "completed_at":       completed or now_utc,
+            "duration_seconds":   duration_s,
+            # ── Snapshot metrics ─────────────────────────────────
+            "snapshots_before":   g("snapshots_before"),
+            "snapshots_after":    g("snapshots_after"),
+            "snapshots_expired":  g("snapshots_expired"),
+            # ── Compaction metrics ───────────────────────────────
+            "files_compacted":    g("files_compacted"),
+            "bytes_rewritten":    g("bytes_rewritten"),
+            # ── Archival metrics ─────────────────────────────────
+            "partition_date":     g("partition_date"),
+            "rows_archived":      g("rows_archived"),
+            "bytes_archived":     g("bytes_archived"),
+            "archive_s3_path":    g("archive_s3_path"),
+            "pre_validation":     g("pre_validation"),
+            "post_validation":    g("post_validation"),
+            # ── Orphan metrics ───────────────────────────────────
+            "orphan_files_deleted": g("orphan_files_deleted"),
+            # ── Athena ───────────────────────────────────────────
+            "athena_query_id":    g("athena_query_id"),
+            "bytes_scanned":      g("bytes_scanned", 0) or 0,
+            # ── Partition ────────────────────────────────────────
+            "execution_date":     now_utc.date().isoformat(),
         }

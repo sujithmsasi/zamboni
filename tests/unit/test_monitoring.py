@@ -2,11 +2,10 @@
 Unit tests for monitoring — metrics and health check logic.
 No AWS required.
 """
-import pytest
-from unittest.mock import patch, MagicMock
-from engine.monitoring.metrics import publish_engine_run, publish_fleet_health, NAMESPACE
-from engine.monitoring.health_check import HealthCheckResult
+from unittest.mock import MagicMock, patch
 
+from engine.monitoring.health_check import HealthCheckResult
+from engine.monitoring.metrics import NAMESPACE, publish_engine_run, publish_fleet_health
 
 # ── HealthCheckResult ─────────────────────────────────────────────────────────
 
