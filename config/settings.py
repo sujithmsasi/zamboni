@@ -102,6 +102,12 @@ VALID_TIERS = ["critical", "standard", "low"]
 VALID_ENVIRONMENTS = ["prod", "preprod", "dev", "test"]
 NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 
+# ── Local Mode (no AWS required) ─────────────────────────────────────────────
+# Set ZAMBONI_LOCAL_MODE=true to run against a local SQLite database.
+# Used for UI development and validation without AWS connectivity.
+ZAMBONI_LOCAL_MODE = os.getenv("ZAMBONI_LOCAL_MODE", "false").lower() == "true"
+ZAMBONI_LOCAL_DB   = os.getenv("ZAMBONI_LOCAL_DB", "zamboni_local.db")
+
 # ── Execution Log Write Mode (v2) ─────────────────────────────────────────────
 # Controls how engines write to the Iceberg execution_log table:
 #   parquet — Batch Parquet to S3 + add_files (preferred, fast)

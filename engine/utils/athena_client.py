@@ -15,13 +15,15 @@ import time
 
 import boto3
 
-from config.settings import (
+from config.settings import (  # noqa: F401
     ATHENA_CATALOG,
     ATHENA_DATABASE,
     ATHENA_QUERY_TIMEOUT_SECONDS,
     ATHENA_RESULTS_BUCKET,
     ATHENA_WORKGROUPS,
     AWS_REGION,
+    ZAMBONI_LOCAL_DB,
+    ZAMBONI_LOCAL_MODE,
 )
 from engine.utils.logger import get_logger
 
@@ -91,6 +93,11 @@ def run_query(
     wg  = ATHENA_WORKGROUPS.get(workgroup, workgroup)
     db  = database or ATHENA_DATABASE
     tmo = timeout_s if timeout_s is not None else ATHENA_QUERY_TIMEOUT_SECONDS
+
+    # ── Local mode (no AWS) ──────────────────────────────────────────────────
+    if ZAMBONI_LOCAL_MODE:
+        from engine.utils.local_db import run_query_local
+        return run_query_local(sql)
 
     if dry_run:
         log.info("athena.dry_run", workgroup=wg, database=db, sql=sql[:300])
@@ -235,6 +242,11 @@ def read_sql(
 
     Raises AthenaQueryTimeout if the query exceeds timeout.
     """
+    # ── Local mode (no AWS) ──────────────────────────────────────────────────
+    if ZAMBONI_LOCAL_MODE:
+        from engine.utils.local_db import read_sql_local
+        return read_sql_local(sql)
+
     import awswrangler as wr
     import boto3 as _boto3
 
