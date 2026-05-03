@@ -3,17 +3,16 @@ Zamboni — Cost Report
 Per-domain Athena cost, storage reclaimed from archival + lifecycle,
 monthly trends, and top tables by scan cost.
 """
-import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-from app.components.auth import check_login
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar
-from app.components.filters import domain_filter
 from app.components.athena_runner import cached_read_sql
-from app.components.kpi_cards import render_kpi_row, format_bytes
-
+from app.components.auth import check_login
+from app.components.filters import domain_filter
+from app.components.header import render as render_header
+from app.components.kpi_cards import render_kpi_row
+from app.components.sidebar import render as render_sidebar
 from config.settings import EXECUTION_LOG_TABLE
 
 st.set_page_config(page_title="Zamboni — Cost Report", page_icon="💰", layout="wide")
@@ -27,8 +26,10 @@ st.info("Athena pricing: $5.00 per TB scanned (us-west-2). Storage savings calcu
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 col1, col2 = st.columns([2, 2])
-with col1: sel_domain = domain_filter(key="cr_domain")
-with col2: sel_months = st.selectbox("Period", ["Last 30 days", "Last 90 days", "Last 6 months"], key="cr_period")
+with col1:
+    sel_domain = domain_filter(key="cr_domain")
+with col2:
+    sel_months = st.selectbox("Period", ["Last 30 days", "Last 90 days", "Last 6 months"], key="cr_period")
 
 period_days = {"Last 30 days": 30, "Last 90 days": 90, "Last 6 months": 180}
 days = period_days[sel_months]

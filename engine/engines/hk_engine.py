@@ -17,10 +17,12 @@ Sprint 2 additions:
   - Operation-level log records: separate rows for compaction/vacuum/orphan [H4]
   - dry_run_until ramp-up: per-table dry_run flag from is_in_dry_run_ramp [C2]
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
+
+from config.settings import EXECUTION_LOG_MODE
 from engine.core import (
     circuit_breaker,
     execution_log,
@@ -28,25 +30,28 @@ from engine.core import (
     notifier,
     registry,
 )
-from engine.core.registry import is_in_dry_run_ramp
+from engine.core.backpressure import wait_for_capacity
 from engine.core.config import get_hk_config
 from engine.core.execution_log import LogEntry
+from engine.core.execution_log_parquet import ParquetLogBuffer
+from engine.core.health_checker import is_healthy
 from engine.core.idempotency import (
-    build_execution_id, check_already_executed,
-    mark_executed, get_window_id,
+    build_execution_id,
+    check_already_executed,
+    get_window_id,
+    mark_executed,
 )
 from engine.core.property_sync import (
-    needs_property_sync, apply_vacuum_properties, mark_properties_synced,
+    apply_vacuum_properties,
+    mark_properties_synced,
+    needs_property_sync,
 )
-from engine.core.backpressure import wait_for_capacity
-from engine.core.health_checker import is_healthy
-from engine.core.window_evaluator import evaluate, EXECUTE
+from engine.core.registry import is_in_dry_run_ramp
+from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.engines.base import BaseEngine
+from engine.monitoring.metrics import publish_engine_run
 from engine.operations import compaction, vacuum
 from engine.utils.glue_client import is_upstream_job_complete
-from engine.monitoring.metrics import publish_engine_run
-from engine.core.execution_log_parquet import ParquetLogBuffer
-from config.settings import EXECUTION_LOG_MODE
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -86,10 +91,10 @@ class HKEngine(BaseEngine):
 
     def run(
         self,
-        domain: Optional[str] = None,
-        layer:  Optional[str] = None,
-        tier:   Optional[str] = None,
-        table_fqn: Optional[str] = None,
+        domain: str | None = None,
+        layer:  str | None = None,
+        tier:   str | None = None,
+        table_fqn: str | None = None,
         environment: str = "prod",
     ) -> dict:
         """
@@ -213,7 +218,7 @@ class HKEngine(BaseEngine):
 
     # ── Single table processing ───────────────────────────────────────────────
 
-    def _process_table(self, table_row: dict, log_buffer: Optional['ParquetLogBuffer'] = None) -> str:
+    def _process_table(self, table_row: dict, log_buffer: ParquetLogBuffer | None = None) -> str:
         """
         Process one table through all gates and operations.
         Returns: 'succeeded' | 'skipped' | 'failed'
@@ -315,7 +320,7 @@ class HKEngine(BaseEngine):
             return "skipped"
 
         # ── Operations ────────────────────────────────────────────────────────
-        started_at     = datetime.now(timezone.utc)
+        started_at     = datetime.now(UTC)
         op_errors      = []
         total_bytes_scanned = 0
 
@@ -325,7 +330,7 @@ class HKEngine(BaseEngine):
 
         # ── Compaction ────────────────────────────────────────────────────────
         if health.needs_compaction:
-            op_start = datetime.now(timezone.utc)
+            op_start = datetime.now(UTC)
             if not wait_for_capacity(workgroup, max_wait_seconds=30):
                 # Explicit timeout — workgroup saturated, skip this operation safely
                 reason = f"SKIP_BACKPRESSURE_TIMEOUT (workgroup={workgroup})"
@@ -334,7 +339,7 @@ class HKEngine(BaseEngine):
                 self._write_log(
                     table_row, "compaction", "SKIPPED",
                     skip_reason=reason,
-                    started_at=op_start, completed_at=datetime.now(timezone.utc),
+                    started_at=op_start, completed_at=datetime.now(UTC),
                     effective_dry_run=table_dry_run,
                 )
             else:
@@ -353,7 +358,7 @@ class HKEngine(BaseEngine):
                 self._write_log(
                     table_row, "compaction", op_status,
                     started_at=op_start,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(UTC),
                     files_compacted=compaction_result.get("files_compacted"),
                     bytes_rewritten=compaction_result.get("bytes_rewritten"),
                     athena_query_id=compaction_result.get("athena_query_id"),
@@ -365,7 +370,7 @@ class HKEngine(BaseEngine):
 
         # ── Snapshot expiry ───────────────────────────────────────────────────
         if health.needs_vacuum:
-            op_start = datetime.now(timezone.utc)
+            op_start = datetime.now(UTC)
             if not wait_for_capacity(workgroup, max_wait_seconds=30):
                 reason = f"SKIP_BACKPRESSURE_TIMEOUT (workgroup={workgroup})"
                 log.warning("hk_engine.backpressure_timeout",
@@ -373,7 +378,7 @@ class HKEngine(BaseEngine):
                 self._write_log(
                     table_row, "vacuum", "SKIPPED",
                     skip_reason=reason,
-                    started_at=op_start, completed_at=datetime.now(timezone.utc),
+                    started_at=op_start, completed_at=datetime.now(UTC),
                     effective_dry_run=table_dry_run,
                 )
             else:
@@ -392,7 +397,7 @@ class HKEngine(BaseEngine):
                 self._write_log(
                     table_row, "vacuum", op_status,
                     started_at=op_start,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(UTC),
                     snapshots_before=health.snapshot_count,
                     athena_query_id=vacuum_result.get("athena_query_id"),
                     bytes_scanned=vacuum_result.get("bytes_scanned", 0),
@@ -403,7 +408,7 @@ class HKEngine(BaseEngine):
 
         # ── Orphan cleanup ────────────────────────────────────────────────────
         if health.needs_orphan_cleanup:
-            op_start = datetime.now(timezone.utc)
+            op_start = datetime.now(UTC)
             if not wait_for_capacity(workgroup, max_wait_seconds=30):
                 reason = f"SKIP_BACKPRESSURE_TIMEOUT (workgroup={workgroup})"
                 log.warning("hk_engine.backpressure_timeout",
@@ -411,7 +416,7 @@ class HKEngine(BaseEngine):
                 self._write_log(
                     table_row, "orphan_cleanup", "SKIPPED",
                     skip_reason=reason,
-                    started_at=op_start, completed_at=datetime.now(timezone.utc),
+                    started_at=op_start, completed_at=datetime.now(UTC),
                     effective_dry_run=table_dry_run,
                 )
             else:
@@ -430,7 +435,7 @@ class HKEngine(BaseEngine):
                 self._write_log(
                     table_row, "orphan_cleanup", op_status,
                     started_at=op_start,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(UTC),
                     orphan_files_deleted=orphan_result.get("orphan_files_deleted"),
                     athena_query_id=orphan_result.get("athena_query_id"),
                     bytes_scanned=orphan_result.get("bytes_scanned", 0),
@@ -440,7 +445,7 @@ class HKEngine(BaseEngine):
                 total_bytes_scanned += orphan_result.get("bytes_scanned", 0)
 
         # ── Summary hk_run record ─────────────────────────────────────────────
-        completed_at = datetime.now(timezone.utc)
+        completed_at = datetime.now(UTC)
         status       = "FAILURE" if op_errors else ("DRY_RUN" if table_dry_run else "SUCCESS")
 
         self._write_log(
@@ -519,7 +524,7 @@ class HKEngine(BaseEngine):
             last_completed = utc.localize(last_completed)
 
         hours_since = (
-            datetime.now(timezone.utc) - last_completed
+            datetime.now(UTC) - last_completed
         ).total_seconds() / 3600
 
         if hours_since < threshold_hours:
@@ -545,11 +550,11 @@ class HKEngine(BaseEngine):
         table_row: dict,
         operation: str,
         status: str,
-        skip_reason: Optional[str] = None,
-        error_message: Optional[str] = None,
-        started_at: Optional[datetime] = None,
-        completed_at: Optional[datetime] = None,
-        effective_dry_run: Optional[bool] = None,
+        skip_reason: str | None = None,
+        error_message: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        effective_dry_run: bool | None = None,
         **metrics,
     ) -> None:
         """

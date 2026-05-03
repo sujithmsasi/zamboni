@@ -3,18 +3,18 @@ Zamboni — Notifier
 SNS email dispatch for alerts, circuit breaker trips,
 GREENZONE notifications, and PENDING_DROP warnings.
 """
-import json
+from __future__ import annotations
+
 from datetime import date
-from typing import Optional
 
 import boto3
 
-from config.settings import SNS_ALERT_TOPIC_ARN, SNS_GREENZONE_TOPIC_ARN, AWS_REGION
+from config.settings import AWS_REGION, SNS_ALERT_TOPIC_ARN, SNS_GREENZONE_TOPIC_ARN
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_client: Optional[boto3.client] = None
+_client: boto3.client | None = None
 
 
 def _get_client():
@@ -33,7 +33,7 @@ def send(
     message: str,
     topic_arn: str,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """
     Publish a message to an SNS topic.
     Returns MessageId on success, None on dry_run.
@@ -63,9 +63,9 @@ def send(
 def send_alert(
     subject: str,
     message: str,
-    table_fqn: Optional[str] = None,
+    table_fqn: str | None = None,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """General-purpose HK alert."""
     if table_fqn:
         message = f"Table: {table_fqn}\n\n{message}"
@@ -82,7 +82,7 @@ def send_circuit_breaker_alert(
     failure_count: int,
     threshold: int,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """Alert when a table's circuit breaker trips and HK is auto-disabled."""
     subject = f"Circuit Breaker Tripped — {table_fqn}"
     message = (
@@ -105,7 +105,7 @@ def send_greenzone_notification(
     environment: str,
     days_inactive: int,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """
     GREENZONE notification — sent to table owner before auto-deletion.
     Owner has until expires_at to respond or the table will be PENDING_DROP.
@@ -137,7 +137,7 @@ def send_pending_drop_notification(
     drop_at: date,
     environment: str,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """48-hour final warning before table is permanently deleted."""
     subject = f"[Zamboni PENDING DROP] Final notice — {table_fqn}"
     message = (
@@ -160,7 +160,7 @@ def send_engine_failure_summary(
     run_id: str,
     failed_tables: list[str],
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """Send a summary alert when an engine run has failures."""
     count   = len(failed_tables)
     subject = f"[Zamboni] {engine.upper()} Engine — {count} failure(s)"

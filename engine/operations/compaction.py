@@ -5,17 +5,18 @@ Routes to the correct compaction strategy:
   - sort     → Glue job (zamboni_compaction) with sort strategy
   - zorder   → Glue job (zamboni_compaction) with zorder strategy
 """
+from __future__ import annotations
+
 import os
 import time
-from typing import Optional
 
 import boto3
 
 from config.settings import AWS_REGION
 from engine.core.health_checker import HealthResult
-from engine.operations.dynamic_router import route, RoutingDecision
+from engine.operations.dynamic_router import RoutingDecision, route
 from engine.strategies import binpack, sort, zorder
-from engine.utils.athena_client import run_query, get_query_stats
+from engine.utils.athena_client import get_query_stats, run_query
 from engine.utils.logger import get_logger
 from engine.utils.partition_utils import build_hot_partition_filter
 
@@ -102,7 +103,7 @@ def run_compaction(
 def _run_athena_binpack(
     table_fqn: str,
     target_mb: int,
-    partition_filter: Optional[str],
+    partition_filter: str | None,
     routing: RoutingDecision,
     dry_run: bool,
 ) -> dict:
@@ -140,12 +141,12 @@ def _run_glue_compaction(
     strategy: str,
     columns: list[str],
     target_mb: int,
-    partition_filter: Optional[str],
+    partition_filter: str | None,
     routing: RoutingDecision,
     dry_run: bool,
 ) -> dict:
     if strategy == "sort":
-        num_workers = sort.recommend_num_workers(0, routing.worker_type)
+        sort.recommend_num_workers(0, routing.worker_type)
         job_args = sort.build_glue_params(
             table_fqn=table_fqn,
             sort_columns=columns,

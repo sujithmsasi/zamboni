@@ -11,6 +11,8 @@ port             = 8501
 enableCORS       = false
 
 [browser]
+# Disable telemetry — Streamlit sends usage data to Snowflake by default.
+# This must be false for enterprise/internal tools.
 gatherUsageStats = false
 
 [runner]

@@ -4,15 +4,13 @@ Browse and filter all execution_log entries.
 Drill into single executions, export to CSV.
 """
 import streamlit as st
-import pandas as pd
 
+from app.components.athena_runner import cached_read_sql
 from app.components.auth import check_login
+from app.components.filters import domain_filter
 from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
-from app.components.filters import domain_filter, environment_filter
-from app.components.athena_runner import cached_read_sql
 from app.components.status_badge import status as status_badge
-
 from config.settings import EXECUTION_LOG_TABLE
 
 st.set_page_config(page_title="Zamboni — Execution Log", page_icon="📜", layout="wide")
@@ -26,7 +24,8 @@ st.caption("Unified audit log for all three engines. Every operation is recorded
 # ── Filters ───────────────────────────────────────────────────────────────────
 with st.expander("🔍 Filters", expanded=True):
     col1, col2, col3, col4 = st.columns(4)
-    with col1: sel_domain  = domain_filter(key="el_domain")
+    with col1:
+        sel_domain  = domain_filter(key="el_domain")
     with col2:
         sel_engine = st.selectbox("Engine", ["All", "hk", "archival", "lifecycle"], key="el_engine")
     with col3:

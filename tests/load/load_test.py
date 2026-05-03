@@ -13,21 +13,19 @@ Requirements:
     - Stream registry populated with tables
     - DRY_RUN_DEFAULT=true in .env (load test never writes)
 """
-import time
 import statistics
-import click
-from datetime import datetime, timezone
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import click
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TimeElapsedColumn
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TimeElapsedColumn
 
-from config.settings import DRY_RUN_DEFAULT
-from engine.core.registry import get_enabled_tables
-from engine.core.config import get_hk_config
-from engine.core.window_evaluator import evaluate, EXECUTE
 from engine.core import circuit_breaker
+from engine.core.config import get_hk_config
+from engine.core.registry import get_enabled_tables
+from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.utils.logger import get_logger
 
 log     = get_logger(__name__)
@@ -46,12 +44,12 @@ def main(tables, domain, concurrency, env):
     Load test — simulate HK Engine evaluation at scale.
     Always runs in dry-run mode. Never writes to any AWS service.
     """
-    console.print(f"\n[bold blue]🔥 Zamboni Load Test[/]")
+    console.print("\n[bold blue]🔥 Zamboni Load Test[/]")
     console.print(f"   Tables      : {tables}")
     console.print(f"   Domain      : {domain or 'all'}")
     console.print(f"   Concurrency : {concurrency}")
     console.print(f"   Environment : {env}")
-    console.print(f"   Mode        : [yellow]DRY RUN (always)[/]\n")
+    console.print("   Mode        : [yellow]DRY RUN (always)[/]\n")
 
     # ── Fetch tables ──────────────────────────────────────────────────────────
     start_fetch = time.perf_counter()

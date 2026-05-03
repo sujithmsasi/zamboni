@@ -3,19 +3,19 @@ Zamboni — Dry Run Viewer
 Simulate HK Engine on any table or domain without writing anything.
 Shows: health check results, what operations would run, SQL preview.
 """
-import streamlit as st
 import json
 
+import streamlit as st
+
+from app.components.athena_runner import cached_read_registry
 from app.components.auth import check_login
+from app.components.filters import domain_filter, layer_filter
 from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
-from app.components.filters import domain_filter, layer_filter
-from app.components.athena_runner import cached_read_registry
-
-from config.settings import STREAM_REGISTRY_TABLE, HK_CONFIG_TABLE
-from engine.utils.partition_utils import build_hot_partition_filter
+from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.strategies.binpack import build_optimize_sql
-from engine.core.window_evaluator import evaluate, EXECUTE
+from engine.utils.partition_utils import build_hot_partition_filter
 
 st.set_page_config(page_title="Zamboni — Dry Run", page_icon="🧪", layout="wide")
 check_login()
@@ -126,8 +126,10 @@ with tab1:
 with tab2:
     st.markdown("Simulate HK for all enabled tables in a domain and layer.")
     col1, col2 = st.columns(2)
-    with col1: bulk_domain = domain_filter(include_all=False, key="dr_bulk_domain")
-    with col2: bulk_layer  = layer_filter(include_all=False, key="dr_bulk_layer")
+    with col1:
+        bulk_domain = domain_filter(include_all=False, key="dr_bulk_domain")
+    with col2:
+        bulk_layer  = layer_filter(include_all=False, key="dr_bulk_layer")
 
     if st.button("▶ Simulate Domain Run", type="primary", key="dr_bulk_run"):
         if bulk_domain and bulk_layer:

@@ -13,7 +13,9 @@ Usage:
     python -m engine.scripts.run_archival --domain finance --dry-run
 """
 import sys
+
 import click
+
 from config.settings import DRY_RUN_DEFAULT
 from engine.engines.archival_engine import ArchivalEngine
 from engine.utils.logger import get_logger

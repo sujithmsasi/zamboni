@@ -14,9 +14,11 @@ Metrics published:
     - TablesRegistered, HKEnabled, HKCoverage
     - TablesWithRecentFailures
 """
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
 import boto3
-from datetime import datetime, timezone
-from typing import Optional
 
 from config.settings import AWS_REGION
 from engine.utils.logger import get_logger
@@ -25,7 +27,7 @@ log = get_logger(__name__)
 
 NAMESPACE = "Zamboni"
 
-_client: Optional[boto3.client] = None
+_client: boto3.client | None = None
 
 
 def _get_client():
@@ -39,7 +41,7 @@ def put_metric(
     name:       str,
     value:      float,
     unit:       str = "Count",
-    dimensions: Optional[list[dict]] = None,
+    dimensions: list[dict] | None = None,
     dry_run:    bool = False,
 ) -> None:
     """
@@ -65,7 +67,7 @@ def put_metric(
                 "MetricName": name,
                 "Value":      float(value),
                 "Unit":       unit,
-                "Timestamp":  datetime.now(timezone.utc),
+                "Timestamp":  datetime.now(UTC),
                 "Dimensions": dims,
             }]
         )
@@ -81,7 +83,7 @@ def publish_engine_run(
     failed:     int,
     skipped:    int,
     duration_s: float,
-    domain:     Optional[str] = None,
+    domain:     str | None = None,
     dry_run:    bool = False,
     **extra_metrics,
 ) -> None:

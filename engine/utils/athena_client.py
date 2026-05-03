@@ -3,19 +3,18 @@ Zamboni — Athena Client
 Thin wrapper around boto3 Athena — workgroup-aware, polls to completion.
 All Athena calls in the project go through here.
 """
+from __future__ import annotations
+
 import time
+
 import boto3
-from typing import Optional
-from config.settings import (
-    ATHENA_CATALOG, ATHENA_DATABASE,
-    ATHENA_RESULTS_BUCKET, ATHENA_WORKGROUPS, AWS_REGION
-)
+
+from config.settings import ATHENA_CATALOG, ATHENA_DATABASE, ATHENA_RESULTS_BUCKET, ATHENA_WORKGROUPS, AWS_REGION
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_client: Optional[boto3.client] = None
-
+_client: boto3.client | None = None
 
 def _get_client():
     global _client
@@ -23,13 +22,12 @@ def _get_client():
         _client = boto3.client("athena", region_name=AWS_REGION)
     return _client
 
-
 def run_query(
     sql: str,
     workgroup: str = "standard",
-    database: Optional[str] = None,
+    database: str | None = None,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """
     Execute an Athena query and wait for completion.
 
@@ -65,7 +63,6 @@ def run_query(
 
     return _poll(client, query_id, wg)
 
-
 def _poll(client, query_id: str, workgroup: str, interval: int = 3) -> str:
     """Poll until terminal state. Raises on FAILED / CANCELLED."""
     while True:
@@ -91,7 +88,6 @@ def _poll(client, query_id: str, workgroup: str, interval: int = 3) -> str:
         log.debug("athena.polling", query_id=query_id, state=state)
         time.sleep(interval)
 
-
 def get_query_stats(query_id: str) -> dict:
     """Return cost-tracking stats for a completed query."""
     resp  = _get_client().get_query_execution(QueryExecutionId=query_id)
@@ -101,12 +97,11 @@ def get_query_stats(query_id: str) -> dict:
         "execution_ms":  stats.get("TotalExecutionTimeInMillis", 0),
     }
 
-
 def read_sql(
     sql: str,
     workgroup: str = "standard",
-    database: Optional[str] = None,
-) -> "pandas.DataFrame":
+    database: str | None = None,
+):
     """
     Execute a SELECT and return results as a pandas DataFrame.
     Uses awswrangler for clean result fetching.

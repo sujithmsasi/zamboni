@@ -15,11 +15,7 @@ This module is independent of execution_log.write() — engines call into a
 ParquetLogBuffer instance, populate it during the run, and flush at end.
 """
 import io
-import json
-import os
-import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from config.settings import (
     AWS_REGION,
@@ -201,7 +197,7 @@ class ParquetLogBuffer:
 
     def _build_s3_path(self) -> str:
         """Build S3 path: <metadata_bucket>/execution_log/_pending/<run_id>.parquet."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         bucket = ZAMBONI_METADATA_BUCKET.rstrip("/")
         return f"{bucket}/execution_log/_pending/{self.engine}_{self.run_id}_{ts}.parquet"
 
@@ -217,8 +213,9 @@ class ParquetLogBuffer:
         All DDL columns are present with safe defaults to avoid schema mismatch
         on add_files registration. Null/missing LogEntry fields default to None.
         """
-        now_utc = datetime.now(timezone.utc)
-        g = lambda attr, default=None: getattr(entry, attr, default)
+        now_utc = datetime.now(UTC)
+        def g(attr, default=None):
+            return getattr(entry, attr, default)
 
         # Compute duration_seconds if both timestamps present
         started   = g("started_at")

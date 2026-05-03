@@ -2,14 +2,16 @@
 Zamboni — S3 Client
 Prefix operations, batch delete, URI parsing.
 """
+from __future__ import annotations
+
 import boto3
-from typing import Optional
+
 from config.settings import AWS_REGION
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_client: Optional[boto3.client] = None
+_client: boto3.client | None = None
 
 
 def _get_client():
@@ -79,7 +81,7 @@ def delete_prefix(bucket: str, prefix: str, dry_run: bool = False) -> int:
     return deleted
 
 
-def head_object(bucket: str, key: str) -> Optional[dict]:
+def head_object(bucket: str, key: str) -> dict | None:
     """Return object metadata or None if not found."""
     try:
         return _get_client().head_object(Bucket=bucket, Key=key)

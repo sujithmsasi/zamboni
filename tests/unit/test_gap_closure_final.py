@@ -3,12 +3,10 @@ Final gap closure tests — Sprint 5.
 Covers gaps 1-7 from the remaining consistency + runtime correctness audit.
 Each test references the gap number for traceability.
 """
-import os
-import pytest
-from datetime import datetime, timezone, timedelta, date
-from unittest.mock import patch, MagicMock, call
-import pandas as pd
+from datetime import date, timedelta
+from unittest.mock import patch
 
+import pandas as pd
 
 # ── Gap 1: systemd entrypoint ─────────────────────────────────────────────────
 
@@ -103,7 +101,6 @@ def test_gap3_different_operations_yield_different_ids():
 def test_gap3_run_id_not_in_hash():
     """run_id must NOT affect the execution_id hash."""
     from engine.core.idempotency import build_execution_id
-    import hashlib
     # Verify by checking that changing only run_id keeps the same digest prefix
     id_x = build_execution_id("run-x",     "glue_catalog.d.t", "hk_run", "20260427")
     id_y = build_execution_id("run-y-v99", "glue_catalog.d.t", "hk_run", "20260427")
@@ -213,7 +210,7 @@ def test_gap5_get_enabled_tables_includes_rampup_tables():
 
     with patch("engine.core.registry.read_sql") as msql:
         msql.return_value = pd.DataFrame(mock_rows)
-        tables = registry.get_enabled_tables(environment="prod")
+        registry.get_enabled_tables(environment="prod")
 
     # Should include t1 (enabled) and t2 (active ramp-up)
     # SQL does the filtering — we trust the WHERE clause. Just verify it was called.
@@ -274,9 +271,10 @@ def test_gap6_parquet_buffer_wired_in_hk_engine():
 
 def test_gap6_entry_to_dict_has_all_ddl_columns():
     """_entry_to_dict must produce all columns present in execution_log DDL."""
-    from engine.core.execution_log_parquet import ParquetLogBuffer
-    from engine.core.execution_log import LogEntry
     import re
+
+    from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
 
     with open("sql/create_execution_log.sql", encoding='utf-8') as f:
         ddl = f.read()
@@ -298,8 +296,8 @@ def test_gap6_entry_to_dict_has_all_ddl_columns():
 
 def test_gap6_parquet_buffer_insert_fallback_mode():
     """mode=insert must use per-row write, not Parquet path."""
-    from engine.core.execution_log_parquet import ParquetLogBuffer
     from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
 
     with patch("engine.core.execution_log_parquet.EXECUTION_LOG_MODE", "insert"):
         buffer = ParquetLogBuffer(run_id="test-insert")
@@ -318,8 +316,8 @@ def test_gap6_parquet_buffer_insert_fallback_mode():
 
 def test_gap6_parquet_buffer_auto_falls_back_to_insert_on_error():
     """mode=auto must fall back to insert if Parquet write fails."""
-    from engine.core.execution_log_parquet import ParquetLogBuffer
     from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
 
     with patch("engine.core.execution_log_parquet.EXECUTION_LOG_MODE", "auto"):
         buffer = ParquetLogBuffer(run_id="test-auto")
@@ -341,8 +339,8 @@ def test_gap6_parquet_buffer_auto_falls_back_to_insert_on_error():
 
 def test_gap6_parquet_buffer_strict_mode_does_not_fallback():
     """mode=parquet must raise/return error without falling back to insert."""
-    from engine.core.execution_log_parquet import ParquetLogBuffer
     from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
 
     with patch("engine.core.execution_log_parquet.EXECUTION_LOG_MODE", "parquet"):
         buffer = ParquetLogBuffer(run_id="test-strict")

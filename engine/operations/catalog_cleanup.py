@@ -6,9 +6,9 @@ Two steps (both must succeed):
   2. Sweep S3 data/ and metadata/ prefixes
 """
 from engine.utils.glue_client import drop_table, get_table_location
-from engine.utils.s3_client import delete_prefix, get_prefix_size_bytes, parse_s3_uri
-from engine.utils.partition_utils import parse_table_fqn
 from engine.utils.logger import get_logger
+from engine.utils.partition_utils import parse_table_fqn
+from engine.utils.s3_client import delete_prefix, get_prefix_size_bytes, parse_s3_uri
 
 log = get_logger(__name__)
 

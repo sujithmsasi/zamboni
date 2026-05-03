@@ -20,11 +20,12 @@ Two signals:
   last_write_at — most recent write event (CreateTable, BatchCreatePartition,
                    UpdateTable, PutObject pattern matching table prefix)
 """
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from __future__ import annotations
 
-from config.settings import CLOUDTRAIL_TABLE, CLOUDTRAIL_LOOKBACK_DAYS, AWS_REGION
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from config.settings import AWS_REGION, CLOUDTRAIL_LOOKBACK_DAYS, CLOUDTRAIL_TABLE
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -34,9 +35,9 @@ log = get_logger(__name__)
 class ActivitySignals:
     """Activity signals for a single non-prod table."""
     table_fqn:          str
-    last_query_at:      Optional[datetime] = None
-    last_write_at:      Optional[datetime] = None
-    days_since_activity: Optional[int]     = None
+    last_query_at:      datetime | None = None
+    last_write_at:      datetime | None = None
+    days_since_activity: int | None     = None
     source:             str               = "none"  # cloudtrail | glue_create | none
 
 
@@ -44,7 +45,7 @@ def get_activity_signals(
     table_fqn: str,
     database: str,
     table_name: str,
-    glue_create_time: Optional[datetime] = None,
+    glue_create_time: datetime | None = None,
 ) -> ActivitySignals:
     """
     Retrieve activity signals for a non-prod table.
@@ -109,7 +110,7 @@ def _query_cloudtrail(
     table_fqn: str,
     database: str,
     table_name: str,
-    glue_create_time: Optional[datetime],
+    glue_create_time: datetime | None,
 ) -> ActivitySignals:
     """Query Athena CloudTrail table for last_query_at and last_write_at."""
     from engine.utils.athena_client import read_sql
@@ -185,11 +186,11 @@ def _days_since(ts: datetime) -> int:
     if ts.tzinfo is None:
         from pytz import utc
         ts = utc.localize(ts)
-    delta = datetime.now(timezone.utc) - ts
+    delta = datetime.now(UTC) - ts
     return max(0, delta.days)
 
 
-def _parse_ts(value) -> Optional[datetime]:
+def _parse_ts(value) -> datetime | None:
     """Parse various timestamp formats to timezone-aware datetime."""
     if value is None:
         return None

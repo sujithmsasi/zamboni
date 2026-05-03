@@ -4,9 +4,14 @@ All modules import from here. Never read os.environ directly elsewhere.
 Values loaded from .env via python-dotenv.
 """
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root regardless of working directory.
+# Looks for: <project_root>/.env  (one level up from config/)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
 # ── Test mode ─────────────────────────────────────────────────────────────────
 # Set ZAMBONI_TEST_MODE=true to run unit tests without a real .env file.

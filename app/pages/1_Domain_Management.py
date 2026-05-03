@@ -3,17 +3,15 @@ Zamboni — Domain Management
 List, register, edit, activate/deactivate domains.
 """
 import streamlit as st
-import pandas as pd
 
+from app.components.athena_runner import cached_read_registry, execute_write
 from app.components.auth import check_login, current_user
 from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
-from app.components.athena_runner import cached_read_registry, execute_write
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import yes_no
-
 from config.settings import DOMAIN_REGISTRY_TABLE, VALID_ENVIRONMENTS
 from engine.core import registry
-
 
 st.set_page_config(page_title="Zamboni — Domain Management", page_icon="📋", layout="wide")
 

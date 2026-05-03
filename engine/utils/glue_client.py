@@ -2,14 +2,16 @@
 Zamboni — Glue Client
 Catalog reads, table discovery, job status checks (Gate 1).
 """
+from __future__ import annotations
+
 import boto3
-from typing import Optional
+
 from config.settings import AWS_REGION
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_client: Optional[boto3.client] = None
+_client: boto3.client | None = None
 
 
 def _get_client():
@@ -40,7 +42,7 @@ def get_tables(database: str) -> list[dict]:
     return tables
 
 
-def get_table(database: str, table_name: str) -> Optional[dict]:
+def get_table(database: str, table_name: str) -> dict | None:
     """Return a single table or None if not found."""
     try:
         return _get_client().get_table(DatabaseName=database, Name=table_name)["Table"]
@@ -68,7 +70,7 @@ def drop_table(database: str, table_name: str, dry_run: bool = False) -> bool:
         return False
 
 
-def get_table_location(database: str, table_name: str) -> Optional[str]:
+def get_table_location(database: str, table_name: str) -> str | None:
     """Return the S3 location of a table, or None."""
     table = get_table(database, table_name)
     if not table:
@@ -78,7 +80,7 @@ def get_table_location(database: str, table_name: str) -> Optional[str]:
 
 # ── Gate 1 — Upstream Job Status ──────────────────────────────────────────────
 
-def get_last_job_run(job_name: str) -> Optional[dict]:
+def get_last_job_run(job_name: str) -> dict | None:
     """
     Return the most recent Glue job run or None.
     Used for Gate 1 upstream batch completion check.

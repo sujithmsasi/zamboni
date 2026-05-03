@@ -3,10 +3,12 @@ Zamboni — Sidebar Component
 Small D&A logo + nav info + dry-run toggle + logout.
 Full-size logo appears in the page header (header.py).
 """
-import streamlit as st
 from pathlib import Path
-from config.settings import APP_ENV, AWS_REGION
+
+import streamlit as st
+
 from app.components.auth import current_user, logout_button
+from config.settings import APP_ENV, AWS_REGION
 
 LOGO_SMALL_PATH = Path("app/assets/da_logo_small.png")
 LOGO_PATH       = Path("app/assets/da_logo.png")

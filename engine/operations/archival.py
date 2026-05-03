@@ -10,14 +10,13 @@ Four-step gate (DELETE only runs if all prior steps pass):
 
 If any step fails, the partition is left intact in staging and an SNS alert is sent.
 """
-from datetime import date, datetime, timezone
-from typing import Optional
+from datetime import date
 
 import awswrangler as wr
 import boto3
 import pandas as pd
 
-from config.settings import AWS_REGION, ARCHIVE_BUCKET
+from config.settings import ARCHIVE_BUCKET, AWS_REGION
 from engine.utils.athena_client import read_sql
 from engine.utils.logger import get_logger
 from engine.utils.partition_utils import (

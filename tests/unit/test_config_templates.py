@@ -2,14 +2,13 @@
 Unit tests for engine/core/config.py — template loading and inference.
 No AWS required.
 """
-import pytest
+from config.settings import SNAPSHOT_MIN_FLOOR
 from engine.core.config import (
+    _to_sql_array,
     get_policy_templates,
     get_template,
     infer_template,
-    _to_sql_array,
 )
-from config.settings import SNAPSHOT_MIN_FLOOR
 
 
 def test_templates_load():

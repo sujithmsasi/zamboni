@@ -6,15 +6,14 @@ First user of the day → triggers generation → saves to home_snapshot table
 All other users for that day → read cached snapshot
 Manual refresh button → regenerates snapshot
 """
-import json
-from datetime import date, datetime, timezone
-from typing import Optional
+from __future__ import annotations
 
-import streamlit as st
+import json
+from datetime import UTC, date, datetime
 
 from config.settings import (
-    STREAM_REGISTRY_TABLE,
     EXECUTION_LOG_TABLE,
+    STREAM_REGISTRY_TABLE,
 )
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.logger import get_logger
@@ -51,7 +50,7 @@ def _generate(snapshot_date: date) -> dict:
     """Run all home page queries and assemble the snapshot dict."""
     return {
         "snapshot_date":         snapshot_date.isoformat(),
-        "generated_at":          datetime.now(timezone.utc).isoformat(),
+        "generated_at":          datetime.now(UTC).isoformat(),
         "kpi":                   _kpi_cards(),
         "fleet_coverage":        _fleet_coverage(),
         "compaction_needed":     _compaction_needed(),
@@ -214,7 +213,7 @@ def _cost_summary() -> list:
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 
-def _load_snapshot(snapshot_date: date) -> Optional[dict]:
+def _load_snapshot(snapshot_date: date) -> dict | None:
     sql = f"""
         SELECT * FROM {HOME_SNAPSHOT_TABLE}
         WHERE snapshot_date = DATE '{snapshot_date.isoformat()}'
@@ -261,7 +260,7 @@ def _save_snapshot(snapshot_date: date, snapshot: dict, generated_by: str) -> No
     insert_sql = f"""
         INSERT INTO {HOME_SNAPSHOT_TABLE} VALUES (
             DATE '{snapshot_date.isoformat()}',
-            TIMESTAMP '{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}',
+            TIMESTAMP '{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}',
             '{_esc(generated_by)}',
             {kpi.get('total_tables', 0)},
             {kpi.get('hk_enabled', 0)},

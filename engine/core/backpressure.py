@@ -7,9 +7,10 @@ MaxConcurrentQueries limit, wait with exponential backoff.
 Lightweight — single API call per check, exponential backoff on saturation.
 Falls open (allows the dispatch) if the check itself fails — never blocks.
 """
-import time
+from __future__ import annotations
+
 import random
-from typing import Optional
+import time
 
 from config.settings import AWS_REGION
 from engine.utils.logger import get_logger
@@ -27,7 +28,7 @@ _DEFAULT_LIMITS = {
 }
 
 
-def get_running_query_count(workgroup: str) -> Optional[int]:
+def get_running_query_count(workgroup: str) -> int | None:
     """
     Query Athena for the count of currently RUNNING queries in this workgroup.
     Returns None on failure — caller treats as 'unknown, allow dispatch'.
@@ -68,7 +69,7 @@ def get_running_query_count(workgroup: str) -> Optional[int]:
 def wait_for_capacity(
     workgroup: str,
     max_wait_seconds: int = 60,
-    limit: Optional[int] = None,
+    limit: int | None = None,
 ) -> bool:
     """
     Block until the workgroup has capacity for one more query, or timeout.
@@ -105,7 +106,7 @@ def wait_for_capacity(
     return False
 
 
-def can_dispatch(workgroup: str, limit: Optional[int] = None) -> bool:
+def can_dispatch(workgroup: str, limit: int | None = None) -> bool:
     """
     Non-blocking check — return True if there's capacity right now.
     Used for fast skip rather than wait+retry.

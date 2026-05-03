@@ -2,16 +2,15 @@
 Unit tests for archival validation gate logic.
 No AWS required — mocks Athena and S3 calls.
 """
-import pytest
 from datetime import date
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 import pandas as pd
 
 from engine.utils.partition_utils import (
-    build_cold_partition_filter,
     build_archive_s3_prefix,
+    build_cold_partition_filter,
 )
-
 
 # ── Cold partition filter ─────────────────────────────────────────────────────
 

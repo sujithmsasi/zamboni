@@ -6,21 +6,20 @@ Identifies:
   - Large unmanaged tables (not registered in Zamboni)
   - Zero-row tables wasting storage
 """
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
-from app.components.auth import check_login
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
-from app.components.filters import domain_filter, environment_filter
 from app.components.athena_runner import cached_read_sql
-from app.components.status_badge import lifecycle as lifecycle_badge, layer as layer_badge
+from app.components.auth import check_login
+from app.components.filters import domain_filter, environment_filter
+from app.components.header import render as render_header
 from app.components.kpi_cards import render_kpi_row
-
+from app.components.sidebar import render as render_sidebar
+from app.components.status_badge import lifecycle as lifecycle_badge
 from config.settings import (
-    STREAM_REGISTRY_TABLE,
-    NONPROD_REGISTRY_TABLE,
     EXECUTION_LOG_TABLE,
+    NONPROD_REGISTRY_TABLE,
+    STREAM_REGISTRY_TABLE,
 )
 
 st.set_page_config(page_title="Zamboni — Stale Resources", page_icon="🔎", layout="wide")
@@ -43,9 +42,12 @@ with tab1:
     st.markdown("Tables registered in Zamboni with no successful HK or user activity beyond threshold.")
 
     col1, col2, col3 = st.columns(3)
-    with col1: sel_domain = domain_filter(key="sr_domain")
-    with col2: sel_env    = environment_filter(key="sr_env")
-    with col3: stale_days = st.number_input("Inactive for more than (days)", value=30, min_value=1, key="sr_days")
+    with col1:
+        sel_domain = domain_filter(key="sr_domain")
+    with col2:
+        sel_env    = environment_filter(key="sr_env")
+    with col3:
+        stale_days = st.number_input("Inactive for more than (days)", value=30, min_value=1, key="sr_days")
 
     # Prod stale — registered and enabled but no successful HK in N days
     stale_sql = f"""
@@ -82,7 +84,7 @@ with tab1:
 
                 # KPIs
                 never_hk    = df["last_successful_hk"].isna().sum()
-                hk_disabled = (df["hk_enabled"] == False).sum()
+                hk_disabled = (not df["hk_enabled"]).sum()
                 render_kpi_row([
                     {"label": "Stale Tables",       "value": str(len(df))},
                     {"label": "Never Housekept",     "value": str(never_hk)},
@@ -213,12 +215,13 @@ with tab3:
     if s3_prefix and st.button("🔍 Scan S3 Prefix", key="sr_s3_scan"):
         with st.spinner(f"Scanning `{s3_prefix}`..."):
             try:
-                from engine.utils.s3_client import parse_s3_uri
                 from engine.utils.glue_client import get_tables
+                from engine.utils.s3_client import parse_s3_uri
 
                 bucket, prefix = parse_s3_uri(s3_prefix)
 
                 import boto3
+
                 from config.settings import AWS_REGION
                 s3  = boto3.client("s3", region_name=AWS_REGION)
                 res = s3.list_objects_v2(Bucket=bucket, Prefix=prefix, Delimiter="/")

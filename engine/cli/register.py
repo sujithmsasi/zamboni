@@ -16,16 +16,16 @@ Usage:
     python -m engine.cli.register status --db finance_db
 """
 import sys
-import yaml
-import click
 from datetime import date
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich import print as rprint
 
-from config.settings import VALID_LAYERS, VALID_TIERS, VALID_ENVIRONMENTS, DRY_RUN_DEFAULT
-from engine.utils.glue_client import get_tables, get_databases, is_iceberg_table
+import click
+import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from config.settings import DRY_RUN_DEFAULT, VALID_ENVIRONMENTS, VALID_LAYERS, VALID_TIERS
+from engine.utils.glue_client import get_tables, is_iceberg_table
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -104,9 +104,9 @@ def discover(db, out, domain, env):
         yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
 
     console.print(f"[green]✓ Manifest written to:[/] [cyan]{out}[/]")
-    console.print(f"\n[dim]Next steps:[/]")
+    console.print("\n[dim]Next steps:[/]")
     console.print(f"  1. Review and edit [cyan]{out}[/]")
-    console.print(f"     — Set correct layer, tier, owner_email, ci_number per table")
+    console.print("     — Set correct layer, tier, owner_email, ci_number per table")
     console.print(f"  2. Run: [cyan]python -m engine.cli.register bulk --manifest {out}[/]")
 
 
@@ -142,8 +142,8 @@ def bulk(manifest, dry_run):
             console.print("[yellow]Aborted.[/]")
             return
 
-    from engine.core.registry import register_table, table_exists
     from engine.core.config import apply_template
+    from engine.core.registry import register_table, table_exists
 
     succeeded = 0
     skipped   = 0
@@ -223,13 +223,13 @@ def bulk(manifest, dry_run):
 @click.option("--dry-run/--no-dry-run", default=DRY_RUN_DEFAULT)
 def single(table, domain, layer, tier, env, owner, ci, template, dry_run):
     """Register a single table into stream_registry."""
-    from engine.core.registry import register_table, table_exists
     from engine.core.config import apply_template, infer_template
+    from engine.core.registry import register_table, table_exists
 
     console.print(f"\n[bold blue]Registering:[/] [cyan]{table}[/]")
 
     if table_exists(table):
-        console.print(f"[yellow]⚠  Already registered.[/] Use Streamlit app to update config.")
+        console.print("[yellow]⚠  Already registered.[/] Use Streamlit app to update config.")
         return
 
     tmpl = template or infer_template(layer, tier)
@@ -258,8 +258,8 @@ def single(table, domain, layer, tier, env, owner, ci, template, dry_run):
 @click.option("--db", required=True, help="Glue database name")
 def status(db):
     """Show registration status for all tables in a Glue database."""
-    from engine.utils.athena_client import read_sql
     from config.settings import STREAM_REGISTRY_TABLE
+    from engine.utils.athena_client import read_sql
 
     try:
         glue_tables = get_tables(db)
@@ -286,7 +286,7 @@ def status(db):
         console.print(f"  Unregistered  : [yellow]{len(unregistered)}[/]")
 
         if unregistered:
-            console.print(f"\n[yellow]Unregistered tables:[/]")
+            console.print("\n[yellow]Unregistered tables:[/]")
             for t in unregistered[:20]:
                 console.print(f"  [dim]•[/] {t}")
             if len(unregistered) > 20:

@@ -3,9 +3,7 @@ Sprint 1 gap closure tests.
 Covers: dry_run_until ramp-up logic (C2), settings test mode (M4).
 """
 import os
-import pytest
 from datetime import date, timedelta
-
 
 # ── C2: dry_run_until ramp-up ─────────────────────────────────────────────────
 
@@ -59,15 +57,12 @@ def test_settings_test_mode_active():
 def test_settings_loads_without_real_env():
     """settings.py should load cleanly in test mode without a .env file."""
     from config.settings import (
-        AWS_REGION,
-        ATHENA_CATALOG,
-        ATHENA_DATABASE,
-        ATHENA_RESULTS_BUCKET,
-        STAGING_BUCKET,
         ARCHIVE_BUCKET,
-        ZAMBONI_METADATA_BUCKET,
+        ATHENA_RESULTS_BUCKET,
         SNS_ALERT_TOPIC_ARN,
         SNS_GREENZONE_TOPIC_ARN,
+        STAGING_BUCKET,
+        ZAMBONI_METADATA_BUCKET,
     )
     # All required vars should resolve to mock values
     assert ATHENA_RESULTS_BUCKET.startswith("s3://")
@@ -121,7 +116,7 @@ def test_iam_delete_table_restricted_to_nonprod():
     with open("deploy/iam_policy.json", encoding='utf-8') as f:
         content = f.read()
     # Remove comment lines for JSON parsing
-    lines = [l for l in content.splitlines() if not l.strip().startswith("//")]
+    lines = [ln for ln in content.splitlines() if not ln.strip().startswith("//")]
     policy = json.loads("\n".join(lines))
 
     for stmt in policy["Statement"]:

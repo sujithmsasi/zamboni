@@ -3,8 +3,9 @@ Zamboni — Reusable Filter Components
 Domain / Layer / Tier / Environment dropdowns used across multiple pages.
 """
 import streamlit as st
-from config.settings import VALID_LAYERS, VALID_TIERS, VALID_ENVIRONMENTS
+
 from app.components.athena_runner import cached_read_registry
+from config.settings import VALID_ENVIRONMENTS, VALID_LAYERS, VALID_TIERS
 
 
 def domain_filter(label: str = "Domain", include_all: bool = True, key: str = "domain_filter"):

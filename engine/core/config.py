@@ -2,10 +2,11 @@
 Zamboni — HK Config
 Read hk_config per table, apply policy templates, upsert configs.
 """
+from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from config.settings import HK_CONFIG_TABLE, SNAPSHOT_MIN_FLOOR
 from engine.utils.athena_client import read_sql, run_query
@@ -32,7 +33,7 @@ def _load_templates() -> dict:
 #  READ
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_hk_config(table_fqn: str) -> Optional[dict]:
+def get_hk_config(table_fqn: str) -> dict | None:
     """Return hk_config row for a table, or None if not configured."""
     sql = f"""
         SELECT * FROM {HK_CONFIG_TABLE}
@@ -62,7 +63,7 @@ def get_policy_templates() -> dict:
     return _load_templates()
 
 
-def get_template(template_name: str) -> Optional[dict]:
+def get_template(template_name: str) -> dict | None:
     """Return a single policy template or None."""
     return _load_templates().get(template_name)
 
@@ -96,10 +97,10 @@ def infer_template(layer: str, tier: str) -> str:
 def apply_template(
     table_fqn: str,
     template_name: str,
-    partition_column: Optional[str] = "partition_date",
-    partition_filter_days: Optional[int] = None,
-    sort_columns: Optional[list[str]] = None,
-    glue_job_name: Optional[str] = None,
+    partition_column: str | None = "partition_date",
+    partition_filter_days: int | None = None,
+    sort_columns: list[str] | None = None,
+    glue_job_name: str | None = None,
     dry_run: bool = False,
 ) -> bool:
     """
@@ -200,14 +201,14 @@ def _delete_hk_config(table_fqn: str, dry_run: bool = False) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _esc(value: str) -> str:
     return str(value).replace("'", "''")
 
 
-def _to_sql_array(items: Optional[list[str]]) -> str:
+def _to_sql_array(items: list[str] | None) -> str:
     """Convert a Python list to a SQL ARRAY literal, or NULL."""
     if not items:
         return "NULL"

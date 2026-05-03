@@ -2,12 +2,12 @@
 Unit tests for compaction strategy SQL/param builders and dynamic router.
 No AWS required.
 """
-import pytest
+from engine.operations.dynamic_router import route
 from engine.strategies.binpack import build_optimize_sql, estimate_output_files
-from engine.strategies.sort import build_glue_params as sort_params, recommend_num_workers as sort_workers
-from engine.strategies.zorder import build_glue_params as zorder_params, recommend_num_workers as zorder_workers
-from engine.operations.dynamic_router import route, WORKER_THRESHOLDS
-
+from engine.strategies.sort import build_glue_params as sort_params
+from engine.strategies.sort import recommend_num_workers as sort_workers
+from engine.strategies.zorder import build_glue_params as zorder_params
+from engine.strategies.zorder import recommend_num_workers as zorder_workers
 
 # ── binpack SQL builder ───────────────────────────────────────────────────────
 

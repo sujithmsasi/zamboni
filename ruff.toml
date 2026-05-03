@@ -1,0 +1,27 @@
+# Zamboni — Ruff linter configuration
+# Matches the org CI pipeline settings
+
+line-length = 120
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "UP007", # use X | Y instead of Optional[X] (keep Optional for clarity)
+    "UP006", # use type instead of Type (keep for Python 3.11 compat)
+]
+
+[lint.per-file-ignores]
+"tests/*" = [
+    "F401",  # unused imports in tests are sometimes intentional
+]
+"app/pages/*" = [
+    "E402",  # module level import not at top (Streamlit pages set_page_config first)
+]
+"app/Home.py" = ["E402"]

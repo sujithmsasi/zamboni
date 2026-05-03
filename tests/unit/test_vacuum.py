@@ -2,10 +2,9 @@
 Unit tests for vacuum SQL generation and safety guardrails.
 No AWS required.
 """
-import pytest
-from unittest.mock import patch, MagicMock
-from config.settings import SNAPSHOT_MIN_FLOOR, ORPHAN_MIN_RETENTION_HOURS
+from unittest.mock import patch
 
+from config.settings import ORPHAN_MIN_RETENTION_HOURS, SNAPSHOT_MIN_FLOOR
 
 # ── Snapshot floor enforcement ────────────────────────────────────────────────
 
@@ -19,8 +18,8 @@ def test_orphan_min_retention_constant():
 
 def test_vacuum_skips_when_at_floor():
     """Vacuum should skip if snapshot_count <= min_to_keep."""
-    from engine.operations.vacuum import run_expire_snapshots
     from engine.core.health_checker import HealthResult
+    from engine.operations.vacuum import run_expire_snapshots
 
     health = HealthResult(
         table_fqn="glue_catalog.test_db.test_table",
@@ -45,8 +44,8 @@ def test_vacuum_skips_when_at_floor():
 
 
 def test_vacuum_skips_when_exactly_at_floor():
-    from engine.operations.vacuum import run_expire_snapshots
     from engine.core.health_checker import HealthResult
+    from engine.operations.vacuum import run_expire_snapshots
 
     health = HealthResult(
         table_fqn="glue_catalog.test_db.test_table",

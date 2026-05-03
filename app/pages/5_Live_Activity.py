@@ -3,16 +3,15 @@ Zamboni — Live Activity Monitor
 Real-time engine activity with auto-refresh.
 Shows currently running and recently completed operations.
 """
-import streamlit as st
-import pandas as pd
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+import streamlit as st
+
+from app.components.athena_runner import cached_read_sql
 from app.components.auth import check_login
 from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
-from app.components.athena_runner import cached_read_sql
 from app.components.status_badge import status as status_badge
-
 from config.settings import EXECUTION_LOG_TABLE
 
 st.set_page_config(page_title="Zamboni — Live Activity", page_icon="🔴", layout="wide")
@@ -25,7 +24,7 @@ st.title("🔴 Live Activity Monitor")
 # ── Auto-refresh ───────────────────────────────────────────────────────────────
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
-    st.caption(f"Last updated: {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}")
+    st.caption(f"Last updated: {datetime.now(UTC).strftime('%H:%M:%S UTC')}")
 with col2:
     auto_refresh = st.toggle("Auto-refresh (30s)", value=False)
 with col3:
@@ -72,8 +71,10 @@ with col2:
     status_filter = st.selectbox("Status", ["All", "SUCCESS", "FAILURE", "SKIPPED", "DRY_RUN"], key="la_status")
 
 conditions = ["execution_date = CURRENT_DATE"]
-if engine_filter != "All": conditions.append(f"engine = '{engine_filter}'")
-if status_filter != "All": conditions.append(f"status = '{status_filter}'")
+if engine_filter != "All":
+    conditions.append(f"engine = '{engine_filter}'")
+if status_filter != "All":
+    conditions.append(f"status = '{status_filter}'")
 where = "WHERE " + " AND ".join(conditions)
 
 recent_sql = f"""

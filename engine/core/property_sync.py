@@ -10,8 +10,7 @@ ALTER at runtime.
 Backward compatible — gracefully handles missing properties_synced column
 (treats as null/false) and missing last_execution_id field.
 """
-from typing import Optional
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine.utils.logger import get_logger
 
@@ -108,7 +107,7 @@ def mark_properties_synced(
     sql = f"""
         UPDATE {STREAM_REGISTRY_TABLE}
         SET properties_synced = true,
-            updated_at        = TIMESTAMP '{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}'
+            updated_at        = TIMESTAMP '{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}'
         WHERE table_fqn = '{table_fqn}'
     """
     if dry_run:

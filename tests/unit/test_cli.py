@@ -1,9 +1,7 @@
 """
 Unit tests for CLI tools — pure logic only, no AWS required.
 """
-import pytest
 from click.testing import CliRunner
-
 
 # ── register helpers ──────────────────────────────────────────────────────────
 

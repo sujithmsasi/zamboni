@@ -18,9 +18,10 @@ The execution_id is stored in:
 Backward compatible -- silently no-ops if last_execution_id column
 does not exist in older environments.
 """
+from __future__ import annotations
+
 import hashlib
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from engine.utils.logger import get_logger
 
@@ -31,7 +32,7 @@ def build_execution_id(
     run_id:    str,
     table_fqn: str,
     operation: str,
-    window_id: Optional[str] = None,
+    window_id: str | None = None,
 ) -> str:
     """
     Build a deterministic execution_id from logical operation identity.
@@ -52,7 +53,7 @@ def build_execution_id(
         Deterministic SHA1-based execution ID, e.g.
         "exec_a1b2c3d4e5f6_finance_staging_compaction_20260427"
     """
-    win = window_id or datetime.now(timezone.utc).strftime("%Y%m%d")
+    win = window_id or datetime.now(UTC).strftime("%Y%m%d")
     # run_id intentionally excluded — hash must represent logical operation
     # identity (table+operation+window) so two concurrent engine invocations
     # for the same table produce the same execution_id and dedupe correctly.
@@ -110,7 +111,7 @@ def mark_executed(
     sql = f"""
         UPDATE {STREAM_REGISTRY_TABLE}
         SET last_execution_id = '{execution_id}',
-            updated_at        = TIMESTAMP '{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}'
+            updated_at        = TIMESTAMP '{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}'
         WHERE table_fqn = '{table_fqn}'
     """
     if dry_run:
@@ -138,4 +139,4 @@ def get_window_id() -> str:
     For now, returns the date string. Could be extended to consider
     upstream batch timestamps, EventBridge invocation ID, etc.
     """
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")

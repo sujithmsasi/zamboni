@@ -2,15 +2,16 @@
 Zamboni — Non-Prod Lifecycle Manager
 View tables by lifecycle state, submit exemptions, view deletion history.
 """
-import streamlit as st
-import pandas as pd
+from datetime import UTC
 
+import streamlit as st
+
+from app.components.athena_runner import cached_read_sql, execute_write
 from app.components.auth import check_login
 from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
-from app.components.athena_runner import cached_read_sql, execute_write
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import lifecycle as lifecycle_badge
-
 from config.settings import NONPROD_REGISTRY_TABLE
 
 st.set_page_config(page_title="Zamboni — Non-Prod Lifecycle", page_icon="🗑️", layout="wide")
@@ -128,14 +129,15 @@ with tab2:
                         key="np_exempt_reason",
                     )
                     dry_note = "⚠️ Dry Run ON — no changes will be written." if is_dry_run() else ""
-                    if dry_note: st.warning(dry_note)
+                    if dry_note:
+                        st.warning(dry_note)
 
                     if st.button("🛡️ Submit Exemption", type="primary"):
                         if not reason:
                             st.error("Please provide a business reason.")
                         else:
-                            from datetime import datetime, timezone
-                            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                            from datetime import datetime
+                            now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                             update_sql = f"""
                                 UPDATE {NONPROD_REGISTRY_TABLE}
                                 SET lifecycle_state      = 'ACTIVE',

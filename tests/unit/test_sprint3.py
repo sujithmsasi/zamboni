@@ -3,11 +3,10 @@ Sprint 3 gap closure tests.
 Covers: activity signals (H5), deploy script existence (M3).
 """
 import os
-import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
-import pandas as pd
+from datetime import UTC, datetime, timedelta, timezone
+from unittest.mock import patch
 
+import pandas as pd
 
 # ── H5: Activity signals ──────────────────────────────────────────────────────
 
@@ -16,7 +15,7 @@ class TestActivitySignals:
     def test_signals_with_glue_fallback(self):
         """When CloudTrail is not configured, use Glue CreateTime as fallback."""
         from engine.monitoring.activity_scanner import get_activity_signals
-        created = datetime.now(timezone.utc) - timedelta(days=45)
+        created = datetime.now(UTC) - timedelta(days=45)
 
         with patch("engine.monitoring.activity_scanner.CLOUDTRAIL_TABLE", ""):
             signals = get_activity_signals(
@@ -50,12 +49,12 @@ class TestActivitySignals:
     def test_days_since_activity_calculation(self):
         """days_since_activity should be accurate to the day."""
         from engine.monitoring.activity_scanner import _days_since
-        ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
+        ten_days_ago = datetime.now(UTC) - timedelta(days=10)
         assert _days_since(ten_days_ago) == 10
 
     def test_days_since_zero_for_now(self):
         from engine.monitoring.activity_scanner import _days_since
-        just_now = datetime.now(timezone.utc) - timedelta(minutes=30)
+        just_now = datetime.now(UTC) - timedelta(minutes=30)
         assert _days_since(just_now) == 0
 
     def test_parse_ts_string_iso(self):
@@ -81,8 +80,8 @@ class TestActivitySignals:
         """With CloudTrail configured, query Athena for both signals."""
         from engine.monitoring.activity_scanner import get_activity_signals
 
-        last_query = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
-        last_write = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        last_query = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+        last_write = (datetime.now(UTC) - timedelta(days=3)).isoformat()
 
         query_df = pd.DataFrame([{"last_query_at": last_query}])
         write_df = pd.DataFrame([{"last_write_at": last_write}])
@@ -114,7 +113,7 @@ class TestActivitySignals:
     def test_cloudtrail_falls_back_on_athena_error(self):
         """If CloudTrail Athena query fails, falls back to Glue CreateTime."""
         from engine.monitoring.activity_scanner import get_activity_signals
-        created = datetime.now(timezone.utc) - timedelta(days=20)
+        created = datetime.now(UTC) - timedelta(days=20)
 
         with patch("engine.monitoring.activity_scanner.CLOUDTRAIL_TABLE",
                    "glue_catalog.logs_db.cloudtrail"), \
@@ -149,8 +148,8 @@ class TestActivitySignals:
 
         # last_query_at = 10 days ago, last_write_at = 3 days ago
         # days_since_activity should be 3 (write is more recent)
-        query_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-        write_ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        query_ts = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+        write_ts = (datetime.now(UTC) - timedelta(days=3)).isoformat()
 
         query_df = pd.DataFrame([{"last_query_at": query_ts}])
         write_df = pd.DataFrame([{"last_write_at": write_ts}])

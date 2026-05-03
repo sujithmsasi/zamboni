@@ -2,21 +2,20 @@
 Zamboni — Table Registration
 Browse Glue catalog, multi-select tables, register with template inference.
 """
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
-from app.components.auth import check_login, current_user
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.athena_runner import cached_read_registry
+from app.components.auth import check_login, current_user
 from app.components.filters import domain_filter
-from app.components.status_badge import yes_no, layer as layer_badge
-
-from config.settings import VALID_LAYERS, VALID_TIERS, VALID_ENVIRONMENTS, STREAM_REGISTRY_TABLE
+from app.components.header import render as render_header
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
+from app.components.status_badge import yes_no
+from config.settings import STREAM_REGISTRY_TABLE, VALID_ENVIRONMENTS, VALID_LAYERS, VALID_TIERS
 from engine.core import registry
-from engine.core.config import infer_template, apply_template
+from engine.core.config import apply_template, infer_template
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
-
 
 st.set_page_config(page_title="Zamboni — Table Registration", page_icon="➕", layout="wide")
 

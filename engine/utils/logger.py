@@ -4,7 +4,9 @@ Outputs JSON to stdout — captured by CloudWatch Logs Agent on EC2.
 Usage: log = get_logger(__name__)
 """
 import logging
+
 import structlog
+
 from config.settings import LOG_LEVEL
 
 _configured = False

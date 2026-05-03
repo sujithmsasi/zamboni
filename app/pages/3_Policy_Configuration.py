@@ -5,16 +5,15 @@ Apply policy templates, override individual fields, bulk apply by domain/layer.
 All writes honour the sidebar dry-run toggle.
 """
 import streamlit as st
-import pandas as pd
 
+from app.components.athena_runner import cached_read_registry, clear_caches
 from app.components.auth import check_login
-from app.components.header import render as render_header
-from app.components.sidebar import render as render_sidebar, is_dry_run
 from app.components.filters import domain_filter, layer_filter, tier_filter
-from app.components.athena_runner import cached_read_registry, execute_write, clear_caches
-
-from config.settings import STREAM_REGISTRY_TABLE, HK_CONFIG_TABLE
-from engine.core.config import get_policy_templates, infer_template
+from app.components.header import render as render_header
+from app.components.sidebar import is_dry_run
+from app.components.sidebar import render as render_sidebar
+from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.config import get_policy_templates
 
 st.set_page_config(page_title="Zamboni — Policy Config", page_icon="⚙️", layout="wide")
 check_login()
@@ -29,14 +28,20 @@ tab1, tab2, tab3 = st.tabs(["📋 View Configs", "✏️ Edit Single Table", "�
 # ── Tab 1: View Configs ───────────────────────────────────────────────────────
 with tab1:
     c1, c2, c3 = st.columns(3)
-    with c1: d = domain_filter(key="pc_domain")
-    with c2: l = layer_filter(key="pc_layer")
-    with c3: t = tier_filter(key="pc_tier")
+    with c1:
+        d = domain_filter(key="pc_domain")
+    with c2:
+        layer_sel = layer_filter(key="pc_layer")
+    with c3:
+        t = tier_filter(key="pc_tier")
 
     conditions = ["r.table_format = 'iceberg'", "r.hk_enabled = true"]
-    if d: conditions.append(f"r.domain = '{d}'")
-    if l: conditions.append(f"r.layer = '{l}'")
-    if t: conditions.append(f"r.tier = '{t}'")
+    if d:
+        conditions.append(f"r.domain = '{d}'")
+    if layer_sel:
+        conditions.append(f"r.layer = '{layer_sel}'")
+    if t:
+        conditions.append(f"r.tier = '{t}'")
     where = "WHERE " + " AND ".join(conditions)
 
     sql = f"""
@@ -184,9 +189,12 @@ with tab3:
 
     templates = get_policy_templates()
     col1, col2, col3 = st.columns(3)
-    with col1: bulk_domain = domain_filter(include_all=False, key="bulk_domain")
-    with col2: bulk_layer  = layer_filter(include_all=False, key="bulk_layer")
-    with col3: bulk_tmpl   = st.selectbox("Template", list(templates.keys()), key="bulk_tmpl")
+    with col1:
+        bulk_domain = domain_filter(include_all=False, key="bulk_domain")
+    with col2:
+        bulk_layer  = layer_filter(include_all=False, key="bulk_layer")
+    with col3:
+        bulk_tmpl   = st.selectbox("Template", list(templates.keys()), key="bulk_tmpl")
 
     # Show template preview
     if bulk_tmpl:
@@ -266,7 +274,8 @@ with tab3:
                     )
                 else:
                     st.warning(f"Applied to {succeeded} tables, {failed} failed.")
-                    for err in errors[:5]:
+                    for err in errors[:
+                        5]:
                         st.error(err)
 
         except Exception as e:

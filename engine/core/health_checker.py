@@ -3,8 +3,9 @@ Zamboni — Health Checker
 Queries Iceberg metadata tables ($snapshots, $files, $manifests)
 to assess table health and determine which operations are needed.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
 
 from engine.utils.athena_client import read_sql
 from engine.utils.logger import get_logger
@@ -21,7 +22,7 @@ class HealthResult:
     # Snapshot health
     snapshot_count:         int   = 0
     oldest_snapshot_days:   int   = 0
-    latest_snapshot_ts:     Optional[str] = None
+    latest_snapshot_ts:     str | None = None
 
     # File health
     total_files:            int   = 0
@@ -40,7 +41,7 @@ class HealthResult:
 
     # Raw check success
     check_success:          bool  = True
-    check_error:            Optional[str] = None
+    check_error:            str | None = None
 
 
 def check(
