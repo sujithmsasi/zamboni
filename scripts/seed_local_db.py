@@ -51,7 +51,14 @@ CREATE TABLE IF NOT EXISTS domain_registry (
     ci_number               TEXT,
     notes                   TEXT,
     created_at              TEXT,
-    updated_at              TEXT
+    updated_at              TEXT,
+    registered_at           TEXT,
+    display_name            TEXT,
+    owner_name              TEXT,
+    team_name               TEXT,
+    description             TEXT,
+    archive_duration_days   INTEGER DEFAULT 365,
+    auto_delete_after_days  INTEGER DEFAULT 120
 )""",
 
 "stream_registry": """

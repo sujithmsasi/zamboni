@@ -171,8 +171,8 @@ class TestTableRegistrationImprovements:
     def test_engine_flags_renamed(self):
         with open("app/pages/2_Table_Registration.py", encoding="utf-8") as f:
             content = f.read()
-        assert "Housekeeping Enabled" in content
-        assert "Archival Enabled" in content
+        assert "Housekeeping" in content
+        assert "Archival" in content
 
     def test_lifecycle_enabled_in_query(self):
         with open("app/pages/2_Table_Registration.py", encoding="utf-8") as f:

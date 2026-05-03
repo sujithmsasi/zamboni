@@ -36,7 +36,7 @@ def _get_domain_list() -> list[str]:
     """Fetch active domains from domain_registry."""
     try:
         from config.settings import DOMAIN_REGISTRY_TABLE
-        sql = f"SELECT domain_name FROM {DOMAIN_REGISTRY_TABLE} WHERE is_active = true ORDER BY domain_name"
+        sql = f"SELECT domain_name FROM {DOMAIN_REGISTRY_TABLE} WHERE is_active = 1 ORDER BY domain_name"
         df  = cached_read_registry(sql)
         return df["domain_name"].tolist()
     except Exception:
