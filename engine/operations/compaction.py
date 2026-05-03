@@ -27,11 +27,12 @@ COMPACTION_GLUE_JOB = os.getenv("COMPACTION_GLUE_JOB_NAME", "zamboni-compaction"
 
 
 def run_compaction(
-    table_fqn: str,
-    hk_config: dict,
-    health: HealthResult,
-    tier: str,
-    dry_run: bool = False,
+    table_fqn:  str,
+    hk_config:  dict,
+    health:     HealthResult,
+    tier:       str,
+    dry_run:    bool       = False,
+    table_row:  dict | None = None,
 ) -> dict:
     """
     Run compaction for a table using the strategy defined in hk_config.
@@ -52,8 +53,13 @@ def run_compaction(
     target_mb   = hk_config.get("compaction_target_file_size_mb", 128)
     part_col    = hk_config.get("partition_column")
     part_days   = hk_config.get("partition_filter_days")
-    # v2 B.7: prefer processing_cadence (drives lookback window) when set
-    cadence     = hk_config.get("processing_cadence")
+    # v2 B.7 + Sprint 7 6.2: processing_cadence lives in stream_registry
+    # (table_row), not hk_config. Read from hk_config first for backward
+    # compat, then fall through to table_row which is the authoritative source.
+    cadence = (
+        hk_config.get("processing_cadence")
+        or (table_row.get("processing_cadence") if table_row else None)
+    )
 
     # Build partition filter if configured. Cadence-driven window takes
     # priority; legacy partition_filter_days is the fallback.

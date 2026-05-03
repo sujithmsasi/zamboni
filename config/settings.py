@@ -107,6 +107,10 @@ NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 #   insert  — Per-row Athena INSERT (legacy, slow)
 #   both    — Try Parquet first, fall back to INSERT on failure
 #   auto    — (default) Use Parquet if pandas/pyarrow available, else INSERT
+# Athena query timeout -- queries exceeding this are cancelled automatically
+# Set to 0 to disable. Recommended: 1800 (30 min) for prod.
+ATHENA_QUERY_TIMEOUT_SECONDS: int = int(os.getenv("ATHENA_QUERY_TIMEOUT_SECONDS", "1800"))
+
 EXECUTION_LOG_MODE = os.getenv("EXECUTION_LOG_MODE", "auto").lower()
 
 

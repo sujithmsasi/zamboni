@@ -51,10 +51,36 @@ from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.engines.base import BaseEngine
 from engine.monitoring.metrics import publish_engine_run
 from engine.operations import compaction, vacuum
+from engine.utils.athena_client import AthenaQueryTimeout
 from engine.utils.glue_client import is_upstream_job_complete
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# ── Structured skip/failure reasons (Sprint 7 -- 6.4) ───────────────────────
+# All skip/failure reasons are defined here so callers can match strings
+# without hard-coding. These are written to execution_log.skip_reason.
+
+class SkipReason:
+    """Constants for structured skip reasons in execution_log."""
+    NOT_DUE          = "SKIP_NOT_DUE"
+    UPSTREAM_PENDING = "SKIP_UPSTREAM_PENDING"
+    OUTSIDE_WINDOW   = "SKIP_OUTSIDE_WINDOW"
+    BLACKOUT         = "SKIP_BLACKOUT"
+    CIRCUIT_OPEN     = "SKIP_CIRCUIT_OPEN"
+    HEALTHY          = "SKIP_HEALTHY"
+    NO_CONFIG        = "SKIP_NO_CONFIG"
+    DUPLICATE        = "SKIP_DUPLICATE"
+
+
+class FailureReason:
+    """Constants for structured failure reasons in execution_log."""
+    TIMEOUT            = "FAILURE_TIMEOUT"
+    BACKPRESSURE       = "FAILURE_BACKPRESSURE_TIMEOUT"
+    SAFETY_BLOCKED     = "FAILURE_SAFETY_BLOCKED"
+    APPROVAL_REQUIRED  = "FAILURE_APPROVAL_REQUIRED"
+    OPERATION_ERROR    = "FAILURE_OPERATION_ERROR"
+
 
 # ── run_frequency thresholds ──────────────────────────────────────────────────
 # Hours of buffer added so a 24h "daily" window isn't broken by a 25-min drift
@@ -305,7 +331,23 @@ class HKEngine(BaseEngine):
         # ── Health check ──────────────────────────────────────────────────────
         # Real Athena workgroup name for backpressure + health checks (Gap 2)
         workgroup = _TIER_TO_WORKGROUP.get(tier, "zamboni-standard")
-        health    = health_checker.check(fqn, hk_config, workgroup=workgroup)
+
+        # Fetch last orphan cleanup timestamp for cadence check (6.1)
+        try:
+            last_orphan = execution_log.get_last_run(
+                fqn, operation="orphan_cleanup", only_success=True
+            )
+            last_orphan_ts = (
+                last_orphan.get("completed_at") if last_orphan else None
+            )
+        except Exception:
+            last_orphan_ts = None
+
+        health = health_checker.check(
+            fqn, hk_config,
+            workgroup=workgroup,
+            last_orphan_cleanup_at=last_orphan_ts,
+        )
 
         if not health.check_success:
             self._write_log(
@@ -346,9 +388,16 @@ class HKEngine(BaseEngine):
                 try:
                     compaction_result = compaction.run_compaction(
                         table_fqn=fqn, hk_config=hk_config,
-                        health=health, tier=tier, dry_run=table_dry_run,
+                        health=health, tier=tier,
+                        dry_run=table_dry_run, table_row=table_row,
                     )
                     op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
+                except AthenaQueryTimeout as te:
+                    op_errors.append(f"compaction: {te}")
+                    compaction_result = {}
+                    op_status = FailureReason.TIMEOUT
+                    log.error("hk_engine.compaction_timeout",
+                              table_fqn=fqn, elapsed_s=te.elapsed_s)
                 except Exception as e:
                     op_errors.append(f"compaction: {e}")
                     compaction_result = {}
@@ -388,6 +437,12 @@ class HKEngine(BaseEngine):
                         health=health, tier=tier, dry_run=table_dry_run,
                     )
                     op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
+                except AthenaQueryTimeout as te:
+                    op_errors.append(f"vacuum: {te}")
+                    vacuum_result = {}
+                    op_status = FailureReason.TIMEOUT
+                    log.error("hk_engine.vacuum_timeout",
+                              table_fqn=fqn, elapsed_s=te.elapsed_s)
                 except Exception as e:
                     op_errors.append(f"vacuum: {e}")
                     vacuum_result = {}
