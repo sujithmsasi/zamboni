@@ -14,6 +14,7 @@ from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import yes_no
 from config.settings import STREAM_REGISTRY_TABLE, VALID_ENVIRONMENTS, VALID_LAYERS, VALID_TIERS
 from engine.core import registry
+from engine.core.audit import AuditAction, AuditEvent, audit
 from engine.core.config import apply_template, infer_template
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 
@@ -146,6 +147,18 @@ with tab_browse:
                                         st.error(f"❌ {fqn}: {e}")
 
                                 if successes:
+                                    audit(AuditEvent(
+                                        actor=current_user(),
+                                        action_type=AuditAction.TABLE_REGISTER,
+                                        page_source="2_Table_Registration",
+                                        target_type="table",
+                                        target_id=f"{domain}/{selected_db}",
+                                        domain=domain, environment=environment,
+                                        dry_run=is_dry_run(),
+                                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                        reason=notes,
+                                        after_value=f"layer={layer},tier={tier},template={template},count={successes}",
+                                    ))
                                     st.success(
                                         f"✅ Registered {successes} table(s) with template `{template}`."
                                     )
@@ -173,7 +186,12 @@ with tab_registered:
         if df.empty:
             st.info("No registered tables match your filter.")
         else:
-            df["hk_enabled"]      = df["hk_enabled"].apply(yes_no)
+            df["hk_enabled"]       = df["hk_enabled"].apply(yes_no)
+            df.rename(columns={
+                "hk_enabled":       "Housekeeping Enabled",
+                "archive_enabled":  "Archival Enabled",
+                "lifecycle_enabled":"Lifecycle Enabled",
+            }, inplace=True, errors="ignore")
             df["archive_enabled"] = df["archive_enabled"].apply(yes_no)
             df["registered_at"]   = df["registered_at"].astype(str).str[:19]
             st.dataframe(df, use_container_width=True, hide_index=True)

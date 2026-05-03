@@ -1,0 +1,68 @@
+{
+  "_comment": "Zamboni Platform Settings. Edited via the Settings page (app/pages/11_Settings.py). Do not edit manually in production -- use the UI or CLI to ensure audit trail is maintained.",
+  "execution_log_retention_days": 90,
+  "audit_log_retention_days": 365,
+  "default_dry_run": {
+    "prod": true,
+    "preprod": true,
+    "dev": true,
+    "test": true
+  },
+  "live_activity_refresh_interval_seconds": 30,
+  "budget_alert_threshold_usd_monthly": 0,
+  "require_reason_in_preprod": true,
+  "require_reason_in_dev": false,
+  "require_ticket_in_prod": false,
+  "approval_required_for": {
+    "drop_table": false,
+    "bulk_hk_enable": false,
+    "promote_to_live": false
+  },
+  "backup_stale_name_patterns": [
+    "_bkp",
+    "_backup",
+    "_bak",
+    "_copy",
+    "_temp",
+    "_tmp",
+    "_old",
+    "_v\\d+$",
+    "_\\d{8}$",
+    "_\\d{4}_\\d{2}_\\d{2}$"
+  ],
+  "notification_defaults": {
+    "greenzone_notify_days_before_drop": 14,
+    "pending_drop_final_warning_hours": 48,
+    "weekly_digest_enabled": false,
+    "digest_day_of_week": "monday",
+    "digest_hour_utc": 6,
+    "digest_sender_status": "phase_2_2_pending"
+  },
+  "escalation_matrix": {
+    "default": {
+      "primary_owner_email": "",
+      "escalation_email": "",
+      "zamboni_owner_email": "",
+      "notify_sns_topic": "",
+      "severity_rules": {
+        "FAILURE_TIMEOUT": "high",
+        "FAILURE_BACKPRESSURE": "medium",
+        "FAILURE_SAFETY_BLOCKED": "critical",
+        "SKIP_CIRCUIT_OPEN": "high"
+      }
+    }
+  },
+  "teams_enabled": false,
+  "teams_webhook_url": "",
+  "teams_notify_on_actions": [
+    "hk_enable",
+    "hk_disable",
+    "dry_run_promote",
+    "circuit_breaker_reenable",
+    "lifecycle_exemption"
+  ],
+  "cost_explorer_enabled": false,
+  "cost_explorer_cache_hours": 24,
+  "cost_explorer_tag_key": "zamboni:managed",
+  "cost_explorer_tag_value": "true"
+}

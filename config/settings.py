@@ -71,6 +71,7 @@ NONPROD_REGISTRY_TABLE = os.getenv(
     "NONPROD_REGISTRY_TABLE",
     "glue_catalog.zamboni_catalog.nonprod_registry"
 )
+AUDIT_LOG_TABLE = os.getenv("AUDIT_LOG_TABLE", "glue_catalog.zamboni_catalog.audit_log")
 
 # ── S3 ────────────────────────────────────────────────────────────────────────
 STAGING_BUCKET          = _req("STAGING_BUCKET",          "s3://mock-staging/")

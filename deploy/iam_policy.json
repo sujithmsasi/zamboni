@@ -1,9 +1,7 @@
 {
   "_comment": "Zamboni EC2 Instance Role Policy. Attach to the IAM role assigned to both dev and prod EC2 instances. Replace ACCOUNT_ID and bucket names with actual values.",
-
   "Version": "2012-10-17",
   "Statement": [
-
     {
       "Sid": "AthenaQueryExecution",
       "Effect": "Allow",
@@ -24,7 +22,6 @@
         "arn:aws:athena:us-west-2:ACCOUNT_ID:workgroup/zamboni-app"
       ]
     },
-
     {
       "Sid": "S3AthenaResults",
       "Effect": "Allow",
@@ -39,7 +36,6 @@
         "arn:aws:s3:::your-athena-results-bucket/*"
       ]
     },
-
     {
       "Sid": "S3StagingReadWrite",
       "Effect": "Allow",
@@ -57,7 +53,6 @@
         "arn:aws:s3:::your-staging-bucket/*"
       ]
     },
-
     {
       "Sid": "S3ArchiveWrite",
       "Effect": "Allow",
@@ -74,7 +69,6 @@
         "arn:aws:s3:::your-archive-bucket/*"
       ]
     },
-
     {
       "Sid": "S3ZamboniMetadata",
       "Effect": "Allow",
@@ -90,7 +84,6 @@
         "arn:aws:s3:::your-zamboni-metadata-bucket/*"
       ]
     },
-
     {
       "Sid": "GlueCatalogRead",
       "Effect": "Allow",
@@ -111,7 +104,6 @@
         "arn:aws:glue:us-west-2:ACCOUNT_ID:job/*"
       ]
     },
-
     {
       "Sid": "GlueCatalogDropTableNonProdOnly",
       "Effect": "Allow",
@@ -120,7 +112,12 @@
       ],
       "Condition": {
         "StringLike": {
-          "glue:database": ["*_preprod", "*_dev", "*_test", "*_uat"]
+          "glue:database": [
+            "*_preprod",
+            "*_dev",
+            "*_test",
+            "*_uat"
+          ]
         }
       },
       "Resource": [
@@ -135,7 +132,6 @@
         "arn:aws:glue:us-west-2:ACCOUNT_ID:table/*_uat/*"
       ]
     },
-
     {
       "Sid": "SNSPublish",
       "Effect": "Allow",
@@ -147,7 +143,6 @@
         "arn:aws:sns:us-west-2:ACCOUNT_ID:zamboni-greenzone"
       ]
     },
-
     {
       "Sid": "CloudWatchLogs",
       "Effect": "Allow",
@@ -161,7 +156,6 @@
         "arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/zamboni/*"
       ]
     },
-
     {
       "Sid": "CloudWatchMetrics",
       "Effect": "Allow",
@@ -175,7 +169,6 @@
         }
       }
     },
-
     {
       "Sid": "SSMParameterRead",
       "Effect": "Allow",
@@ -188,7 +181,6 @@
         "arn:aws:ssm:us-west-2:ACCOUNT_ID:parameter/zamboni/*"
       ]
     },
-
     {
       "Sid": "CodeDeployAgent",
       "Effect": "Allow",
@@ -199,7 +191,20 @@
       "Resource": [
         "arn:aws:s3:::aws-codedeploy-us-west-2/*"
       ]
+    },
+    {
+      "Sid": "CostExplorerReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ce:GetCostAndUsage",
+        "ce:GetCostForecast"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
     }
-
   ]
 }

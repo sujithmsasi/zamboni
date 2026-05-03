@@ -12,6 +12,7 @@ from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import status as status_badge
 from config.settings import EXECUTION_LOG_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 
 st.set_page_config(page_title="Zamboni — Execution Log", page_icon="📜", layout="wide")
 check_login()
@@ -30,6 +31,9 @@ with st.expander("🔍 Filters", expanded=True):
         sel_engine = st.selectbox("Engine", ["All", "hk", "archival", "lifecycle"], key="el_engine")
     with col3:
         sel_status = st.selectbox("Status", ["All", "SUCCESS", "FAILURE", "SKIPPED", "DRY_RUN"], key="el_status")
+    with st.columns(1)[0]:
+        hide_dry_run = st.checkbox("Hide DRY_RUN rows (default)", value=True, key="el_hide_dryrun",
+                                    help="DRY_RUN rows are hidden by default to focus on real operations.")
     with col4:
         sel_days = st.selectbox("Time Range", ["Today", "7 days", "14 days", "30 days"], key="el_days")
 
@@ -48,6 +52,8 @@ if sel_engine != "All":
     conditions.append(f"engine = '{sel_engine}'")
 if sel_status != "All":
     conditions.append(f"status = '{sel_status}'")
+elif hide_dry_run:
+    conditions.append("status != 'DRY_RUN'")
 
 where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -69,6 +75,10 @@ with st.spinner("Loading execution log..."):
     try:
         df = cached_read_sql(sql)
         st.caption(f"{len(df)} records (max 500 shown)")
+        # ── Cost per run ───────────────────────────────────────────────
+        if "bytes_scanned" in df.columns:
+            df["athena_cost_usd"] = (df["bytes_scanned"].fillna(0) / 1e12 * 5.0).round(6)
+            df["athena_cost_usd"] = df["athena_cost_usd"].apply(lambda x: f"${x:.5f}")
 
         if df.empty:
             st.info("No records found with the selected filters.")
@@ -120,3 +130,50 @@ with st.spinner("Loading execution log..."):
 
     except Exception as e:
         st.error(f"Query failed: {e}")
+
+
+# ── SLA Breach Tracker ────────────────────────────────────────────────────────
+st.divider()
+st.subheader("⚠️ SLA Breach Tracker")
+st.caption(
+    "Tables expected to run based on run_frequency but with no SUCCESS "
+    "in the expected window."
+)
+try:
+    from app.components.athena_runner import cached_read_registry
+    from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+    sla_sql = f"""
+        SELECT r.table_fqn, r.domain, c.run_frequency,
+               MAX(e.completed_at)                                  AS last_success,
+               DATE_DIFF('hour', MAX(e.completed_at), NOW())        AS hours_since_success
+        FROM {STREAM_REGISTRY_TABLE} r
+        JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn
+        LEFT JOIN {EXECUTION_LOG_TABLE} e
+               ON r.table_fqn = e.table_fqn
+              AND e.operation  = 'hk_run'
+              AND e.status     = 'SUCCESS'
+              AND e.execution_date >= CURRENT_DATE - INTERVAL '30' DAY
+        WHERE r.hk_enabled = true
+          AND r.environment = 'prod'
+        GROUP BY r.table_fqn, r.domain, c.run_frequency
+        HAVING
+            (c.run_frequency = 'daily'   AND (MAX(e.completed_at) IS NULL OR DATE_DIFF('hour', MAX(e.completed_at), NOW()) > 28))
+         OR (c.run_frequency = 'weekly'  AND (MAX(e.completed_at) IS NULL OR DATE_DIFF('hour', MAX(e.completed_at), NOW()) > 200))
+         OR (c.run_frequency = 'monthly' AND (MAX(e.completed_at) IS NULL OR DATE_DIFF('hour', MAX(e.completed_at), NOW()) > 750))
+        ORDER BY hours_since_success DESC NULLS FIRST
+        LIMIT 50
+    """
+    sla_df = cached_read_registry(sla_sql)
+    if not sla_df.empty:
+        st.warning(f"⚠️ {len(sla_df)} tables are overdue for housekeeping.")
+        st.dataframe(sla_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Export SLA Breach List",
+            data=sla_df.to_csv(index=False).encode("utf-8"),
+            file_name="zamboni_sla_breach.csv",
+            mime="text/csv",
+        )
+    else:
+        st.success("✅ No SLA breaches detected.")
+except Exception as sla_e:
+    st.info(f"SLA tracker requires Athena connectivity: {sla_e}")

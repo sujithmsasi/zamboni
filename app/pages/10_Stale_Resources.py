@@ -14,6 +14,7 @@ from app.components.auth import check_login
 from app.components.filters import domain_filter, environment_filter
 from app.components.header import render as render_header
 from app.components.kpi_cards import render_kpi_row
+from app.components.sidebar import is_dry_run
 from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import lifecycle as lifecycle_badge
 from config.settings import (
@@ -21,6 +22,7 @@ from config.settings import (
     NONPROD_REGISTRY_TABLE,
     STREAM_REGISTRY_TABLE,
 )
+from engine.core.audit import AuditAction, AuditEvent, audit
 
 st.set_page_config(page_title="Zamboni — Stale Resources", page_icon="🔎", layout="wide")
 check_login()
@@ -182,13 +184,79 @@ with tab2:
                         unrg_df = pd.DataFrame({"table_fqn": unregistered})
                         st.dataframe(unrg_df, use_container_width=True, hide_index=True, height=300)
 
-                        st.info("Go to **Table Registration** to register these tables.")
                         st.download_button(
                             "⬇️ Export unregistered list",
                             unrg_df.to_csv(index=False),
                             "unregistered_tables.csv",
                             "text/csv",
                         )
+
+                        # ── Bulk Register Flow ────────────────────────────────
+                        st.divider()
+                        st.markdown("#### 🚀 Bulk Register Unregistered Tables")
+                        st.caption(
+                            "Select tables to register with a default policy template. "
+                            "All selected tables will be registered in dry-run mode unless the sidebar toggle is off."
+                        )
+                        from app.components.auth import current_user as _bcu
+                        from config.settings import APP_ENV as _benv
+                        from config.settings import VALID_LAYERS, VALID_TIERS
+                        from engine.core.config import apply_template, infer_template
+
+                        sel_for_bulk = st.multiselect(
+                            "Select tables to bulk-register",
+                            unregistered,
+                            key="sr_bulk_sel",
+                        )
+                        if sel_for_bulk:
+                            bc1, bc2, bc3 = st.columns(3)
+                            with bc1:
+                                b_domain = st.text_input("Domain *", key="sr_bulk_domain")
+                            with bc2:
+                                b_layer = st.selectbox("Layer", VALID_LAYERS, key="sr_bulk_layer")
+                            with bc3:
+                                b_tier = st.selectbox("Tier", VALID_TIERS, index=1, key="sr_bulk_tier")
+
+                            b_template = infer_template(b_layer, b_tier)
+                            st.caption(f"Auto-inferred template: **{b_template}**")
+
+                            if st.button("📥 Register Selected Tables", type="primary", key="sr_bulk_go"):
+                                if not b_domain:
+                                    st.error("Domain is required.")
+                                else:
+                                    from engine.core import registry
+                                    ok_count, fail_count = 0, 0
+                                    for fqn in sel_for_bulk:
+                                        try:
+                                            registry.register_table(
+                                                table_fqn=fqn,
+                                                domain=b_domain,
+                                                layer=b_layer, tier=b_tier,
+                                                environment="prod",
+                                                table_format="iceberg",
+                                                registered_by=f"streamlit:{_bcu()}",
+                                                dry_run=is_dry_run(),
+                                            )
+                                            apply_template(fqn, b_template, dry_run=is_dry_run())
+                                            ok_count += 1
+                                        except Exception as be:
+                                            fail_count += 1
+                                            st.error(f"❌ {fqn}: {be}")
+
+                                    audit(AuditEvent(
+                                        actor=_bcu(),
+                                        action_type=AuditAction.TABLE_REGISTER,
+                                        page_source="10_Stale_Resources",
+                                        target_type="table",
+                                        target_id=f"{b_domain}/{sel_db}",
+                                        domain=b_domain, environment=_benv,
+                                        dry_run=is_dry_run(),
+                                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                        after_value=f"count={ok_count},template={b_template}",
+                                    ))
+                                    if ok_count:
+                                        st.success(f"✅ Registered {ok_count} table(s)"
+                                                   + (" (dry run)" if is_dry_run() else ""))
                     else:
                         st.success(f"✅ All {len(iceberg_tables)} Iceberg tables in `{sel_db}` are registered.")
 

@@ -13,6 +13,7 @@ from app.components.filters import domain_filter, layer_filter
 from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit
 from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.strategies.binpack import build_optimize_sql
 from engine.utils.partition_utils import build_hot_partition_filter
@@ -29,11 +30,11 @@ tab1, tab2 = st.tabs(["🔍 Single Table", "📂 Domain Dry Run"])
 
 # ── Tab 1: Single Table ───────────────────────────────────────────────────────
 with tab1:
-    table_fqn = st.text_input(
-        "Table FQN",
-        placeholder="glue_catalog.finance_db.finance_staging",
-        key="dr_table_fqn",
-    )
+    # Cascading domain → database → table selector (with manual fallback)
+    from app.components.auth import current_user as _cuser
+    from app.components.table_selector import render as _table_selector
+    from config.settings import APP_ENV as _ENV
+    _domain, _db, table_fqn = _table_selector(key_prefix="dr_sel", label="Select Table to Simulate")
 
     if table_fqn and st.button("▶ Run Dry Run", type="primary", key="dr_run"):
         with st.spinner("Running dry run..."):
@@ -118,6 +119,49 @@ with tab1:
                 for name, detail, ok in gates:
                     icon = "✅" if ok else "⚠️"
                     st.markdown(f"{icon} **{name}** — {detail}")
+
+                # ── Copyable SQL ─────────────────────────────────────────────
+                if cfg.get("compaction_strategy") == "binpack":
+                    st.download_button(
+                        "📋 Copy SQL to clipboard",
+                        data=sql_preview,
+                        file_name=f"zamboni_optimize_{table_fqn.split('.')[-1]}.sql",
+                        mime="text/plain",
+                    )
+
+                # ── Promote to Live ───────────────────────────────────────────
+                st.divider()
+                st.markdown("#### 🚀 Promote to Live")
+                st.caption(
+                    "If all gates pass and you are satisfied with the dry-run "
+                    "results, promote this table to a live HK run."
+                )
+                from app.components.reason_form import render_reason_form, validate_and_gate
+                reason, ticket = render_reason_form(
+                    "dry_run_promote", _ENV,
+                    dry_run=False, key_prefix="promote",
+                )
+                if st.button("🚀 Promote to Live Run", type="primary", key="dr_promote"):
+                    vr = validate_and_gate("dry_run_promote", reason, ticket, _ENV, dry_run=False)
+                    if vr.valid:
+                        audit(AuditEvent(
+                            actor=_cuser(),
+                            action_type=AuditAction.DRY_RUN_PROMOTE,
+                            page_source="6_Dry_Run_Viewer",
+                            target_type="table", target_id=table_fqn,
+                            environment=_ENV, dry_run=False,
+                            status="SUCCESS",
+                            reason=reason, ticket_number=ticket,
+                        ))
+                        st.success(
+                            "✅ Promote to live recorded. "
+                            "The next EventBridge trigger will run this table with dry_run=False."
+                        )
+                        st.info(
+                            "Zamboni does not immediately execute a live HK run from the UI. "
+                            "To run immediately: use CLI `python -m engine.scripts.run_hk "
+                            f"--table {table_fqn} --no-dry-run`"
+                        )
 
             except Exception as e:
                 st.error(f"Dry run failed: {e}")

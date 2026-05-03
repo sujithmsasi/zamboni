@@ -13,6 +13,7 @@ from app.components.header import render as render_header
 from app.components.sidebar import is_dry_run
 from app.components.sidebar import render as render_sidebar
 from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit
 from engine.core.config import get_policy_templates
 
 st.set_page_config(page_title="Zamboni — Policy Config", page_icon="⚙️", layout="wide")
@@ -107,7 +108,14 @@ with tab2:
                         orphan = st.number_input(
                             "Orphan Retention Days",
                             value=int(config.get("orphan_file_retention_days") or 2),
-                            min_value=1,
+                            min_value=2,
+                            help="Min 2 days — safety floor to protect in-flight writers.",
+                        )
+                        orphan_cadence = st.number_input(
+                            "Orphan Cleanup Cadence (days)",
+                            value=int(config.get("orphan_cleanup_cadence_days") or 7),
+                            min_value=0,
+                            help="How often to run orphan cleanup. 0 = disabled.",
                         )
                     with col2:
                         strategy = st.selectbox(
@@ -116,6 +124,13 @@ with tab2:
                             index=["binpack", "sort", "zorder"].index(
                                 config.get("compaction_strategy", "binpack")
                             ),
+                        )
+                        sort_order_cols = st.text_input(
+                            "Sort / Z-Order Columns (comma-separated)",
+                            value=config.get("sort_order_cols") or "",
+                            placeholder="col_a, col_b",
+                            help="Required for sort/zorder strategies. "
+                                 "Ignored for binpack.",
                         )
                         target_mb = st.number_input(
                             "Target File Size (MB)",
@@ -131,8 +146,8 @@ with tab2:
                         )
                         run_freq = st.selectbox(
                             "Run Frequency",
-                            ["daily", "weekly", "every_trigger"],
-                            index=["daily", "weekly", "every_trigger"].index(
+                            ["every_trigger", "daily", "weekly", "monthly"],
+                            index=["every_trigger", "daily", "weekly", "monthly"].index(
                                 config.get("run_frequency", "daily")
                             ),
                         )
@@ -154,7 +169,9 @@ with tab2:
                                 "snapshot_retention_days":        snap_days,
                                 "snapshot_min_to_keep":           snap_min,
                                 "orphan_file_retention_days":     orphan,
+                                "orphan_cleanup_cadence_days":    orphan_cadence,
                                 "compaction_strategy":            strategy,
+                                "sort_order_cols":                sort_order_cols,
                                 "compaction_target_file_size_mb": target_mb,
                                 "compaction_engine":              engine_choice,
                                 "run_frequency":                  run_freq,
@@ -168,6 +185,17 @@ with tab2:
                                     dry_run=is_dry_run(),
                                 )
                             clear_caches()
+                            from app.components.auth import current_user as _cu
+                            from config.settings import APP_ENV as _ENV
+                            audit(AuditEvent(
+                                actor=_cu(), action_type=AuditAction.POLICY_CHANGE,
+                                page_source="3_Policy_Configuration",
+                                target_type="table", target_id=table_fqn,
+                                environment=_ENV, dry_run=is_dry_run(),
+                                status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                reason=override_notes,
+                                after_value=str(fields),
+                            ))
                             st.success(
                                 f"✅ Config updated for `{table_fqn}`"
                                 + (" (dry run — no actual changes)" if is_dry_run() else "")

@@ -13,6 +13,7 @@ from app.components.header import render as render_header
 from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import status as status_badge
 from config.settings import EXECUTION_LOG_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 
 st.set_page_config(page_title="Zamboni — Live Activity", page_icon="🔴", layout="wide")
 check_login()

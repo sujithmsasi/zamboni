@@ -105,6 +105,7 @@ run_sql_file "$SQL_DIR/create_hk_config.sql"          "hk_config"
 run_sql_file "$SQL_DIR/create_execution_log.sql"      "execution_log"
 run_sql_file "$SQL_DIR/create_nonprod_registry.sql"   "nonprod_registry"
 run_sql_file "$SQL_DIR/create_home_snapshot.sql"      "home_snapshot"
+run_sql_file "$SQL_DIR/create_audit_log.sql"          "audit_log"
 
 echo ""
 echo "=============================================="

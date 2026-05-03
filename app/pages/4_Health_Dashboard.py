@@ -14,6 +14,7 @@ from app.components.header import render as render_header
 from app.components.kpi_cards import format_count, render_kpi_row
 from app.components.sidebar import render as render_sidebar
 from config.settings import EXECUTION_LOG_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 
 st.set_page_config(page_title="Zamboni — Health Dashboard", page_icon="📊", layout="wide")
 check_login()

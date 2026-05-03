@@ -13,6 +13,7 @@ from app.components.sidebar import is_dry_run
 from app.components.sidebar import render as render_sidebar
 from app.components.status_badge import lifecycle as lifecycle_badge
 from config.settings import NONPROD_REGISTRY_TABLE
+from engine.core.audit import AuditAction, AuditEvent, audit
 
 st.set_page_config(page_title="Zamboni — Non-Prod Lifecycle", page_icon="🗑️", layout="wide")
 check_login()
@@ -25,7 +26,7 @@ st.caption("Manage lifecycle states for preprod/dev/test tables. Submit exemptio
 # ── Environment selector ───────────────────────────────────────────────────────
 env = st.selectbox("Environment", ["preprod", "dev", "test"], key="np_env")
 
-tab1, tab2, tab3 = st.tabs(["📊 State Overview", "🛡️ Submit Exemption", "⚫ Deletion History"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 State Overview", "🛡️ Submit Exemption", "🙋 Claim Table", "⚫ Deletion History"])
 
 # ── Tab 1: State Overview ──────────────────────────────────────────────────────
 with tab1:
@@ -149,6 +150,18 @@ with tab2:
                                 WHERE table_fqn = '{exempt_fqn}'
                             """
                             execute_write(update_sql, workgroup="app", dry_run=is_dry_run())
+                            from app.components.auth import current_user as _cu
+                            audit(AuditEvent(
+                                actor=_cu(),
+                                action_type=AuditAction.LIFECYCLE_EXEMPTION,
+                                page_source="9_NonProd_Lifecycle",
+                                target_type="table",
+                                target_id=exempt_fqn,
+                                environment=env,
+                                dry_run=is_dry_run(),
+                                status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                reason=reason,
+                            ))
                             st.success(
                                 f"✅ Exemption submitted for `{exempt_fqn}`"
                                 + (" (dry run)" if is_dry_run() else "")
@@ -156,8 +169,52 @@ with tab2:
         except Exception as e:
             st.error(f"Error: {e}")
 
-# ── Tab 3: Deletion History ────────────────────────────────────────────────────
+# ── Tab 3: Claim Table ────────────────────────────────────────────────────────
 with tab3:
+    st.markdown("#### 🙋 Claim This Table")
+    st.caption(
+        "Assign yourself as owner and reset the table to ACTIVE. "
+        "Requires a reason. Audited."
+    )
+    from app.components.auth import current_user as _cu_claim
+    claim_fqn = st.text_input("Table FQN to Claim", placeholder="glue_catalog.preprod_db.my_table", key="claim_fqn")
+    claim_reason = st.text_area("Reason for claiming *", key="claim_reason",
+                                 placeholder="Why are you claiming ownership of this table?")
+    if st.button("🙋 Claim This Table", type="primary", key="claim_btn"):
+        if not claim_fqn or not claim_reason.strip():
+            st.error("Both table FQN and reason are required.")
+        elif len(claim_reason.strip()) < 10:
+            st.error("Reason must be at least 10 characters.")
+        else:
+            try:
+                from datetime import UTC, datetime
+                now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+                claim_sql = f"""
+                    UPDATE {NONPROD_REGISTRY_TABLE}
+                    SET lifecycle_state   = 'ACTIVE',
+                        owner_email       = '{_cu_claim()}',
+                        state_changed_at  = TIMESTAMP '{now}'
+                    WHERE table_fqn = '{claim_fqn}'
+                """
+                from app.components.athena_runner import execute_write
+                execute_write(claim_sql, workgroup="app", dry_run=is_dry_run())
+                audit(AuditEvent(
+                    actor=_cu_claim(),
+                    action_type=AuditAction.CLAIM_TABLE,
+                    page_source="9_NonProd_Lifecycle",
+                    target_type="table", target_id=claim_fqn,
+                    environment=env, dry_run=is_dry_run(),
+                    status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                    reason=claim_reason.strip(),
+                    after_value=f"owner={_cu_claim()},state=ACTIVE",
+                ))
+                st.success(f"✅ Table `{claim_fqn}` claimed and reset to ACTIVE"
+                           + (" (dry run)" if is_dry_run() else ""))
+            except Exception as ce:
+                st.error(f"Claim failed: {ce}")
+
+# ── Tab 4: Deletion History ────────────────────────────────────────────────────
+with tab4:
     st.markdown("#### Recently Deleted Tables")
     hist_sql = f"""
         SELECT
