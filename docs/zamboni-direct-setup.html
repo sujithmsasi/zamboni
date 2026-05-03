@@ -239,20 +239,42 @@ td code { font-size: 12px; }
   <div class="callout-icon">&#x26A0;&#xFE0F;</div>
   <div class="callout-body"><strong>Restrict Glue DeleteTable</strong><p>The IAM policy already restricts glue:DeleteTable to *_preprod, *_dev, *_test, *_uat database patterns. Never allow wildcard on production databases.</p></div>
 </div>
-<pre><code><span class="comment"># Apply the policy (after editing deploy/iam_policy.json with real values)</span>
+<pre><code><span class="comment"># Step 1 -- substitute your real AWS Account ID into iam_policy.json</span>
+<span class="comment"># Also substitute your real bucket names for: your-athena-results, your-staging-bucket, your-archive-bucket, your-zamboni-metadata</span>
+
+<span class="comment"># On Linux/EC2:</span>
+<span class="cmd">ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)</span>
+<span class="cmd">sed -i</span> "s/ACCOUNT_ID/$ACCOUNT_ID/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-athena-results/YOUR_ACTUAL_ATHENA_BUCKET/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-staging-bucket/YOUR_ACTUAL_STAGING_BUCKET/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-archive-bucket/YOUR_ACTUAL_ARCHIVE_BUCKET/g" deploy/iam_policy.json
+<span class="cmd">sed -i</span> "s/your-zamboni-metadata/YOUR_ACTUAL_METADATA_BUCKET/g" deploy/iam_policy.json
+
+<span class="comment"># Verify substitution worked (should show no ACCOUNT_ID or placeholder values)</span>
+<span class="cmd">grep -c "ACCOUNT_ID" deploy/iam_policy.json</span>    <span class="comment"># should return 0</span>
+
+<span class="comment"># Step 2 -- create the IAM role with the EC2 trust policy</span>
+<span class="comment"># (deploy/ec2-trust-policy.json is already in the repo -- no edits needed)</span>
 <span class="cmd">aws iam create-role</span> \
   --role-name zamboni-ec2-role \
   --assume-role-policy-document file://deploy/ec2-trust-policy.json
 
+<span class="comment"># Step 3 -- attach the inline policy</span>
 <span class="cmd">aws iam put-role-policy</span> \
   --role-name zamboni-ec2-role \
   --policy-name ZamboniPolicy \
   --policy-document file://deploy/iam_policy.json
 
+<span class="comment"># Step 4 -- create instance profile and attach role</span>
 <span class="cmd">aws iam create-instance-profile</span> --instance-profile-name zamboni-ec2-profile
 <span class="cmd">aws iam add-role-to-instance-profile</span> \
   --instance-profile-name zamboni-ec2-profile \
   --role-name zamboni-ec2-role</code></pre>
+
+<div class="callout info">
+  <div class="callout-icon">&#x1F4CB;</div>
+  <div class="callout-body"><strong>Placeholders in iam_policy.json</strong><p>The file ships with <code>ACCOUNT_ID</code> in 23 places and generic bucket name placeholders. The <code>sed</code> commands above replace all of them in one shot. Check the file afterwards with <code>grep ACCOUNT_ID deploy/iam_policy.json</code> -- it should return nothing.</p></div>
+</div>
 
 <!-- ATHENA -->
 <h2 id="athena">Athena Workgroups</h2>
