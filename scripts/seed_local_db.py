@@ -52,13 +52,14 @@ CREATE TABLE IF NOT EXISTS domain_registry (
     notes                   TEXT,
     created_at              TEXT,
     updated_at              TEXT,
-    registered_at           TEXT,
+    registered_at           TEXT DEFAULT (datetime('now')),
     display_name            TEXT,
     owner_name              TEXT,
     team_name               TEXT,
     description             TEXT,
     archive_duration_days   INTEGER DEFAULT 365,
-    auto_delete_after_days  INTEGER DEFAULT 120
+    auto_delete_after_days  INTEGER DEFAULT 120,
+    registered_by           TEXT DEFAULT ''
 )""",
 
 "stream_registry": """
@@ -249,6 +250,13 @@ def seed_domains() -> list[dict]:
             "notes":                "ERS domain - bookings, inventory",
             "created_at":           _now(110),
             "updated_at":           _now(10),
+            "registered_at":        _now(110),
+            "display_name":         "ERS",
+            "owner_name":           "D&A ERS Lead",
+            "team_name":            "Data & Analytics - ERS",
+            "description":          "ERS domain covering bookings and inventory pipelines",
+            "archive_duration_days": 365,
+            "auto_delete_after_days": 120,
         },
         {
             "domain_name":          "membership",

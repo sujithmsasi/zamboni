@@ -76,25 +76,38 @@ def register_domain(
         raise ValueError(f"Domain '{domain_name}' is already registered.")
 
     now = _now()
+    archive_int = 1 if archive_enabled else 0
     sql = f"""
-        INSERT INTO {DOMAIN_REGISTRY_TABLE} VALUES (
+        INSERT INTO {DOMAIN_REGISTRY_TABLE} (
+            domain_name, display_name, description,
+            owner_name, owner_email, team_name,
+            archive_enabled, hot_retention_days, archive_duration_days,
+            stale_threshold_days, auto_delete_after_days,
+            is_active, environment,
+            created_at, registered_by, updated_at, notes,
+            digest_enabled, digest_email,
+            registered_at
+        ) VALUES (
             '{domain_name}',
             '{display_name}',
             '{_esc(description)}',
             '{_esc(owner_name)}',
             '{_esc(owner_email)}',
             '{_esc(team_name)}',
-            {str(archive_enabled).lower()},
+            {archive_int},
             {hot_retention_days},
             {archive_duration_days},
             {stale_threshold_days},
             {auto_delete_after_days},
-            true,
+            1,
             '{environment}',
-            TIMESTAMP '{now}',
+            '{now}',
             '{registered_by}',
-            TIMESTAMP '{now}',
-            '{_esc(notes)}'
+            '{now}',
+            '{_esc(notes)}',
+            0,
+            '',
+            '{now}'
         )
     """
     log.info("registry.register_domain", domain=domain_name, dry_run=dry_run)

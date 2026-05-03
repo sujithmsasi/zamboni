@@ -58,8 +58,19 @@ tab_list, tab_register, tab_edit = st.tabs([
 with tab_list:
     st.subheader("Registered Domains")
 
-    if st.button("🔄 Refresh", key="domain_list_refresh"):
+    # Auto-refresh: always clear cache when this tab renders
+    # so domain list reflects any recent registrations immediately
+    if "domain_tab_loaded" not in st.session_state:
+        st.session_state["domain_tab_loaded"] = True
         cached_read_registry.clear()
+
+    col_refresh, col_info = st.columns([1, 5])
+    with col_refresh:
+        if st.button("🔄 Refresh", key="domain_list_refresh"):
+            cached_read_registry.clear()
+            st.rerun()
+    with col_info:
+        st.caption("Domain list is refreshed automatically on each visit.")
 
     sql = f"SELECT * FROM {DOMAIN_REGISTRY_TABLE} ORDER BY domain_name"
     try:
@@ -267,6 +278,8 @@ with tab_register:
                         + (" (dry run)" if is_dry_run() else "")
                     )
                     cached_read_registry.clear()   # refresh domain list
+                    # Clear auto-refresh flag so list reloads on next tab visit
+                    st.session_state.pop("domain_tab_loaded", None)
                 except ValueError as e:
                     st.error(str(e))
                 except Exception as e:

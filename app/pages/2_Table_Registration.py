@@ -100,7 +100,7 @@ with tab_browse:
                     f"WHERE table_fqn LIKE '%.{db}.%'"
                 )
                 registered = {
-                    row["table_fqn"]: row
+                    row["table_fqn"]: row.to_dict()
                     for _, row in reg_df.iterrows()
                 } if not reg_df.empty else {}
             except Exception:
@@ -115,7 +115,7 @@ with tab_browse:
                 result.append({
                     "Name":       name,
                     "Format":     fmt,
-                    "Registered": "✅" if reg else "—",
+                    "Registered": "✅" if bool(reg) else "—",
                     "Domain":     reg.get("domain", ""),
                     "Tier":       reg.get("tier", ""),
                     "Layer":      reg.get("layer", ""),
