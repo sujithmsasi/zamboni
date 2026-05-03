@@ -3,6 +3,13 @@ Zamboni — Dry Run Viewer
 Simulate HK Engine on any table or domain without writing anything.
 Shows: health check results, what operations would run, SQL preview.
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import json
 
 import streamlit as st

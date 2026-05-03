@@ -4,6 +4,13 @@ View and edit per-table HK config.
 Apply policy templates, override individual fields, bulk apply by domain/layer.
 All writes honour the sidebar dry-run toggle.
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import streamlit as st
 
 from app.components.athena_runner import cached_read_registry, clear_caches

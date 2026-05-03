@@ -2,6 +2,13 @@
 Zamboni — Domain Management
 List, register, edit, activate/deactivate domains.
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import streamlit as st
 
 from app.components.athena_runner import cached_read_registry, execute_write

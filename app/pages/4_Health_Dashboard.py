@@ -4,6 +4,13 @@ Full real-time fleet health analysis.
 Deep dive into snapshot counts, small files, coverage, failures.
 Always fresh — no caching (use the home snapshot for daily summary).
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import plotly.express as px
 import streamlit as st
 

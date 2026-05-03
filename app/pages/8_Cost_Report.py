@@ -3,6 +3,13 @@ Zamboni — Cost Report
 Per-domain Athena cost, storage reclaimed from archival + lifecycle,
 monthly trends, and top tables by scan cost.
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st

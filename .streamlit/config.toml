@@ -17,3 +17,4 @@ gatherUsageStats = false
 
 [runner]
 magicEnabled     = false
+

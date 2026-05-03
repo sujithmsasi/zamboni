@@ -2,6 +2,13 @@
 Zamboni — Non-Prod Lifecycle Manager
 View tables by lifecycle state, submit exemptions, view deletion history.
 """
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from datetime import UTC
 
 import streamlit as st

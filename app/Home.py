@@ -3,6 +3,15 @@ Zamboni — Home Page
 Daily cached snapshot + small live activity zone.
 First user of the day triggers snapshot generation. Others read cache.
 """
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path so 'app.*' imports resolve
+# regardless of which directory Streamlit is launched from.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import pandas as pd
 import streamlit as st
 
