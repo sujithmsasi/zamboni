@@ -58,26 +58,17 @@ tab_list, tab_register, tab_edit = st.tabs([
 with tab_list:
     st.subheader("Registered Domains")
 
-    # Auto-detect new domains: compare live count to cached count
-    # If they differ, clear cache and rerun so table updates immediately
-    try:
-        from engine.utils.local_db import get_connection as _get_conn
-        _live_count = _get_conn().execute(
-            "SELECT COUNT(*) FROM domain_registry"
-        ).fetchone()[0]
-    except Exception:
-        _live_count = None
-
-    _cached_count = st.session_state.get("domain_list_count", None)
-    if _live_count is not None and _cached_count != _live_count:
+    # Auto-refresh: if a write happened (register/update sets this flag),
+    # clear cache and rerun so the table reflects the change immediately.
+    if st.session_state.get("domain_needs_refresh", False):
+        st.session_state["domain_needs_refresh"] = False
         cached_read_registry.clear()
-        st.session_state["domain_list_count"] = _live_count
+        st.rerun()
 
     col_refresh, _ = st.columns([1, 5])
     with col_refresh:
         if st.button("🔄 Refresh", key="domain_list_refresh"):
             cached_read_registry.clear()
-            st.session_state.pop("domain_list_count", None)
             st.rerun()
 
     sql = f"SELECT * FROM {DOMAIN_REGISTRY_TABLE} ORDER BY domain_name"
@@ -302,9 +293,9 @@ with tab_register:
                         f"✅ Domain **{domain_name}** registered."
                         + (" (dry run)" if is_dry_run() else "")
                     )
-                    cached_read_registry.clear()   # refresh domain list
-                    # Set edit dropdown to the newly registered domain
+                    cached_read_registry.clear()
                     st.session_state["edit_domain_last"] = domain_name.strip().lower()
+                    st.session_state["domain_needs_refresh"] = True  # triggers tab1 rerun
                 except ValueError as e:
                     st.error(str(e))
                 except Exception as e:
@@ -482,8 +473,8 @@ with tab_edit:
                             reason=e_notes,
                         ))
                         cached_read_registry.clear()
-                        # Keep the same domain selected after save
                         st.session_state["edit_domain_last"] = selected_domain
+                        st.session_state["domain_needs_refresh"] = True  # triggers tab1 rerun
                         st.success(
                             f"✅ Domain **{selected_domain}** updated."
                             + (" (dry run)" if is_dry_run() else "")

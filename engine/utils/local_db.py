@@ -150,17 +150,21 @@ def _translate(sql: str) -> str:
     Translate Athena SQL to SQLite-compatible SQL.
     Handles the most common patterns used in Zamboni UI queries.
     """
-    # Strip Athena catalog prefix: "glue_catalog"."db"."table" -> table
-    # SQLite has flat namespace -- table names only
+    # Strip Athena catalog prefix ONLY in SQL structural positions
+    # (FROM, JOIN, UPDATE table, INSERT INTO table) — never inside string literals.
+    #
+    # Strategy: strip quoted form "glue_catalog"."db"."table" (always structural)
     sql = re.sub(
-        r'"?glue_catalog"?\."?[\w]+"?\."?([\w]+)"?',
+        r'"glue_catalog"\."[\w]+"\."([\w]+)"',
         r'\1',
         sql,
     )
-    # Also handle unquoted: glue_catalog.db.table -> table
+    # Strip unquoted form only when NOT preceded by a single quote
+    # (i.e. not inside a VALUES string literal)
+    # Negative lookbehind for apostrophe covers: WHERE x = 'glue_catalog.db.t'
     sql = re.sub(
-        r'glue_catalog\.[\w]+\.([\w]+)',
-        r'\1',
+        r"(?<!')glue_catalog\.([\w]+)\.([\w]+)(?!')",
+        r'\2',
         sql,
     )
     # INTERVAL syntax: INTERVAL '7' DAY -> 7 (SQLite uses numeric offsets)
