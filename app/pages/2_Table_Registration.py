@@ -24,7 +24,7 @@ if str(_ROOT) not in sys.path:
 import pandas as pd
 import streamlit as st
 
-from app.components.athena_runner import cached_read_registry
+from app.components.athena_runner import cached_read_registry, execute_write
 from app.components.auth import check_login, current_user
 from app.components.header import render as render_header
 from app.components.sidebar import is_dry_run
@@ -132,24 +132,50 @@ with tab_browse:
     if not databases:
         st.warning("No Glue databases found.")
     else:
-        selected_db = st.selectbox(
-            "Glue Database",
-            databases,
-            help="Select a Glue database to browse its Iceberg tables.",
-        )
+        col_db, col_filter = st.columns([2, 2])
+        with col_db:
+            selected_db = st.selectbox(
+                "Glue Database",
+                ["-- All Databases --"] + databases,
+                help="Select a specific database or browse all databases.",
+            )
+        with col_filter:
+            show_unregistered_only = st.checkbox(
+                "Show only unregistered tables",
+                value=False,
+                key="browse_unreg_only",
+                help="Filter to tables not yet registered with Zamboni.",
+            )
 
-        if selected_db:
-            with st.spinner(f"Loading tables from {selected_db}..."):
-                tables = _cached_tables(selected_db)
+        # If All selected, aggregate tables across all databases
+        if selected_db == "-- All Databases --":
+            all_tables = []
+            for db in databases:
+                for t in _cached_tables(db):
+                    t["Database"] = db
+                    all_tables.append(t)
+            tables     = all_tables
+            selected_db = None   # signal for FQN building below
+        else:
+            tables = _cached_tables(selected_db)
+            for t in tables:
+                t["Database"] = selected_db
+
+        if not tables:
+            st.info("No tables found.")
+        else:
+            # Apply unregistered filter
+            if show_unregistered_only:
+                tables = [t for t in tables if t["Registered"] == "—"]
 
             if not tables:
-                st.info(f"No tables found in `{selected_db}`.")
+                st.success("✅ All tables in this database are already registered.")
             else:
                 iceberg_count = sum(1 for t in tables if t["Format"] == "iceberg")
                 reg_count     = sum(1 for t in tables if t["Registered"] == "✅")
 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Total Tables",      len(tables))
+                c1.metric("Shown",             len(tables))
                 c2.metric("Iceberg",           iceberg_count)
                 c3.metric("Already Registered", reg_count)
 
@@ -263,7 +289,8 @@ with tab_browse:
                             ):
                                 ok_count, fail_count = 0, 0
                                 for _, row in selected_rows.iterrows():
-                                    fqn = f"glue_catalog.{selected_db}.{row['Name']}"
+                                    _db = row.get("Database") or selected_db or ""
+                                    fqn = f"glue_catalog.{_db}.{row['Name']}"
                                     fmt = row.get("Format", "iceberg")
                                     try:
                                         registry.register_table(
@@ -405,5 +432,137 @@ with tab_registered:
                 file_name=f"zamboni_tables_{sel_domain}.csv",
                 mime="text/csv",
             )
+
+            # ── Edit a registered table ───────────────────────────────────────
+            st.divider()
+            st.subheader("✏️ Edit Registered Table")
+            st.caption(
+                "Select a table from the list above to update its "
+                "domain, tier, layer, owner, or stream ID."
+            )
+            # Rebuild unformatted FQN list from raw query
+            try:
+                raw_df = cached_read_registry(
+                    f"SELECT table_fqn, domain, layer, tier, tier, "
+                    f"owner_email, ci_number, stream_id, hk_enabled, "
+                    f"archive_enabled, lifecycle_enabled, processing_cadence, "
+                    f"dry_run_until "
+                    f"FROM {STREAM_REGISTRY_TABLE} "
+                    f"{('WHERE domain = ' + chr(39) + sel_domain + chr(39)) if sel_domain != 'All' else ''} "
+                    f"ORDER BY domain, table_fqn LIMIT 500"
+                )
+                if not raw_df.empty:
+                    edit_fqn = st.selectbox(
+                        "Select table to edit",
+                        ["-- select --"] + raw_df["table_fqn"].tolist(),
+                        key="edit_table_fqn_sel",
+                        help="Pick a registered table to edit its metadata.",
+                    )
+                    if edit_fqn and edit_fqn != "-- select --":
+                        trow = raw_df[raw_df["table_fqn"] == edit_fqn].iloc[0].to_dict()
+                        _ek  = edit_fqn.replace(".", "_")  # key prefix
+
+                        with st.form(f"edit_table_form_{_ek}"):
+                            st.markdown(f"**Editing:** `{edit_fqn}`")
+                            ec1, ec2, ec3 = st.columns(3)
+                            with ec1:
+                                e_domain = st.selectbox(
+                                    "Domain",
+                                    _get_domains(),
+                                    index=(_get_domains().index(trow.get("domain",""))
+                                           if trow.get("domain","") in _get_domains() else 0),
+                                    key=f"{_ek}_domain",
+                                )
+                                e_layer = st.selectbox(
+                                    "Layer",
+                                    VALID_LAYERS,
+                                    index=(VALID_LAYERS.index(trow.get("layer","staging"))
+                                           if trow.get("layer","staging") in VALID_LAYERS else 0),
+                                    key=f"{_ek}_layer",
+                                )
+                            with ec2:
+                                e_tier = st.selectbox(
+                                    "Tier",
+                                    VALID_TIERS,
+                                    index=(VALID_TIERS.index(trow.get("tier","standard"))
+                                           if trow.get("tier","standard") in VALID_TIERS else 1),
+                                    key=f"{_ek}_tier",
+                                )
+                                e_stream = st.text_input(
+                                    "Stream ID",
+                                    value=str(trow.get("stream_id") or ""),
+                                    key=f"{_ek}_stream",
+                                    placeholder="STR-FIN-APS-0001",
+                                )
+                            with ec3:
+                                e_owner = st.text_input(
+                                    "Owner Email",
+                                    value=str(trow.get("owner_email") or ""),
+                                    key=f"{_ek}_owner",
+                                )
+                                e_ci = st.text_input(
+                                    "CI Number",
+                                    value=str(trow.get("ci_number") or ""),
+                                    key=f"{_ek}_ci",
+                                )
+
+                            e_hk = st.checkbox(
+                                "Housekeeping Enabled",
+                                value=bool(trow.get("hk_enabled", False)),
+                                key=f"{_ek}_hk",
+                                help="Enable HK Engine for this table.",
+                            )
+                            e_cadence = st.selectbox(
+                                "Processing Cadence",
+                                ["daily", "weekly", "monthly", "hourly", "every_trigger"],
+                                index=(["daily","weekly","monthly","hourly","every_trigger"]
+                                       .index(trow.get("processing_cadence") or "daily")
+                                       if trow.get("processing_cadence") in
+                                       ["daily","weekly","monthly","hourly","every_trigger"]
+                                       else 0),
+                                key=f"{_ek}_cadence",
+                                help="How often this table is processed — "
+                                     "drives partition filter window.",
+                            )
+
+                            if is_dry_run():
+                                st.info("🔵 Dry Run — no writes.")
+
+                            if st.form_submit_button("💾 Save Changes", type="primary"):
+                                try:
+                                    upd_sql = f"""
+                                        UPDATE {STREAM_REGISTRY_TABLE}
+                                        SET domain             = '{e_domain}',
+                                            layer              = '{e_layer}',
+                                            tier               = '{e_tier}',
+                                            stream_id          = '{e_stream}',
+                                            owner_email        = '{e_owner}',
+                                            ci_number          = '{e_ci}',
+                                            hk_enabled         = {'1' if e_hk else '0'},
+                                            processing_cadence = '{e_cadence}',
+                                            updated_at         = CURRENT_TIMESTAMP
+                                        WHERE table_fqn = '{edit_fqn}'
+                                    """
+                                    execute_write(upd_sql, dry_run=is_dry_run())
+                                    audit(AuditEvent(
+                                        actor=current_user(),
+                                        action_type=AuditAction.TABLE_REGISTER,
+                                        page_source="2_Table_Registration",
+                                        target_type="table",
+                                        target_id=edit_fqn,
+                                        domain=e_domain,
+                                        environment="prod",
+                                        dry_run=is_dry_run(),
+                                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                    ))
+                                    cached_read_registry.clear()
+                                    st.success(
+                                        f"✅ `{edit_fqn}` updated."
+                                        + (" (dry run)" if is_dry_run() else "")
+                                    )
+                                except Exception as e:
+                                    st.error(f"Update failed: {e}")
+            except Exception as e:
+                st.error(f"Could not load table list for editing: {e}")
     except Exception as e:
         st.error(f"Could not load registered tables: {e}")

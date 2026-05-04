@@ -130,25 +130,35 @@ def apply_template(
     # Delete existing config first (Iceberg doesn't support true UPSERT easily)
     _delete_hk_config(table_fqn, dry_run=dry_run)
 
+    orphan_cadence = t.get("orphan_cleanup_cadence_days", 7)
     sql = f"""
-        INSERT INTO {HK_CONFIG_TABLE} VALUES (
+        INSERT INTO {HK_CONFIG_TABLE} (
+            table_fqn, policy_template, compaction_strategy,
+            compaction_target_file_size_mb, compaction_engine,
+            sort_order_cols, snapshot_retention_days, snapshot_min_to_keep,
+            orphan_file_retention_days, orphan_cleanup_cadence_days,
+            run_frequency, partition_column, partition_filter_days,
+            window_config, manually_overridden, override_notes,
+            created_at, updated_at
+        ) VALUES (
             '{table_fqn}',
             '{template_name}',
             '{t["compaction_strategy"]}',
             {t["compaction_target_file_size_mb"]},
             '{t["compaction_engine"]}',
+            {sort_arr},
             {t["snapshot_retention_days"]},
             {snap_min},
             {t["orphan_file_retention_days"]},
+            {orphan_cadence},
             '{t["run_frequency"]}',
-            '{window_json}',
             {f"'{partition_column}'" if partition_column else "NULL"},
             {partition_filter_days if partition_filter_days else "NULL"},
-            {sort_arr},
-            {f"'{glue_job_name}'" if glue_job_name else "NULL"},
-            TIMESTAMP '{now}',
-            false,
-            NULL
+            '{window_json}',
+            0,
+            NULL,
+            '{now}',
+            '{now}'
         )
     """
 

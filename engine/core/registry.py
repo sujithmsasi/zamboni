@@ -278,8 +278,21 @@ def register_table(
     now  = _now()
     arch = archive_retention_days if archive_retention_days else "NULL"
 
+    hk_int      = 1 if hk_enabled else 0
+    archive_int = 1 if archive_enabled else 0
     sql = f"""
-        INSERT INTO {STREAM_REGISTRY_TABLE} VALUES (
+        INSERT INTO {STREAM_REGISTRY_TABLE} (
+            table_fqn, stream_id, domain, layer, tier,
+            table_format, environment, owner_email, ci_number,
+            hk_enabled, dry_run_until, force_run,
+            dependent_job_name, dependent_job_type,
+            controlm_pipeline_job, controlm_hk_job, dependent_on_controlm_job,
+            archive_enabled, archive_retention_days, archive_bucket,
+            lifecycle_enabled, processing_cadence,
+            properties_synced, last_execution_id,
+            registered_by, registered_at, updated_at,
+            database_name, owner_name, notes
+        ) VALUES (
             '{table_fqn}',
             '{sid}',
             '{domain}',
@@ -289,20 +302,26 @@ def register_table(
             '{environment}',
             '{_esc(owner_email)}',
             '{_esc(ci_number)}',
-            {str(hk_enabled).lower()},
+            {hk_int},
             NULL,
-            false,
+            0,
             NULL,
             'none',
             NULL,
             NULL,
-            {str(archive_enabled).lower()},
+            NULL,
+            {archive_int},
             {arch},
             NULL,
-            false,
-            TIMESTAMP '{now}',
+            0,
+            NULL,
+            0,
+            NULL,
             '{registered_by}',
-            TIMESTAMP '{now}',
+            '{now}',
+            '{now}',
+            '{table_fqn.split(".")[1] if "." in table_fqn else ""}',
+            '',
             '{_esc(notes)}'
         )
     """

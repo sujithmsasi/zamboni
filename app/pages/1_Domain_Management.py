@@ -58,19 +58,11 @@ tab_list, tab_register, tab_edit = st.tabs([
 with tab_list:
     st.subheader("Registered Domains")
 
-    # Auto-refresh: always clear cache when this tab renders
-    # so domain list reflects any recent registrations immediately
-    if "domain_tab_loaded" not in st.session_state:
-        st.session_state["domain_tab_loaded"] = True
-        cached_read_registry.clear()
-
-    col_refresh, col_info = st.columns([1, 5])
+    col_refresh, col_count = st.columns([1, 5])
     with col_refresh:
-        if st.button("🔄 Refresh", key="domain_list_refresh"):
+        if st.button("🔄 Refresh List", key="domain_list_refresh"):
             cached_read_registry.clear()
             st.rerun()
-    with col_info:
-        st.caption("Domain list is refreshed automatically on each visit.")
 
     sql = f"SELECT * FROM {DOMAIN_REGISTRY_TABLE} ORDER BY domain_name"
     try:
@@ -82,8 +74,8 @@ with tab_list:
             want_cols = [
                 "domain_name", "display_name", "owner_email",
                 "archive_enabled", "hot_retention_days",
-                "stale_threshold_days", "is_active",
-                "digest_enabled", "registered_at",
+                "archive_duration_days", "stale_threshold_days",
+                "is_active", "digest_enabled", "registered_at",
             ]
             show_cols = [c for c in want_cols if c in df.columns]
             display = df[show_cols].copy()
@@ -96,16 +88,33 @@ with tab_list:
                 display["registered_at"] = display["registered_at"].astype(str).str[:10]
 
             display.rename(columns={
-                "domain_name":        "Domain",
-                "display_name":       "Display Name",
-                "owner_email":        "Owner Email",
-                "archive_enabled":    "Archival",
-                "hot_retention_days": "Hot Retention",
-                "stale_threshold_days":"Stale Threshold",
-                "is_active":          "Active",
-                "digest_enabled":     "Digest",
-                "registered_at":      "Registered",
+                "domain_name":          "Domain",
+                "display_name":         "Display Name",
+                "owner_email":          "Owner Email",
+                "archive_enabled":      "Archival",
+                "hot_retention_days":   "Hot Retention (d)",
+                "archive_duration_days":"Archive Duration (d)",
+                "stale_threshold_days": "Stale Threshold (d)",
+                "is_active":            "Active",
+                "digest_enabled":       "Digest",
+                "registered_at":        "Registered",
             }, inplace=True, errors="ignore")
+
+            # Enrich with table count per domain
+            try:
+                from config.settings import STREAM_REGISTRY_TABLE
+                counts_df = cached_read_registry(
+                    f"SELECT domain, COUNT(*) AS table_count "
+                    f"FROM {STREAM_REGISTRY_TABLE} GROUP BY domain"
+                )
+                if not counts_df.empty:
+                    counts_map = dict(zip(counts_df["domain"], counts_df["table_count"].astype(int)))
+                    display.insert(
+                        1, "Tables",
+                        display["Domain"].map(counts_map).fillna(0).astype(int)
+                    )
+            except Exception:
+                pass
 
             st.dataframe(display, use_container_width=True, hide_index=True)
             st.caption(f"{len(df)} domain(s) registered")
@@ -278,8 +287,8 @@ with tab_register:
                         + (" (dry run)" if is_dry_run() else "")
                     )
                     cached_read_registry.clear()   # refresh domain list
-                    # Clear auto-refresh flag so list reloads on next tab visit
-                    st.session_state.pop("domain_tab_loaded", None)
+                    # Set edit dropdown to the newly registered domain
+                    st.session_state["edit_domain_last"] = domain_name.strip().lower()
                 except ValueError as e:
                     st.error(str(e))
                 except Exception as e:
@@ -302,11 +311,19 @@ with tab_edit:
     if not domain_names:
         st.info("No domains to edit. Register one first.")
     else:
+        # Remember the last selected domain across reruns using session_state
+        _prev = st.session_state.get("edit_domain_last", domain_names[0])
+        _default_idx = domain_names.index(_prev) if _prev in domain_names else 0
+
         selected_domain = st.selectbox(
             "Select Domain to Edit",
             domain_names,
+            index=_default_idx,
             key="edit_domain_selector",
+            help="Select the domain to edit. Your selection is remembered "
+                 "within this session.",
         )
+        st.session_state["edit_domain_last"] = selected_domain
 
         if selected_domain:
             domain = registry.get_domain(selected_domain)
@@ -365,12 +382,26 @@ with tab_edit:
                         key=f"{k}_hot_ret",
                         help="Days staging data stays in S3 Standard before archival.",
                     )
+                    e_archive_duration = st.number_input(
+                        "Archive Duration (days)",
+                        min_value=1,
+                        value=int(domain.get("archive_duration_days") or 365),
+                        key=f"{k}_arch_dur",
+                        help="How long archived data is kept in S3 Intelligent-Tiering.",
+                    )
                     e_stale = st.number_input(
                         "Stale Threshold (days)",
                         min_value=7,
                         value=int(domain.get("stale_threshold_days") or 60),
                         key=f"{k}_stale",
                         help="Non-prod tables inactive beyond this are flagged STALE_CANDIDATE.",
+                    )
+                    e_auto_delete = st.number_input(
+                        "Auto-Delete After (days)",
+                        min_value=30,
+                        value=int(domain.get("auto_delete_after_days") or 120),
+                        key=f"{k}_auto_del",
+                        help="Non-prod tables dropped after GREENZONE review + this many days.",
                     )
                     e_active = st.checkbox(
                         "Domain Active",
@@ -389,7 +420,7 @@ with tab_edit:
                         value=str(domain.get("digest_email") or ""),
                         key=f"{k}_digest_email",
                         placeholder="Leave blank to use Owner Email",
-                        help="Override digest recipient. Useful for team DL vs personal email.",
+                        help="Override digest recipient.",
                     )
 
                 e_notes = st.text_area(
@@ -406,19 +437,21 @@ with tab_edit:
                     try:
                         sql_upd = f"""
                             UPDATE {DOMAIN_REGISTRY_TABLE}
-                            SET display_name        = '{e_display_name}',
-                                owner_name          = '{e_owner_name}',
-                                owner_email         = '{e_owner_email}',
-                                team_name           = '{e_team_name}',
-                                ci_number           = '{e_ci}',
-                                archive_enabled     = {'1' if e_archive_enabled else '0'},
-                                hot_retention_days  = {int(e_hot_retention)},
-                                stale_threshold_days= {int(e_stale)},
-                                is_active           = {'1' if e_active else '0'},
-                                digest_enabled      = {'1' if e_digest_enabled else '0'},
-                                digest_email        = '{e_digest_email}',
-                                notes               = '{e_notes}',
-                                updated_at          = CURRENT_TIMESTAMP
+                            SET display_name          = '{e_display_name}',
+                                owner_name            = '{e_owner_name}',
+                                owner_email           = '{e_owner_email}',
+                                team_name             = '{e_team_name}',
+                                ci_number             = '{e_ci}',
+                                archive_enabled       = {'1' if e_archive_enabled else '0'},
+                                hot_retention_days    = {int(e_hot_retention)},
+                                archive_duration_days = {int(e_archive_duration)},
+                                stale_threshold_days  = {int(e_stale)},
+                                auto_delete_after_days= {int(e_auto_delete)},
+                                is_active             = {'1' if e_active else '0'},
+                                digest_enabled        = {'1' if e_digest_enabled else '0'},
+                                digest_email          = '{e_digest_email}',
+                                notes                 = '{e_notes}',
+                                updated_at            = CURRENT_TIMESTAMP
                             WHERE domain_name = '{selected_domain}'
                         """
                         execute_write(sql_upd, dry_run=is_dry_run())
@@ -433,6 +466,8 @@ with tab_edit:
                             reason=e_notes,
                         ))
                         cached_read_registry.clear()
+                        # Keep the same domain selected after save
+                        st.session_state["edit_domain_last"] = selected_domain
                         st.success(
                             f"✅ Domain **{selected_domain}** updated."
                             + (" (dry run)" if is_dry_run() else "")
