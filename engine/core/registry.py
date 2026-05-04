@@ -271,12 +271,29 @@ def register_table(
     _validate_tier(tier)
     _validate_environment(environment)
 
-    if table_exists(table_fqn):
-        raise ValueError(f"Table '{table_fqn}' is already registered.")
-
     sid  = stream_id or _generate_stream_id(domain, layer)
     now  = _now()
     arch = archive_retention_days if archive_retention_days else "NULL"
+
+    if table_exists(table_fqn):
+        # Table already registered — do an UPDATE instead of failing
+        upd_sql = f"""
+            UPDATE {STREAM_REGISTRY_TABLE}
+            SET domain             = '{domain}',
+                layer              = '{layer}',
+                tier               = '{tier}',
+                table_format       = '{table_format}',
+                environment        = '{environment}',
+                owner_email        = '{_esc(owner_email)}',
+                ci_number          = '{_esc(ci_number)}',
+                stream_id          = '{sid}',
+                registered_by      = '{registered_by}',
+                updated_at         = '{now}'
+            WHERE table_fqn = '{table_fqn}'
+        """
+        log.info("registry.update_table", table_fqn=table_fqn, domain=domain, dry_run=dry_run)
+        run_query(upd_sql, workgroup="app", dry_run=dry_run)
+        return True
 
     hk_int      = 1 if hk_enabled else 0
     archive_int = 1 if archive_enabled else 0

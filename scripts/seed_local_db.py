@@ -91,7 +91,9 @@ CREATE TABLE IF NOT EXISTS stream_registry (
     registered_by           TEXT,
     registered_at           TEXT,
     updated_at              TEXT,
-    database_name           TEXT
+    database_name           TEXT,
+    owner_name              TEXT DEFAULT '',
+    notes                   TEXT DEFAULT ''
 )""",
 
 "hk_config": """
@@ -162,7 +164,8 @@ CREATE TABLE IF NOT EXISTS nonprod_registry (
     state_changed_at        TEXT,
     scan_count              INTEGER DEFAULT 0,
     exemption_reason        TEXT,
-    created_at              TEXT
+    created_at              TEXT,
+    database_name           TEXT DEFAULT ''
 )""",
 
 "home_snapshot": """

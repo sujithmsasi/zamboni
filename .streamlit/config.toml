@@ -18,3 +18,6 @@ gatherUsageStats = false
 [runner]
 magicEnabled     = false
 
+
+[deprecation]
+suppressDeprecationWarnings = true

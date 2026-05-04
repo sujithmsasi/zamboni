@@ -58,10 +58,26 @@ tab_list, tab_register, tab_edit = st.tabs([
 with tab_list:
     st.subheader("Registered Domains")
 
-    col_refresh, col_count = st.columns([1, 5])
+    # Auto-detect new domains: compare live count to cached count
+    # If they differ, clear cache and rerun so table updates immediately
+    try:
+        from engine.utils.local_db import get_connection as _get_conn
+        _live_count = _get_conn().execute(
+            "SELECT COUNT(*) FROM domain_registry"
+        ).fetchone()[0]
+    except Exception:
+        _live_count = None
+
+    _cached_count = st.session_state.get("domain_list_count", None)
+    if _live_count is not None and _cached_count != _live_count:
+        cached_read_registry.clear()
+        st.session_state["domain_list_count"] = _live_count
+
+    col_refresh, _ = st.columns([1, 5])
     with col_refresh:
-        if st.button("🔄 Refresh List", key="domain_list_refresh"):
+        if st.button("🔄 Refresh", key="domain_list_refresh"):
             cached_read_registry.clear()
+            st.session_state.pop("domain_list_count", None)
             st.rerun()
 
     sql = f"SELECT * FROM {DOMAIN_REGISTRY_TABLE} ORDER BY domain_name"

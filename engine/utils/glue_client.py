@@ -38,8 +38,11 @@ def get_databases() -> list[str]:
         from engine.utils.local_db import read_sql_local
         df = read_sql_local(
             "SELECT DISTINCT database_name FROM stream_registry "
-            "UNION SELECT DISTINCT database_name FROM nonprod_registry "
-            "WHERE database_name IS NOT NULL"
+            "WHERE database_name IS NOT NULL AND database_name != '' "
+            "UNION "
+            "SELECT DISTINCT SUBSTR(table_fqn, INSTR(table_fqn,'.')+1, "
+            "INSTR(SUBSTR(table_fqn,INSTR(table_fqn,'.')+1),'.') - 1) AS database_name "
+            "FROM stream_registry WHERE table_fqn LIKE '%.%.%'"
         )
         if not df.empty and "database_name" in df.columns:
             return df["database_name"].dropna().tolist()
