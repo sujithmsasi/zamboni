@@ -19,14 +19,28 @@ _TEMPLATES_PATH = Path(__file__).parent.parent.parent / "config" / "policy_templ
 _TEMPLATES: dict = {}
 
 
-def _load_templates() -> dict:
+def _load_templates(force_reload: bool = False) -> dict:
+    """Load policy templates from JSON. Cache-busted on writes."""
     global _TEMPLATES
-    if not _TEMPLATES:
+    if not _TEMPLATES or force_reload:
         with open(_TEMPLATES_PATH) as f:
             data = json.load(f)
-        # Strip comment keys
-        _TEMPLATES = {k: v for k, v in data.items() if not k.startswith("_")}
+        # Strip comment keys — only keep dict entries
+        _TEMPLATES = {
+            k: v for k, v in data.items()
+            if not k.startswith("_") and isinstance(v, dict)
+        }
     return _TEMPLATES
+
+
+def reload_templates() -> dict:
+    """Force reload templates from disk — call after any write to policy_templates.json."""
+    return _load_templates(force_reload=True)
+
+
+def get_policy_templates() -> dict:
+    """Return all available policy templates (dict of name -> config)."""
+    return _load_templates()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,9 +72,7 @@ def get_hk_config(table_fqn: str) -> dict | None:
     return config
 
 
-def get_policy_templates() -> dict:
-    """Return all available policy templates."""
-    return _load_templates()
+
 
 
 def get_template(template_name: str) -> dict | None:

@@ -58,6 +58,12 @@ st.markdown("---")
 
 
 # ── Helper: load domain list ──────────────────────────────────────────────────
+def _table_short_name(fqn: str) -> str:
+    """Convert FQN to readable label: 'glue_catalog.finance_db.t' -> 't  (finance_db)'"""
+    parts = fqn.split(".")
+    return f"{parts[2]}  ({parts[1]})" if len(parts) == 3 else fqn
+
+
 def _get_domains() -> list[str]:
     """Load domains from registry. Falls back to static list."""
     try:
@@ -433,6 +439,7 @@ with tab_registered:
                 mime="text/csv",
             )
 
+
             # ── Edit a registered table ───────────────────────────────────────
             st.divider()
             st.subheader("✏️ Edit Registered Table")
@@ -566,3 +573,235 @@ with tab_registered:
                 st.error(f"Could not load table list for editing: {e}")
     except Exception as e:
         st.error(f"Could not load registered tables: {e}")
+
+    # ── Engine Flags: Enable / Disable per table or bulk ─────────────────────
+    st.divider()
+    st.subheader("⚙️ Engine Flags")
+    st.caption(
+        "Enable or disable Archival and Lifecycle engines per table, "
+        "or bulk-apply to a whole domain or database."
+    )
+
+    flag_tab_single, flag_tab_bulk = st.tabs([
+        "Single Table", "Bulk Apply"
+    ])
+
+    with flag_tab_single:
+        _all_fqns = []
+        try:
+            _fqn_df = cached_read_registry(
+                f"SELECT table_fqn, domain, hk_enabled, archive_enabled, "
+                f"lifecycle_enabled FROM {STREAM_REGISTRY_TABLE} ORDER BY table_fqn"
+            )
+            if not _fqn_df.empty:
+                _all_fqns = _fqn_df["table_fqn"].tolist()
+        except Exception:
+            pass
+
+        if not _all_fqns:
+            st.info("No tables registered.")
+        else:
+            _label_map = {_table_short_name(f): f for f in _all_fqns}
+            _flag_sel_label = st.selectbox(
+                "Table (type to search)",
+                ["-- select --"] + list(_label_map.keys()),
+                key="flag_single_sel",
+                help="Type table name to filter.",
+            )
+            _flag_fqn = _label_map.get(_flag_sel_label)
+
+            if _flag_fqn and not _fqn_df.empty:
+                _row = _fqn_df[_fqn_df["table_fqn"] == _flag_fqn]
+                if not _row.empty:
+                    _r = _row.iloc[0]
+                    st.caption(f"`{_flag_fqn}`")
+
+                    with st.form("flag_single_form"):
+                        fc1, fc2, fc3 = st.columns(3)
+                        with fc1:
+                            new_hk = st.checkbox(
+                                "🔧 Housekeeping Enabled",
+                                value=bool(_r.get("hk_enabled", False)),
+                                key="flag_hk",
+                                help="Enable HK Engine (compaction + vacuum) for this table.",
+                            )
+                        with fc2:
+                            new_archive = st.checkbox(
+                                "📦 Archival Enabled",
+                                value=bool(_r.get("archive_enabled", False)),
+                                key="flag_archive",
+                                help="Enable Archival Engine to export and delete "
+                                     "cold staging partitions.",
+                            )
+                        with fc3:
+                            new_lifecycle = st.checkbox(
+                                "♻️ Lifecycle Enabled",
+                                value=bool(_r.get("lifecycle_enabled", False)),
+                                key="flag_lifecycle",
+                                help="Enable Lifecycle Engine for non-prod state machine "
+                                     "(ACTIVE→STALE→GREENZONE→DROPPED).",
+                            )
+
+                        if is_dry_run():
+                            st.info("🔵 Dry Run — no writes.")
+
+                        if st.form_submit_button("💾 Save Flags", type="primary"):
+                            try:
+                                from datetime import UTC as _tz
+                                from datetime import datetime
+                                _now = datetime.now(_tz).strftime("%Y-%m-%d %H:%M:%S")
+                                _upd = f"""
+                                    UPDATE {STREAM_REGISTRY_TABLE}
+                                    SET hk_enabled         = {'1' if new_hk else '0'},
+                                        archive_enabled    = {'1' if new_archive else '0'},
+                                        lifecycle_enabled  = {'1' if new_lifecycle else '0'},
+                                        updated_at         = '{_now}'
+                                    WHERE table_fqn = '{_flag_fqn}'
+                                """
+                                execute_write(_upd, dry_run=is_dry_run())
+                                audit(AuditEvent(
+                                    actor=current_user(),
+                                    action_type=AuditAction.HK_ENABLE
+                                              if new_hk else AuditAction.HK_DISABLE,
+                                    page_source="2_Table_Registration",
+                                    target_type="table",
+                                    target_id=_flag_fqn,
+                                    dry_run=is_dry_run(),
+                                    status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                    after_value=f"hk={new_hk},archive={new_archive},"
+                                               f"lifecycle={new_lifecycle}",
+                                ))
+                                cached_read_registry.clear()
+                                st.success(
+                                    f"✅ Flags updated for `{_flag_fqn}`."
+                                    + (" (dry run)" if is_dry_run() else "")
+                                )
+                            except Exception as e:
+                                st.error(f"Failed: {e}")
+
+    with flag_tab_bulk:
+        st.caption(
+            "Apply engine flag settings to all tables in a domain or database. "
+            "Useful for onboarding a new domain or disabling archival for a whole layer."
+        )
+
+        _bulk_domains = ["All"] + _get_domains()
+        bc1, bc2, bc3 = st.columns(3)
+        with bc1:
+            bulk_flag_domain = st.selectbox(
+                "Domain",
+                _bulk_domains,
+                key="bulk_flag_domain",
+                help="Apply to all tables in this domain.",
+            )
+        with bc2:
+            bulk_flag_layer = st.selectbox(
+                "Layer",
+                ["All"] + VALID_LAYERS,
+                key="bulk_flag_layer",
+                help="Restrict to a specific pipeline layer.",
+            )
+        with bc3:
+            bulk_flag_db = st.text_input(
+                "Database (optional)",
+                placeholder="finance_staging_db",
+                key="bulk_flag_db",
+                help="Further restrict to a specific Glue database.",
+            )
+
+        bf1, bf2, bf3 = st.columns(3)
+        with bf1:
+            bulk_hk = st.selectbox(
+                "🔧 Housekeeping",
+                ["no change", "enable", "disable"],
+                key="bulk_flag_hk",
+            )
+        with bf2:
+            bulk_archive = st.selectbox(
+                "📦 Archival",
+                ["no change", "enable", "disable"],
+                key="bulk_flag_archive",
+            )
+        with bf3:
+            bulk_lifecycle = st.selectbox(
+                "♻️ Lifecycle",
+                ["no change", "enable", "disable"],
+                key="bulk_flag_lifecycle",
+            )
+
+        all_no_change = (
+            bulk_hk == "no change"
+            and bulk_archive == "no change"
+            and bulk_lifecycle == "no change"
+        )
+
+        if is_dry_run():
+            st.info("🔵 Dry Run — no writes.")
+
+        if st.button(
+            "⚙️ Apply Bulk Flags",
+            type="primary",
+            disabled=all_no_change,
+            key="bulk_flag_apply",
+        ):
+            # Build SET clauses only for changed flags
+            set_parts = []
+            if bulk_hk       != "no change":
+                set_parts.append(f"hk_enabled = {'1' if bulk_hk == 'enable' else '0'}")
+            if bulk_archive   != "no change":
+                set_parts.append(f"archive_enabled = {'1' if bulk_archive == 'enable' else '0'}")
+            if bulk_lifecycle != "no change":
+                set_parts.append(f"lifecycle_enabled = {'1' if bulk_lifecycle == 'enable' else '0'}")
+
+            from datetime import UTC
+            _now2 = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+            set_parts.append(f"updated_at = '{_now2}'")
+
+            # Build WHERE
+            where_parts = []
+            if bulk_flag_domain != "All":
+                where_parts.append(f"domain = '{bulk_flag_domain}'")
+            if bulk_flag_layer  != "All":
+                where_parts.append(f"layer = '{bulk_flag_layer}'")
+            if bulk_flag_db.strip():
+                where_parts.append(f"database_name = '{bulk_flag_db.strip()}'")
+            where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+            bulk_sql = f"""
+                UPDATE {STREAM_REGISTRY_TABLE}
+                SET {', '.join(set_parts)}
+                {where_clause}
+            """
+
+            # Preview count first
+            count_sql = f"""
+                SELECT COUNT(*) AS cnt FROM {STREAM_REGISTRY_TABLE} {where_clause}
+            """
+            try:
+                cnt_df = cached_read_registry(count_sql)
+                cnt = int(cnt_df.iloc[0]["cnt"]) if not cnt_df.empty else 0
+                st.info(
+                    f"{cnt} table(s) will be updated: "
+                    f"hk={bulk_hk}, archive={bulk_archive}, lifecycle={bulk_lifecycle}"
+                )
+
+                if cnt > 0:
+                    execute_write(bulk_sql, dry_run=is_dry_run())
+                    audit(AuditEvent(
+                        actor=current_user(),
+                        action_type=AuditAction.HK_ENABLE,
+                        page_source="2_Table_Registration",
+                        target_type="domain",
+                        target_id=bulk_flag_domain,
+                        dry_run=is_dry_run(),
+                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                        after_value=f"hk={bulk_hk},archive={bulk_archive},"
+                                   f"lifecycle={bulk_lifecycle},count={cnt}",
+                    ))
+                    cached_read_registry.clear()
+                    st.success(
+                        f"✅ Flags updated for {cnt} table(s)."
+                        + (" (dry run)" if is_dry_run() else "")
+                    )
+            except Exception as e:
+                st.error(f"Bulk flag update failed: {e}")

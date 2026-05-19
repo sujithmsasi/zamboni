@@ -337,7 +337,6 @@ with tab_edit:
                             try:
                                 from datetime import datetime
 
-                                from engine.utils.athena_client import run_query as _rq
 
                                 now = datetime.now(UTC).strftime(
                                     "%Y-%m-%d %H:%M:%S"
@@ -357,12 +356,14 @@ with tab_edit:
                                         compaction_target_file_size_mb = {int(target_mb)},
                                         sort_order_cols                = '{_esc(sort_cols)}',
                                         partition_column               = '{_esc(partition_col)}',
+                                        partition_type                 = '{part_type}',
                                         manually_overridden            = 1,
                                         override_notes                 = '{_esc(override_notes)}',
                                         updated_at                     = '{now}'
                                     WHERE table_fqn = '{table_fqn}'
                                 """
-                                _rq(upd_sql, workgroup="app", dry_run=is_dry_run())
+                                from engine.utils.athena_client import run_query as _rq2
+                                _rq2(upd_sql, workgroup="app", dry_run=is_dry_run())
 
                                 audit(AuditEvent(
                                     actor=current_user(),
@@ -640,6 +641,10 @@ with tab_templates:
                         with open(tmpl_path, 'w') as f:
                             _json.dump(all_tmpls, f, indent=2)
 
+                        # Bust module-level template cache so reload picks up changes
+                        from engine.core.config import reload_templates
+                        reload_templates()
+
                         audit(AuditEvent(
                             actor=current_user(),
                             action_type=AuditAction.POLICY_CHANGE,
@@ -719,6 +724,10 @@ with tab_templates:
 
                         with open(tmpl_path, 'w') as f:
                             _json.dump(all_tmpls, f, indent=2)
+
+                        # Bust module-level template cache
+                        from engine.core.config import reload_templates
+                        reload_templates()
 
                         audit(AuditEvent(
                             actor=current_user(),
