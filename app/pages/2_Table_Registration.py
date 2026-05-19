@@ -21,6 +21,8 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from datetime import UTC, datetime
+
 import pandas as pd
 import streamlit as st
 
@@ -450,7 +452,7 @@ with tab_registered:
             # Rebuild unformatted FQN list from raw query
             try:
                 raw_df = cached_read_registry(
-                    f"SELECT table_fqn, domain, layer, tier, tier, "
+                    f"SELECT table_fqn, domain, layer, tier, "
                     f"owner_email, ci_number, stream_id, hk_enabled, "
                     f"archive_enabled, lifecycle_enabled, processing_cadence, "
                     f"dry_run_until "
@@ -513,12 +515,28 @@ with tab_registered:
                                     key=f"{_ek}_ci",
                                 )
 
-                            e_hk = st.checkbox(
-                                "Housekeeping Enabled",
-                                value=bool(trow.get("hk_enabled", False)),
-                                key=f"{_ek}_hk",
-                                help="Enable HK Engine for this table.",
-                            )
+                            ef1, ef2, ef3 = st.columns(3)
+                            with ef1:
+                                e_hk = st.checkbox(
+                                    "🔧 Housekeeping",
+                                    value=bool(trow.get("hk_enabled", False)),
+                                    key=f"{_ek}_hk",
+                                    help="Enable HK Engine (compaction + vacuum).",
+                                )
+                            with ef2:
+                                e_archive = st.checkbox(
+                                    "📦 Archival",
+                                    value=bool(trow.get("archive_enabled", False)),
+                                    key=f"{_ek}_archive",
+                                    help="Enable Archival Engine for cold partition export.",
+                                )
+                            with ef3:
+                                e_lifecycle = st.checkbox(
+                                    "♻️ Lifecycle",
+                                    value=bool(trow.get("lifecycle_enabled", False)),
+                                    key=f"{_ek}_lifecycle",
+                                    help="Enable Lifecycle Engine (non-prod state machine).",
+                                )
                             e_cadence = st.selectbox(
                                 "Processing Cadence",
                                 ["daily", "weekly", "monthly", "hourly", "every_trigger"],
@@ -537,6 +555,9 @@ with tab_registered:
 
                             if st.form_submit_button("💾 Save Changes", type="primary"):
                                 try:
+                                    _now_edit = datetime.now(UTC).strftime(
+                                        "%Y-%m-%d %H:%M:%S"
+                                    )
                                     upd_sql = f"""
                                         UPDATE {STREAM_REGISTRY_TABLE}
                                         SET domain             = '{e_domain}',
@@ -546,8 +567,10 @@ with tab_registered:
                                             owner_email        = '{e_owner}',
                                             ci_number          = '{e_ci}',
                                             hk_enabled         = {'1' if e_hk else '0'},
+                                            archive_enabled    = {'1' if e_archive else '0'},
+                                            lifecycle_enabled  = {'1' if e_lifecycle else '0'},
                                             processing_cadence = '{e_cadence}',
-                                            updated_at         = CURRENT_TIMESTAMP
+                                            updated_at         = '{_now_edit}'
                                         WHERE table_fqn = '{edit_fqn}'
                                     """
                                     execute_write(upd_sql, dry_run=is_dry_run())
@@ -647,9 +670,7 @@ with tab_registered:
 
                         if st.form_submit_button("💾 Save Flags", type="primary"):
                             try:
-                                from datetime import UTC as _tz
-                                from datetime import datetime
-                                _now = datetime.now(_tz).strftime("%Y-%m-%d %H:%M:%S")
+                                _now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                                 _upd = f"""
                                     UPDATE {STREAM_REGISTRY_TABLE}
                                     SET hk_enabled         = {'1' if new_hk else '0'},
@@ -702,12 +723,30 @@ with tab_registered:
                 help="Restrict to a specific pipeline layer.",
             )
         with bc3:
-            bulk_flag_db = st.text_input(
+            # Auto-populate databases from stream_registry based on domain selection
+            @st.cache_data(ttl=120, show_spinner=False)
+            def _get_databases_for_domain(domain: str) -> list[str]:
+                try:
+                    where = f"WHERE domain = '{domain}'" if domain != "All" else ""
+                    df = cached_read_registry(
+                        f"SELECT DISTINCT database_name FROM {STREAM_REGISTRY_TABLE} "
+                        f"{where} ORDER BY database_name"
+                    )
+                    if not df.empty and "database_name" in df.columns:
+                        return ["All"] + df["database_name"].dropna().tolist()
+                except Exception:
+                    pass
+                return ["All"]
+
+            _db_options = _get_databases_for_domain(bulk_flag_domain)
+            bulk_flag_db_sel = st.selectbox(
                 "Database (optional)",
-                placeholder="finance_staging_db",
+                _db_options,
                 key="bulk_flag_db",
-                help="Further restrict to a specific Glue database.",
+                help="Auto-populated from selected domain. "
+                     "Choose All or a specific database.",
             )
+            bulk_flag_db = "" if bulk_flag_db_sel == "All" else bulk_flag_db_sel
 
         bf1, bf2, bf3 = st.columns(3)
         with bf1:
@@ -753,7 +792,6 @@ with tab_registered:
             if bulk_lifecycle != "no change":
                 set_parts.append(f"lifecycle_enabled = {'1' if bulk_lifecycle == 'enable' else '0'}")
 
-            from datetime import UTC
             _now2 = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
             set_parts.append(f"updated_at = '{_now2}'")
 
@@ -763,8 +801,8 @@ with tab_registered:
                 where_parts.append(f"domain = '{bulk_flag_domain}'")
             if bulk_flag_layer  != "All":
                 where_parts.append(f"layer = '{bulk_flag_layer}'")
-            if bulk_flag_db.strip():
-                where_parts.append(f"database_name = '{bulk_flag_db.strip()}'")
+            if bulk_flag_db:
+                where_parts.append(f"database_name = '{bulk_flag_db}'")
             where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
             bulk_sql = f"""

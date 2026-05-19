@@ -181,18 +181,29 @@ with tab_edit:
         fqn_to_label = {v: k for k, v in label_to_fqn.items()}
         labels = ["-- select a table --"] + list(label_to_fqn.keys())
 
-        # Restore last selection
+        # Default to "-- select a table --" on every fresh page load
+        # Only restore previous selection if user explicitly made one this session
         _prev_label = st.session_state.get("pc_edit_table_label", labels[0])
-        _default_idx = labels.index(_prev_label) if _prev_label in labels else 0
+        # If previous label is no longer in labels (stale), reset to default
+        if _prev_label not in labels:
+            _prev_label = labels[0]
+            st.session_state["pc_edit_table_label"] = _prev_label
+        _default_idx = labels.index(_prev_label)
 
         selected_label = st.selectbox(
             "Table (type to search)",
             labels,
             index=_default_idx,
             key="pc_edit_table_sel",
-            help="Type the table name or database to filter suggestions.",
+            help="Type the table name or database to filter. "
+                 "Defaults to blank on each visit.",
         )
-        st.session_state["pc_edit_table_label"] = selected_label
+        # Only persist selection if user actually chose something
+        if selected_label != labels[0]:
+            st.session_state["pc_edit_table_label"] = selected_label
+        elif st.session_state.get("pc_edit_table_label") != labels[0]:
+            # User navigated back without selecting — reset
+            st.session_state["pc_edit_table_label"] = labels[0]
 
         table_fqn = label_to_fqn.get(selected_label)
 
@@ -384,6 +395,8 @@ with tab_edit:
                                 ))
                                 clear_caches()
                                 st.session_state["pc_needs_refresh"] = True
+                                # Keep current selection visible after save
+                                # (don't clear -- user may want to tweak again)
                                 st.success(
                                     f"✅ Config saved for `{table_fqn}`."
                                     + (" (dry run)" if is_dry_run() else "")
