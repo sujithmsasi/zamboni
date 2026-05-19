@@ -228,7 +228,9 @@ with tab_edit:
                         f"{'⚠️ Manually overridden' if cfg.get('manually_overridden') else '✅ On template'}"
                     )
 
-                    with st.form("edit_config_form", clear_on_submit=False):
+                    # Use table_fqn in form key so switching tables resets all widgets
+                    _fk = table_fqn.replace(".", "_").replace("/", "_")
+                    with st.form(f"edit_config_form_{_fk}", clear_on_submit=False):
                         col1, col2 = st.columns(2)
 
                         with col1:
@@ -236,6 +238,7 @@ with tab_edit:
                                 "Snapshot Retention (days)",
                                 value=int(cfg.get("snapshot_retention_days") or 7),
                                 min_value=1,
+                                key=f"{_fk}_snap_days",
                                 help="How long to keep snapshots before expiry. "
                                      "Drives TBLPROPERTIES vacuum_max_snapshot_age_seconds.",
                             )
@@ -243,24 +246,28 @@ with tab_edit:
                                 "Min Snapshots to Keep",
                                 value=int(cfg.get("snapshot_min_to_keep") or 30),
                                 min_value=2,
+                                key=f"{_fk}_snap_min",
                                 help="Safety floor — VACUUM never removes below this. "
                                      "Zamboni default: 30 (conservative buffer).",
                             )
                             orphan = st.number_input(
                                 "Orphan Retention (days)",
-                                value=int(cfg.get("orphan_file_retention_days") or 2),
+                                value=max(int(cfg.get("orphan_file_retention_days") or 2), 2),
                                 min_value=2,
+                                key=f"{_fk}_orphan",
                                 help="Minimum 2 days — protects in-flight writers.",
                             )
                             orphan_cadence = st.number_input(
                                 "Orphan Cleanup Cadence (days)",
                                 value=int(cfg.get("orphan_cleanup_cadence_days") or 7),
                                 min_value=0,
+                                key=f"{_fk}_orphan_cad",
                                 help="How often to run orphan cleanup. 0 = disabled.",
                             )
                             run_freq = st.selectbox(
                                 "Run Frequency",
                                 ["every_trigger", "daily", "weekly", "monthly"],
+                                key=f"{_fk}_run_freq",
                                 index=(
                                     ["every_trigger","daily","weekly","monthly"]
                                     .index(cfg.get("run_frequency","daily"))
@@ -275,6 +282,7 @@ with tab_edit:
                             strategy = st.selectbox(
                                 "Compaction Strategy",
                                 ["binpack", "sort", "zorder"],
+                                key=f"{_fk}_strategy",
                                 index=(
                                     ["binpack","sort","zorder"]
                                     .index(cfg.get("compaction_strategy","binpack"))
@@ -287,6 +295,7 @@ with tab_edit:
                             engine_choice = st.selectbox(
                                 "Compaction Engine",
                                 ["athena", "glue"],
+                                key=f"{_fk}_engine",
                                 index=(
                                     ["athena","glue"]
                                     .index(cfg.get("compaction_engine","athena"))
@@ -300,12 +309,14 @@ with tab_edit:
                                 "Target File Size (MB)",
                                 value=int(cfg.get("compaction_target_file_size_mb") or 128),
                                 min_value=64,
+                                key=f"{_fk}_target_mb",
                                 help="Target output file size after compaction. "
                                      "128 MB staging, 256 MB datalake, 512 MB base/master.",
                             )
                             sort_cols = st.text_input(
                                 "Sort / Z-Order Columns",
                                 value=str(cfg.get("sort_order_cols") or ""),
+                                key=f"{_fk}_sort_cols",
                                 placeholder="partition_date, customer_id",
                                 help="Comma-separated columns for sort or zorder strategy. "
                                      "Ignored for binpack.",
@@ -313,6 +324,7 @@ with tab_edit:
                             partition_col = st.text_input(
                                 "Partition Column",
                                 value=str(cfg.get("partition_column") or ""),
+                                key=f"{_fk}_part_col",
                                 placeholder="partition_date",
                                 help="Primary partition column — drives hot-partition "
                                      "filter window for compaction.",
@@ -330,6 +342,7 @@ with tab_edit:
 
                         override_notes = st.text_input(
                             "Reason for override *",
+                            key=f"{_fk}_reason",
                             placeholder="e.g. High-volume table needs shorter retention",
                             help="Required. Stored in audit log and hk_config.",
                         )
@@ -536,6 +549,10 @@ with tab_templates:
     )
 
     templates = get_policy_templates()
+    # Flash message from edit/add operations (survives rerun)
+    if "tmpl_flash" in st.session_state:
+        st.success(st.session_state.pop("tmpl_flash"))
+
     tmpl_tab_view, tmpl_tab_edit, tmpl_tab_add = st.tabs([
         "📋 View All",
         "✏️ Edit Template",
@@ -615,13 +632,13 @@ with tab_templates:
                     )
                     e_snap_min = st.number_input(
                         "Min Snapshots to Keep",
-                        value=int(t.get("snapshot_min_to_keep", 30)),
+                        value=max(int(t.get("snapshot_min_to_keep") or 2), 2),
                         min_value=2,
                         key=f"{_k}_snap_min",
                     )
                     e_orphan = st.number_input(
                         "Orphan Retention (days)",
-                        value=int(t.get("orphan_file_retention_days", 2)),
+                        value=max(int(t.get("orphan_file_retention_days") or 2), 2),
                         min_value=2,
                         key=f"{_k}_orp",
                     )
@@ -669,7 +686,7 @@ with tab_templates:
                             status="SUCCESS",
                             after_value=f"strategy={e_strategy},freq={e_freq}",
                         ))
-                        st.success(f"✅ Template `{tmpl_to_edit}` saved.")
+                        st.session_state["tmpl_flash"] = f"✅ Template `{tmpl_to_edit}` saved."
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to save template: {e}")
@@ -753,9 +770,7 @@ with tab_templates:
                             status="SUCCESS",
                             after_value=f"new template: strategy={a_strategy}",
                         ))
-                        st.success(
-                            f"✅ Template `{tmpl_name.strip().upper()}` added."
-                        )
+                        st.session_state["tmpl_flash"] = f"✅ Template `{tmpl_name.strip().upper()}` added."
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to add template: {e}")
