@@ -26,42 +26,75 @@ def build_hot_partition_filter(
     days: int | None = None,
     reference_date: date | None = None,
     processing_cadence: str | None = None,
+    partition_type: str | None = None,
 ) -> str | None:
     """
     Build a WHERE clause to restrict compaction to recently-written partitions.
-    Avoids Athena's 100-partition OPTIMIZE limit on large historical tables.
+
+    Gap 13: Now type-aware. Uses partition_type to emit correct SQL literal:
+      date           → column >= DATE '2026-03-01'
+      timestamp      → column >= TIMESTAMP '2026-03-01 00:00:00'
+      int_yyyymmdd   → column >= 20260301  (integer YYYYMMDD)
+      string         → column >= '2026-03-01'
+      identity/none  → None  (non-date partition, no date filter applicable)
 
     Priority:
-      1. processing_cadence (v2 field) — uses _CADENCE_LOOKBACK_DAYS map
+      1. processing_cadence — uses _CADENCE_LOOKBACK_DAYS map
       2. days (legacy partition_filter_days from hk_config)
       3. None — no filter applied
 
     Args:
-        partition_column:    e.g. 'partition_date'
-        days:                Legacy lookback days from hk_config.partition_filter_days
-        reference_date:      Base date. Defaults to today.
-        processing_cadence:  v2 field — hourly|daily|weekly|monthly
-
-    Returns:
-        SQL fragment e.g. "partition_date >= DATE '2026-03-01'" or None
+        partition_column:   e.g. 'partition_date'
+        days:               Legacy lookback days
+        reference_date:     Base date. Defaults to today.
+        processing_cadence: hourly|daily|weekly|monthly
+        partition_type:     date|timestamp|int_yyyymmdd|string|identity|none
+                            Defaults to 'date' for backward compatibility.
     """
     ref = reference_date or date.today()
 
-    # Cadence-based window (v2 design — preferred)
+    # Non-date partition types — no date filter applicable
+    pt = (partition_type or "date").lower().strip()
+    if pt in ("identity", "none", ""):
+        return None
+
+    # Determine lookback window
+    lookback = None
+
     if processing_cadence:
         cadence = processing_cadence.lower().strip()
         if cadence == "monthly":
             return None
         lookback = _CADENCE_LOOKBACK_DAYS.get(cadence)
-        if lookback is not None:
-            cutoff = ref - timedelta(days=lookback)
-            return f"{partition_column} >= DATE '{cutoff.isoformat()}'"
 
-    # Legacy fallback
-    if days is None:
+    if lookback is None and days is not None:
+        lookback = days
+
+    if lookback is None:
         return None
-    cutoff = ref - timedelta(days=days)
-    return f"{partition_column} >= DATE '{cutoff.isoformat()}'"
+
+    cutoff = ref - timedelta(days=lookback)
+    return _build_date_predicate(partition_column, cutoff, pt)
+
+
+def _build_date_predicate(column: str, cutoff: date, partition_type: str) -> str:
+    """
+    Build the correct SQL date predicate for the given partition type.
+
+    partition_type:
+      date          → column >= DATE 'YYYY-MM-DD'
+      timestamp     → column >= TIMESTAMP 'YYYY-MM-DD 00:00:00'
+      int_yyyymmdd  → column >= YYYYMMDD (integer literal)
+      string        → column >= 'YYYY-MM-DD'
+    """
+    if partition_type == "timestamp":
+        return f"{column} >= TIMESTAMP '{cutoff.isoformat()} 00:00:00'"
+    if partition_type == "int_yyyymmdd":
+        return f"{column} >= {cutoff.strftime('%Y%m%d')}"
+    if partition_type == "string":
+        return f"{column} >= '{cutoff.isoformat()}'"
+    # Default: date type (backward compatible)
+    return f"{column} >= DATE '{cutoff.isoformat()}'"
 
 
 def derive_hot_partitions_from_metadata(

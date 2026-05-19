@@ -125,6 +125,141 @@ def get_table_location(database: str, table_name: str) -> str | None:
     return table.get("StorageDescriptor", {}).get("Location")
 
 
+
+
+# ── Partition Discovery ───────────────────────────────────────────────────────
+
+def discover_partition_spec(
+    database: str,
+    table_name: str,
+    workgroup: str = "standard",
+) -> dict:
+    """
+    Discover the partition column name and type for an Iceberg table.
+
+    Gap 13: Iceberg tables do not expose partition specs via Glue PartitionKeys.
+    We query the $partitions metadata table to get the actual Iceberg
+    partition spec (column name + transform).
+
+    Returns dict:
+      {
+        "partition_column": "transaction_date",
+        "partition_type":   "date",    # date|timestamp|int_yyyymmdd|string|identity|none
+        "transform":        "days",    # days|months|years|hours|identity|bucket|truncate
+        "source_column":    "transaction_date",
+        "discovered":       True,
+      }
+    Returns {"partition_type": "none", "discovered": False} on failure.
+    """
+    if ZAMBONI_LOCAL_MODE:
+        return {"partition_type": "date", "partition_column": "partition_date",
+                "transform": "days", "discovered": False, "source": "local_mode_default"}
+
+    try:
+        # Strategy 1: query Iceberg $partitions metadata table
+        from engine.utils.athena_client import read_sql
+        sql = f"""
+            SELECT partition
+            FROM "glue_catalog"."{database}"."{table_name}$partitions"
+            LIMIT 1
+        """
+        df = read_sql(sql, workgroup=workgroup, database=database)
+        if not df.empty and "partition" in df.columns:
+            # Partition column names come from the struct fields
+            part_cols = list(df["partition"].iloc[0].keys()) if hasattr(df["partition"].iloc[0], "keys") else []
+            if part_cols:
+                col_name = part_cols[0]  # first partition column
+                col_type = _infer_partition_type_from_glue(database, table_name, col_name)
+                return {
+                    "partition_column": col_name,
+                    "partition_type":   col_type,
+                    "transform":        "days" if col_type == "date" else "identity",
+                    "source_column":    col_name,
+                    "discovered":       True,
+                    "source":           "$partitions_metadata",
+                }
+    except Exception:
+        pass
+
+    try:
+        # Strategy 2: Glue StorageDescriptor.Columns + heuristic
+        table = get_table(database, table_name)
+        if not table:
+            return {"partition_type": "none", "discovered": False}
+
+        columns = table.get("StorageDescriptor", {}).get("Columns", [])
+        result  = _detect_date_column(columns)
+        if result:
+            return {**result, "discovered": True, "source": "glue_columns_heuristic"}
+    except Exception:
+        pass
+
+    return {"partition_type": "none", "discovered": False, "source": "not_found"}
+
+
+def _infer_partition_type_from_glue(database: str, table_name: str, col_name: str) -> str:
+    """Map Glue column type to Zamboni partition_type."""
+    try:
+        table   = get_table(database, table_name)
+        columns = table.get("StorageDescriptor", {}).get("Columns", [])
+        for col in columns:
+            if col["Name"].lower() == col_name.lower():
+                return _glue_type_to_partition_type(col.get("Type", ""))
+    except Exception:
+        pass
+    return "date"  # safe default for date-named columns
+
+
+def _glue_type_to_partition_type(glue_type: str) -> str:
+    """Convert Glue type string to Zamboni partition_type."""
+    t = glue_type.lower().strip()
+    if t == "date":
+        return "date"
+    if t in ("timestamp", "timestamp with time zone"):
+        return "timestamp"
+    if t in ("int", "integer", "bigint", "long"):
+        return "int_yyyymmdd"   # assume yyyyMMdd convention for int partitions
+    if t in ("string", "varchar", "char"):
+        return "string"
+    return "date"  # fallback
+
+
+def _detect_date_column(columns: list[dict]) -> dict | None:
+    """
+    Heuristic: find a date-named column in the table schema.
+    Prefers columns named partition_date, load_date, process_date,
+    transaction_date, event_date, business_date in priority order.
+    """
+    preferred = [
+        "partition_date", "load_date", "process_date",
+        "transaction_date", "event_date", "business_date",
+        "created_date", "updated_date", "dt",
+    ]
+    col_map = {c["Name"].lower(): c for c in columns}
+
+    for name in preferred:
+        if name in col_map:
+            col = col_map[name]
+            return {
+                "partition_column": col["Name"],
+                "partition_type":   _glue_type_to_partition_type(col.get("Type", "")),
+                "transform":        "days",
+                "source_column":    col["Name"],
+            }
+
+    # Last resort: any column with "date" or "dt" in the name
+    for name, col in col_map.items():
+        if "date" in name or name.endswith("_dt"):
+            return {
+                "partition_column": col["Name"],
+                "partition_type":   _glue_type_to_partition_type(col.get("Type", "")),
+                "transform":        "days",
+                "source_column":    col["Name"],
+            }
+
+    return None
+
+
 # ── Gate 1 — Upstream Job Status ──────────────────────────────────────────────
 
 def get_last_job_run(job_name: str) -> dict | None:

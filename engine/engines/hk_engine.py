@@ -418,7 +418,30 @@ class HKEngine(BaseEngine):
                 total_bytes_scanned += compaction_result.get("bytes_scanned", 0)
 
         # ── Snapshot expiry ───────────────────────────────────────────────────
-        if health.needs_vacuum:
+        # Gap 10: Explicit OPTIMIZE → VACUUM ordering guard
+        # If compaction was needed but did not succeed, defer VACUUM so we
+        # never expire a snapshot that OPTIMIZE just created.
+        _compaction_ok = (
+            not health.needs_compaction
+            or op_status in ("SUCCESS", "DRY_RUN", "SKIPPED")
+        )
+        if health.needs_vacuum and not _compaction_ok:
+            log.warning(
+                "hk_engine.vacuum_deferred_compaction_failed",
+                table_fqn=fqn, compaction_status=op_status,
+                reason="Deferring VACUUM to next run",
+            )
+            _now_ts = datetime.now(UTC)
+            self._write_log(
+                table_row, "vacuum", "SKIPPED",
+                skip_reason="SKIP_COMPACTION_PREREQUISITE",
+                started_at=_now_ts,
+                completed_at=_now_ts,
+                effective_dry_run=table_dry_run,
+            )
+            vacuum_result = {}
+
+        elif health.needs_vacuum:
             op_start = datetime.now(UTC)
             if not wait_for_capacity(workgroup, max_wait_seconds=30):
                 reason = f"SKIP_BACKPRESSURE_TIMEOUT (workgroup={workgroup})"

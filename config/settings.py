@@ -89,7 +89,13 @@ MAX_CONCURRENT_PARTITIONS = int(os.getenv("MAX_CONCURRENT_PARTITIONS", "10"))
 CIRCUIT_BREAKER_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "3"))
 
 # ── Hard floors — never override these in config ──────────────────────────────
-SNAPSHOT_MIN_FLOOR            = 30    # Always retain at least 30 snapshots
+SNAPSHOT_MIN_FLOOR            = 30    # Zamboni safety floor (conservative buffer for SCD2)
+SNAPSHOT_TRIVIAL_SKIP         = 5     # G9: skip VACUUM when snapshot_count < this
+ANOMALOUS_COMMITS_WARN        = 50    # G10: warn if commits/day exceeds this
+ANOMALOUS_COMMITS_BLOCK       = 100   # G10: block if commits/day exceeds this
+VACUUM_MAX_ITERATIONS         = 3     # Max VACUUM iterations for bloated tables
+VACUUM_ITERATION_SLEEP_SECS   = 30    # Sleep between VACUUM iterations
+VACUUM_BLOAT_THRESHOLD        = 500   # expired_snapshots threshold for iterative VACUUM
 ORPHAN_MIN_RETENTION_HOURS    = 48    # Never delete files newer than 48h
 
 # ── Layers ────────────────────────────────────────────────────────────────────

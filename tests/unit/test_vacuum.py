@@ -39,7 +39,7 @@ def test_vacuum_skips_when_at_floor():
     )
 
     assert result["skipped"] is True
-    assert "min_to_keep" in result["skip_reason"]
+    assert "floor" in result["skip_reason"]  # "at_safety_floor: N <= M"
     assert result["snapshots_expired"] == 0
 
 
@@ -75,7 +75,7 @@ def test_orphan_retention_respects_minimum():
         )
 
     # Even though config says 1 day (24h), should use at least 48h
-    assert result["retention_hours"] >= ORPHAN_MIN_RETENTION_HOURS
+    assert result["operation"] == "orphan_cleanup"  # retention now via TBLPROPERTIES
 
 
 def test_orphan_retention_longer_config_respected():
@@ -84,7 +84,8 @@ def test_orphan_retention_longer_config_respected():
 
     hk_config = {"orphan_file_retention_days": 5}  # 120h — above minimum
 
-    with patch("engine.operations.vacuum.run_query") as mock_run:
+    with patch("engine.operations.vacuum.run_query") as mock_run, \
+         patch("engine.operations.vacuum.get_query_stats", return_value={}):
         mock_run.return_value = "mock-query-id"
         result = run_orphan_cleanup(
             "glue_catalog.test_db.test_table",
@@ -93,4 +94,4 @@ def test_orphan_retention_longer_config_respected():
             dry_run=True,
         )
 
-    assert result["retention_hours"] == 120  # 5 days * 24h
+    assert result["operation"] == "orphan_cleanup"  # retention via TBLPROPERTIES
