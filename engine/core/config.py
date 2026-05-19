@@ -189,10 +189,10 @@ def update_config_field(
 
     sql = f"""
         UPDATE {HK_CONFIG_TABLE}
-        SET {field}              = {value_sql},
-            manually_overridden  = true,
-            override_notes       = {notes_sql},
-            template_applied_at  = TIMESTAMP '{now}'
+        SET {field}             = {value_sql},
+            manually_overridden = 1,
+            override_notes      = {notes_sql},
+            updated_at          = '{now}'
         WHERE table_fqn = '{table_fqn}'
     """
     log.info("config.update_field", table_fqn=table_fqn, field=field, dry_run=dry_run)

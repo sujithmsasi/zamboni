@@ -115,7 +115,8 @@ CREATE TABLE IF NOT EXISTS hk_config (
     manually_overridden             INTEGER DEFAULT 0,
     override_notes                  TEXT,
     created_at                      TEXT,
-    updated_at                      TEXT
+    updated_at                      TEXT,
+    partition_type                  TEXT DEFAULT 'date'
 )""",
 
 "execution_log": """

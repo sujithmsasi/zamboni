@@ -1,9 +1,15 @@
 """
-Zamboni — Policy Configuration Page
-View and edit per-table HK config.
-Apply policy templates, override individual fields, bulk apply by domain/layer.
-All writes honour the sidebar dry-run toggle.
+Zamboni -- Policy Configuration Page
+View and edit per-table HK config, manage templates.
+
+Tabs:
+  1. View Configs       -- full grid with engine column, filters
+  2. Edit Single Table  -- cascading selector (no FQN typing), single UPDATE
+  3. Bulk Apply         -- apply template to domain+layer
+  4. Templates          -- view/add/edit policy templates
 """
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
@@ -11,30 +17,67 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import json
+from datetime import UTC
+
 import streamlit as st
 
 from app.components.athena_runner import cached_read_registry, clear_caches
-from app.components.auth import check_login
+from app.components.auth import check_login, current_user
 from app.components.filters import domain_filter, layer_filter, tier_filter
 from app.components.header import render as render_header
 from app.components.sidebar import is_dry_run
 from app.components.sidebar import render as render_sidebar
-from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+from config.settings import APP_ENV, HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
 from engine.core.audit import AuditAction, AuditEvent, audit
 from engine.core.config import get_policy_templates
 
-st.set_page_config(page_title="Zamboni — Policy Config", page_icon="⚙️", layout="wide")
+st.set_page_config(
+    page_title="Zamboni — Policy Config",
+    page_icon="⚙️",
+    layout="wide",
+)
 check_login()
 render_sidebar()
 render_header()
 
 st.title("⚙️ Policy Configuration")
-st.caption("Manage housekeeping policies per table. Templates provide sensible defaults; individual fields can be overridden.")
+st.caption(
+    "Manage housekeeping policies per table. "
+    "Templates provide sensible defaults; individual fields can be overridden."
+)
 
-tab1, tab2, tab3 = st.tabs(["📋 View Configs", "✏️ Edit Single Table", "🔄 Bulk Apply Template"])
+tab_view, tab_edit, tab_bulk, tab_templates = st.tabs([
+    "📋 View Configs",
+    "✏️ Edit Single Table",
+    "🔄 Bulk Apply Template",
+    "🗂️ Templates",
+])
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _get_all_tables() -> list[str]:
+    """Return all registered table FQNs for the table selector."""
+    try:
+        df = cached_read_registry(
+            f"SELECT table_fqn FROM {STREAM_REGISTRY_TABLE} ORDER BY table_fqn"
+        )
+        return df["table_fqn"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def _table_short_name(fqn: str) -> str:
+    """'glue_catalog.finance_db.fin_payment' → 'fin_payment  (finance_db)'"""
+    parts = fqn.split(".")
+    if len(parts) == 3:
+        return f"{parts[2]}  ({parts[1]})"
+    return fqn
+
 
 # ── Tab 1: View Configs ───────────────────────────────────────────────────────
-with tab1:
+with tab_view:
     c1, c2, c3 = st.columns(3)
     with c1:
         d = domain_filter(key="pc_domain")
@@ -43,7 +86,19 @@ with tab1:
     with c3:
         t = tier_filter(key="pc_tier")
 
-    conditions = ["r.table_format = 'iceberg'", "r.hk_enabled = true"]
+    show_all = st.checkbox(
+        "Include tables without HK enabled",
+        value=False,
+        key="pc_show_all",
+    )
+
+    if st.button("🔄 Refresh", key="pc_view_refresh"):
+        cached_read_registry.clear()
+        st.rerun()
+
+    conditions = ["r.table_format = 'iceberg'"]
+    if not show_all:
+        conditions.append("r.hk_enabled = 1")
     if d:
         conditions.append(f"r.domain = '{d}'")
     if layer_sel:
@@ -54,11 +109,18 @@ with tab1:
 
     sql = f"""
         SELECT
-            r.table_fqn, r.domain, r.layer, r.tier,
-            c.policy_template, c.compaction_strategy,
-            c.compaction_target_file_size_mb,
-            c.snapshot_retention_days, c.snapshot_min_to_keep,
-            c.orphan_file_retention_days, c.run_frequency,
+            r.table_fqn,
+            r.domain,
+            r.layer,
+            r.tier,
+            c.policy_template,
+            c.compaction_strategy,
+            c.compaction_engine,
+            c.compaction_target_file_size_mb  AS target_mb,
+            c.snapshot_retention_days,
+            c.snapshot_min_to_keep,
+            c.orphan_file_retention_days,
+            c.run_frequency,
             c.manually_overridden
         FROM {STREAM_REGISTRY_TABLE} r
         LEFT JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn
@@ -66,160 +128,279 @@ with tab1:
         ORDER BY r.domain, r.layer, r.table_fqn
         LIMIT 500
     """
-    with st.spinner("Loading configs..."):
-        try:
-            df = cached_read_registry(sql)
-            if df.empty:
-                st.info("No tables match the selected filters.")
-            else:
-                df["manually_overridden"] = df["manually_overridden"].apply(
-                    lambda x: "⚠️ Overridden" if x else "✅ Template"
-                )
-                st.dataframe(df, use_container_width=True, hide_index=True, height=400)
-                st.caption(f"{len(df)} tables shown")
-        except Exception as e:
-            st.error(f"Query failed: {e}")
+    try:
+        df = cached_read_registry(sql)
+        if df.empty:
+            st.info("No tables match the selected filters.")
+        else:
+            df["manually_overridden"] = df["manually_overridden"].apply(
+                lambda x: "⚠️ Override" if x else "✅ Template"
+            )
+            # Friendly column names
+            df.rename(columns={
+                "table_fqn":                   "Table",
+                "compaction_strategy":         "Strategy",
+                "compaction_engine":           "Engine",
+                "compaction_target_file_size_mb": "Target MB",
+                "snapshot_retention_days":     "Snap Days",
+                "snapshot_min_to_keep":        "Snap Floor",
+                "orphan_file_retention_days":  "Orphan Days",
+                "run_frequency":               "Frequency",
+                "manually_overridden":         "Status",
+            }, inplace=True, errors="ignore")
+
+            st.dataframe(
+                df, use_container_width=True,
+                hide_index=True, height=420,
+            )
+            st.caption(f"{len(df)} table(s) shown")
+
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Export CSV", csv,
+                               "hk_config.csv", "text/csv")
+    except Exception as e:
+        st.error(f"Query failed: {e}")
+
 
 # ── Tab 2: Edit Single Table ──────────────────────────────────────────────────
-with tab2:
-    st.markdown("#### Edit HK Config for a Table")
-    table_fqn = st.text_input(
-        "Table FQN",
-        placeholder="glue_catalog.finance_db.finance_staging",
-        key="edit_table_fqn",
+with tab_edit:
+    st.subheader("Edit HK Config for a Table")
+    st.caption(
+        "Select a table from the dropdown — type to search. "
+        "All fields are pre-populated from the current config."
     )
 
-    if table_fqn:
-        sql = f"SELECT * FROM {HK_CONFIG_TABLE} WHERE table_fqn = '{table_fqn}' LIMIT 1"
-        try:
-            df = cached_read_registry(sql)
-            if df.empty:
-                st.warning("No config found for this table. Apply a template first in the Bulk tab.")
-            else:
-                config = df.iloc[0].to_dict()
+    # Cascading selector: domain → database → table
+    all_tables = _get_all_tables()
 
-                with st.form("edit_config_form"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        snap_days = st.number_input(
-                            "Snapshot Retention Days",
-                            value=int(config.get("snapshot_retention_days") or 7),
-                            min_value=1,
-                        )
-                        snap_min = st.number_input(
-                            "Min Snapshots to Keep",
-                            value=int(config.get("snapshot_min_to_keep") or 30),
-                            min_value=30,
-                            help="Hard floor: 30. Never goes below this.",
-                        )
-                        orphan = st.number_input(
-                            "Orphan Retention Days",
-                            value=int(config.get("orphan_file_retention_days") or 2),
-                            min_value=2,
-                            help="Min 2 days — safety floor to protect in-flight writers.",
-                        )
-                        orphan_cadence = st.number_input(
-                            "Orphan Cleanup Cadence (days)",
-                            value=int(config.get("orphan_cleanup_cadence_days") or 7),
-                            min_value=0,
-                            help="How often to run orphan cleanup. 0 = disabled.",
-                        )
-                    with col2:
-                        strategy = st.selectbox(
-                            "Compaction Strategy",
-                            ["binpack", "sort", "zorder"],
-                            index=["binpack", "sort", "zorder"].index(
-                                config.get("compaction_strategy", "binpack")
-                            ),
-                        )
-                        sort_order_cols = st.text_input(
-                            "Sort / Z-Order Columns (comma-separated)",
-                            value=config.get("sort_order_cols") or "",
-                            placeholder="col_a, col_b",
-                            help="Required for sort/zorder strategies. "
-                                 "Ignored for binpack.",
-                        )
-                        target_mb = st.number_input(
-                            "Target File Size (MB)",
-                            value=int(config.get("compaction_target_file_size_mb") or 128),
-                            min_value=64,
-                        )
-                        engine_choice = st.selectbox(
-                            "Compaction Engine",
-                            ["athena", "glue"],
-                            index=["athena", "glue"].index(
-                                config.get("compaction_engine", "athena")
-                            ),
-                        )
-                        run_freq = st.selectbox(
-                            "Run Frequency",
-                            ["every_trigger", "daily", "weekly", "monthly"],
-                            index=["every_trigger", "daily", "weekly", "monthly"].index(
-                                config.get("run_frequency", "daily")
-                            ),
-                        )
+    if not all_tables:
+        st.warning("No tables registered. Register tables in Table Registration first.")
+    else:
+        # Build display labels and reverse map
+        label_to_fqn = {_table_short_name(fqn): fqn for fqn in all_tables}
+        fqn_to_label = {v: k for k, v in label_to_fqn.items()}
+        labels = ["-- select a table --"] + list(label_to_fqn.keys())
 
-                    override_notes = st.text_input("Reason for this override (required)")
-                    dry_note = "⚠️ Dry Run ON — changes will be simulated only." if is_dry_run() else ""
-                    if dry_note:
-                        st.warning(dry_note)
+        # Restore last selection
+        _prev_label = st.session_state.get("pc_edit_table_label", labels[0])
+        _default_idx = labels.index(_prev_label) if _prev_label in labels else 0
 
-                    submitted = st.form_submit_button("💾 Save Changes", type="primary")
+        selected_label = st.selectbox(
+            "Table (type to search)",
+            labels,
+            index=_default_idx,
+            key="pc_edit_table_sel",
+            help="Type the table name or database to filter suggestions.",
+        )
+        st.session_state["pc_edit_table_label"] = selected_label
 
-                if submitted:
-                    if not override_notes:
-                        st.error("Please provide a reason for the override.")
-                    else:
-                        try:
-                            from engine.core.config import update_config_field
-                            fields = {
-                                "snapshot_retention_days":        snap_days,
-                                "snapshot_min_to_keep":           snap_min,
-                                "orphan_file_retention_days":     orphan,
-                                "orphan_cleanup_cadence_days":    orphan_cadence,
-                                "compaction_strategy":            strategy,
-                                "sort_order_cols":                sort_order_cols,
-                                "compaction_target_file_size_mb": target_mb,
-                                "compaction_engine":              engine_choice,
-                                "run_frequency":                  run_freq,
-                            }
-                            for field, value in fields.items():
-                                update_config_field(
-                                    table_fqn=table_fqn,
-                                    field=field,
-                                    value=value,
-                                    override_notes=override_notes,
-                                    dry_run=is_dry_run(),
-                                )
-                            clear_caches()
-                            from app.components.auth import current_user as _cu
-                            from config.settings import APP_ENV as _ENV
-                            audit(AuditEvent(
-                                actor=_cu(), action_type=AuditAction.POLICY_CHANGE,
-                                page_source="3_Policy_Configuration",
-                                target_type="table", target_id=table_fqn,
-                                environment=_ENV, dry_run=is_dry_run(),
-                                status="DRY_RUN" if is_dry_run() else "SUCCESS",
-                                reason=override_notes,
-                                after_value=str(fields),
-                            ))
-                            st.success(
-                                f"✅ Config updated for `{table_fqn}`"
-                                + (" (dry run — no actual changes)" if is_dry_run() else "")
+        table_fqn = label_to_fqn.get(selected_label)
+
+        if table_fqn:
+            # Load current config
+            try:
+                df_cfg = cached_read_registry(
+                    f"SELECT * FROM {HK_CONFIG_TABLE} "
+                    f"WHERE table_fqn = '{table_fqn}' LIMIT 1"
+                )
+                if df_cfg.empty:
+                    st.warning(
+                        f"No HK config found for `{table_fqn}`. "
+                        "Apply a template in the **Bulk Apply** tab first, "
+                        "then return here to override individual fields."
+                    )
+                else:
+                    cfg = df_cfg.iloc[0].to_dict()
+                    st.caption(
+                        f"**FQN:** `{table_fqn}` · "
+                        f"Template: `{cfg.get('policy_template','—')}` · "
+                        f"{'⚠️ Manually overridden' if cfg.get('manually_overridden') else '✅ On template'}"
+                    )
+
+                    with st.form("edit_config_form", clear_on_submit=False):
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            snap_days = st.number_input(
+                                "Snapshot Retention (days)",
+                                value=int(cfg.get("snapshot_retention_days") or 7),
+                                min_value=1,
+                                help="How long to keep snapshots before expiry. "
+                                     "Drives TBLPROPERTIES vacuum_max_snapshot_age_seconds.",
                             )
-                        except Exception as e:
-                            st.error(f"Save failed: {e}")
-        except Exception as e:
-            st.error(f"Error loading config: {e}")
+                            snap_min = st.number_input(
+                                "Min Snapshots to Keep",
+                                value=int(cfg.get("snapshot_min_to_keep") or 30),
+                                min_value=2,
+                                help="Safety floor — VACUUM never removes below this. "
+                                     "Zamboni default: 30 (conservative buffer).",
+                            )
+                            orphan = st.number_input(
+                                "Orphan Retention (days)",
+                                value=int(cfg.get("orphan_file_retention_days") or 2),
+                                min_value=2,
+                                help="Minimum 2 days — protects in-flight writers.",
+                            )
+                            orphan_cadence = st.number_input(
+                                "Orphan Cleanup Cadence (days)",
+                                value=int(cfg.get("orphan_cleanup_cadence_days") or 7),
+                                min_value=0,
+                                help="How often to run orphan cleanup. 0 = disabled.",
+                            )
+                            run_freq = st.selectbox(
+                                "Run Frequency",
+                                ["every_trigger", "daily", "weekly", "monthly"],
+                                index=(
+                                    ["every_trigger","daily","weekly","monthly"]
+                                    .index(cfg.get("run_frequency","daily"))
+                                    if cfg.get("run_frequency","daily") in
+                                       ["every_trigger","daily","weekly","monthly"]
+                                    else 1
+                                ),
+                                help="How often HK runs on this table.",
+                            )
+
+                        with col2:
+                            strategy = st.selectbox(
+                                "Compaction Strategy",
+                                ["binpack", "sort", "zorder"],
+                                index=(
+                                    ["binpack","sort","zorder"]
+                                    .index(cfg.get("compaction_strategy","binpack"))
+                                    if cfg.get("compaction_strategy","binpack")
+                                       in ["binpack","sort","zorder"] else 0
+                                ),
+                                help="binpack → Athena OPTIMIZE. "
+                                     "sort/zorder → Glue PySpark rewrite_data_files.",
+                            )
+                            engine_choice = st.selectbox(
+                                "Compaction Engine",
+                                ["athena", "glue"],
+                                index=(
+                                    ["athena","glue"]
+                                    .index(cfg.get("compaction_engine","athena"))
+                                    if cfg.get("compaction_engine","athena")
+                                       in ["athena","glue"] else 0
+                                ),
+                                help="athena = OPTIMIZE via Athena SQL. "
+                                     "glue = Glue PySpark job (required for sort/zorder).",
+                            )
+                            target_mb = st.number_input(
+                                "Target File Size (MB)",
+                                value=int(cfg.get("compaction_target_file_size_mb") or 128),
+                                min_value=64,
+                                help="Target output file size after compaction. "
+                                     "128 MB staging, 256 MB datalake, 512 MB base/master.",
+                            )
+                            sort_cols = st.text_input(
+                                "Sort / Z-Order Columns",
+                                value=str(cfg.get("sort_order_cols") or ""),
+                                placeholder="partition_date, customer_id",
+                                help="Comma-separated columns for sort or zorder strategy. "
+                                     "Ignored for binpack.",
+                            )
+                            partition_col = st.text_input(
+                                "Partition Column",
+                                value=str(cfg.get("partition_column") or ""),
+                                placeholder="partition_date",
+                                help="Primary partition column — drives hot-partition "
+                                     "filter window for compaction.",
+                            )
+                            part_type_opts = ["date","timestamp","int_yyyymmdd","string","identity","none"]
+                            cur_pt = str(cfg.get("partition_type") or "date")
+                            part_type = st.selectbox(
+                                "Partition Type",
+                                part_type_opts,
+                                index=(part_type_opts.index(cur_pt)
+                                       if cur_pt in part_type_opts else 0),
+                                help="How the partition column is typed — drives the "
+                                     "correct SQL date literal in compaction filter.",
+                            )
+
+                        override_notes = st.text_input(
+                            "Reason for override *",
+                            placeholder="e.g. High-volume table needs shorter retention",
+                            help="Required. Stored in audit log and hk_config.",
+                        )
+
+                        if is_dry_run():
+                            st.info("🔵 Dry Run — changes simulated, not written.")
+
+                        submitted = st.form_submit_button(
+                            "💾 Save Changes", type="primary"
+                        )
+
+                    if submitted:
+                        if not override_notes.strip():
+                            st.error("Reason is required before saving an override.")
+                        else:
+                            try:
+                                from datetime import datetime
+
+                                from engine.utils.athena_client import run_query as _rq
+
+                                now = datetime.now(UTC).strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                )
+                                def _esc(s): return str(s).replace("'", "''")
+
+                                # Single UPDATE covering all fields at once
+                                upd_sql = f"""
+                                    UPDATE {HK_CONFIG_TABLE}
+                                    SET snapshot_retention_days        = {int(snap_days)},
+                                        snapshot_min_to_keep           = {int(snap_min)},
+                                        orphan_file_retention_days     = {int(orphan)},
+                                        orphan_cleanup_cadence_days    = {int(orphan_cadence)},
+                                        run_frequency                  = '{run_freq}',
+                                        compaction_strategy            = '{strategy}',
+                                        compaction_engine              = '{engine_choice}',
+                                        compaction_target_file_size_mb = {int(target_mb)},
+                                        sort_order_cols                = '{_esc(sort_cols)}',
+                                        partition_column               = '{_esc(partition_col)}',
+                                        manually_overridden            = 1,
+                                        override_notes                 = '{_esc(override_notes)}',
+                                        updated_at                     = '{now}'
+                                    WHERE table_fqn = '{table_fqn}'
+                                """
+                                _rq(upd_sql, workgroup="app", dry_run=is_dry_run())
+
+                                audit(AuditEvent(
+                                    actor=current_user(),
+                                    action_type=AuditAction.POLICY_CHANGE,
+                                    page_source="3_Policy_Configuration",
+                                    target_type="table",
+                                    target_id=table_fqn,
+                                    environment=APP_ENV,
+                                    dry_run=is_dry_run(),
+                                    status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                    reason=override_notes,
+                                    after_value=json.dumps({
+                                        "strategy": strategy,
+                                        "engine": engine_choice,
+                                        "snap_days": snap_days,
+                                        "snap_min": snap_min,
+                                    }),
+                                ))
+                                clear_caches()
+                                st.session_state["pc_needs_refresh"] = True
+                                st.success(
+                                    f"✅ Config saved for `{table_fqn}`."
+                                    + (" (dry run)" if is_dry_run() else "")
+                                )
+                            except Exception as e:
+                                st.error(f"Save failed: {e}")
+
+            except Exception as e:
+                st.error(f"Error loading config: {e}")
+
 
 # ── Tab 3: Bulk Apply Template ────────────────────────────────────────────────
-with tab3:
-    st.markdown("#### Apply a Policy Template to a Domain + Layer")
-    st.info(
+with tab_bulk:
+    st.subheader("Apply a Policy Template to a Domain + Layer")
+    st.caption(
         "Applies the selected template to ALL registered Iceberg tables in the "
-        "chosen domain and layer. Each table gets its hk_config row replaced with "
-        "template defaults. Existing manual overrides are preserved unless you "
-        "check the override box below."
+        "chosen domain and layer. Existing manual overrides are preserved unless "
+        "you check the override box."
     )
 
     templates = get_policy_templates()
@@ -227,45 +408,48 @@ with tab3:
     with col1:
         bulk_domain = domain_filter(include_all=False, key="bulk_domain")
     with col2:
-        bulk_layer  = layer_filter(include_all=False, key="bulk_layer")
+        bulk_layer  = layer_filter(include_all=False,  key="bulk_layer")
     with col3:
-        bulk_tmpl   = st.selectbox("Template", list(templates.keys()), key="bulk_tmpl")
+        bulk_tmpl   = st.selectbox(
+            "Template",
+            list(templates.keys()),
+            key="bulk_tmpl",
+            help="Policy template to apply. Preview shown below.",
+        )
 
-    # Show template preview
-    if bulk_tmpl:
-        t = templates[bulk_tmpl]
-        st.markdown(f"""
-**Template Preview — `{bulk_tmpl}`**
-- Strategy: `{t['compaction_strategy']}` via `{t['compaction_engine']}`
-- Target file size: `{t['compaction_target_file_size_mb']} MB`
-- Snapshot retention: `{t['snapshot_retention_days']} days` (min keep: `{t['snapshot_min_to_keep']}`)
-- Orphan retention: `{t['orphan_file_retention_days']} days`
-- Frequency: `{t['run_frequency']}`
-        """)
+    # Template preview
+    if bulk_tmpl and bulk_tmpl in templates:
+        tp = templates[bulk_tmpl]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Strategy",  f"{tp['compaction_strategy']} / {tp['compaction_engine']}")
+        c2.metric("Retention", f"{tp['snapshot_retention_days']}d")
+        c3.metric("Orphan",    f"{tp['orphan_file_retention_days']}d")
+        c4.metric("Frequency", tp['run_frequency'])
 
     override_manual = st.checkbox(
         "Override existing manual overrides",
         value=False,
-        help="If unchecked, tables with manually_overridden=true will be skipped",
+        help="If unchecked, tables with manually_overridden=1 will be skipped.",
     )
 
-    dry_note2 = "⚠️ Dry Run ON — no changes will be written." if is_dry_run() else ""
-    if dry_note2:
-        st.warning(dry_note2)
+    if is_dry_run():
+        st.info("🔵 Dry Run — no changes will be written.")
 
     apply_disabled = not bulk_domain or not bulk_layer or not bulk_tmpl
     if st.button("🔄 Apply Template", type="primary", disabled=apply_disabled):
-        # Fetch target tables
-        override_clause = "" if override_manual else "AND (c.manually_overridden IS NULL OR c.manually_overridden = false)"
+        override_clause = (
+            "" if override_manual
+            else "AND (c.manually_overridden IS NULL OR c.manually_overridden = 0)"
+        )
         target_sql = f"""
             SELECT r.table_fqn, r.tier,
-                   c.partition_column, c.sort_columns, c.glue_job_name
+                   c.partition_column
             FROM {STREAM_REGISTRY_TABLE} r
             LEFT JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn
-            WHERE r.domain        = '{bulk_domain}'
-              AND r.layer         = '{bulk_layer}'
-              AND r.hk_enabled    = true
-              AND r.table_format  = 'iceberg'
+            WHERE r.domain       = '{bulk_domain}'
+              AND r.layer        = '{bulk_layer}'
+              AND r.hk_enabled   = 1
+              AND r.table_format = 'iceberg'
               {override_clause}
             ORDER BY r.table_fqn
         """
@@ -279,11 +463,9 @@ with tab3:
                 st.info(f"Applying `{bulk_tmpl}` to {len(target_df)} tables...")
                 from engine.core.config import apply_template
 
-                succeeded = 0
-                failed    = 0
-                errors    = []
-
+                succeeded, failed, errors = 0, 0, []
                 progress = st.progress(0)
+
                 for i, (_, row) in enumerate(target_df.iterrows()):
                     fqn = row["table_fqn"]
                     try:
@@ -307,11 +489,251 @@ with tab3:
                         f"✅ Template `{bulk_tmpl}` applied to {succeeded} tables"
                         + (" (dry run)" if is_dry_run() else "")
                     )
+                    audit(AuditEvent(
+                        actor=current_user(),
+                        action_type=AuditAction.POLICY_CHANGE,
+                        page_source="3_Policy_Configuration",
+                        target_type="domain",
+                        target_id=f"{bulk_domain}/{bulk_layer}",
+                        domain=bulk_domain,
+                        environment=APP_ENV,
+                        dry_run=is_dry_run(),
+                        status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                        after_value=f"template={bulk_tmpl},count={succeeded}",
+                    ))
                 else:
-                    st.warning(f"Applied to {succeeded} tables, {failed} failed.")
-                    for err in errors[:
-                        5]:
+                    st.warning(
+                        f"Applied to {succeeded} tables, {failed} failed."
+                    )
+                    for err in errors[:5]:
                         st.error(err)
 
         except Exception as e:
             st.error(f"Bulk apply failed: {e}")
+
+
+# ── Tab 4: Templates ──────────────────────────────────────────────────────────
+with tab_templates:
+    st.subheader("Policy Templates")
+    st.caption(
+        "Templates define default HK settings applied at registration. "
+        "Changes here affect future registrations and bulk applies — "
+        "existing table configs are not changed automatically."
+    )
+
+    templates = get_policy_templates()
+    tmpl_tab_view, tmpl_tab_edit, tmpl_tab_add = st.tabs([
+        "📋 View All",
+        "✏️ Edit Template",
+        "➕ Add Template",
+    ])
+
+    # ── View All Templates ────────────────────────────────────────────────────
+    with tmpl_tab_view:
+        rows = []
+        for name, t in templates.items():
+            rows.append({
+                "Template":        name,
+                "Description":     t.get("description",""),
+                "Strategy":        t.get("compaction_strategy",""),
+                "Engine":          t.get("compaction_engine",""),
+                "Target MB":       t.get("compaction_target_file_size_mb",""),
+                "Snap Retention":  f"{t.get('snapshot_retention_days','')}d",
+                "Snap Floor":      t.get("snapshot_min_to_keep",""),
+                "Orphan Days":     t.get("orphan_file_retention_days",""),
+                "Frequency":       t.get("run_frequency",""),
+            })
+        import pandas as pd
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # ── Edit Template ─────────────────────────────────────────────────────────
+    with tmpl_tab_edit:
+        tmpl_to_edit = st.selectbox(
+            "Select template to edit",
+            list(templates.keys()),
+            key="tmpl_edit_sel",
+        )
+
+        if tmpl_to_edit:
+            t = templates[tmpl_to_edit].copy()
+            _k = tmpl_to_edit
+
+            with st.form(f"tmpl_edit_form_{_k}"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    e_desc = st.text_input(
+                        "Description",
+                        value=t.get("description",""),
+                        key=f"{_k}_desc",
+                    )
+                    e_strategy = st.selectbox(
+                        "Compaction Strategy",
+                        ["binpack","sort","zorder"],
+                        index=(["binpack","sort","zorder"]
+                               .index(t.get("compaction_strategy","binpack"))),
+                        key=f"{_k}_strat",
+                    )
+                    e_engine = st.selectbox(
+                        "Compaction Engine",
+                        ["athena","glue"],
+                        index=(["athena","glue"]
+                               .index(t.get("compaction_engine","athena"))),
+                        key=f"{_k}_eng",
+                    )
+                    e_target_mb = st.number_input(
+                        "Target File Size (MB)",
+                        value=int(t.get("compaction_target_file_size_mb", 128)),
+                        min_value=64,
+                        key=f"{_k}_mb",
+                    )
+
+                with col2:
+                    e_snap_days = st.number_input(
+                        "Snapshot Retention (days)",
+                        value=int(t.get("snapshot_retention_days", 7)),
+                        min_value=1,
+                        key=f"{_k}_snap",
+                    )
+                    e_snap_min = st.number_input(
+                        "Min Snapshots to Keep",
+                        value=int(t.get("snapshot_min_to_keep", 30)),
+                        min_value=2,
+                        key=f"{_k}_snap_min",
+                    )
+                    e_orphan = st.number_input(
+                        "Orphan Retention (days)",
+                        value=int(t.get("orphan_file_retention_days", 2)),
+                        min_value=2,
+                        key=f"{_k}_orp",
+                    )
+                    e_freq = st.selectbox(
+                        "Run Frequency",
+                        ["every_trigger","daily","weekly","monthly"],
+                        index=(["every_trigger","daily","weekly","monthly"]
+                               .index(t.get("run_frequency","daily"))),
+                        key=f"{_k}_freq",
+                    )
+
+                if st.form_submit_button("💾 Save Template", type="primary"):
+                    try:
+                        import json as _json
+                        tmpl_path = _ROOT / "config" / "policy_templates.json"
+                        with open(tmpl_path) as f:
+                            all_tmpls = _json.load(f)
+
+                        all_tmpls[tmpl_to_edit].update({
+                            "description":                   e_desc,
+                            "compaction_strategy":           e_strategy,
+                            "compaction_engine":             e_engine,
+                            "compaction_target_file_size_mb":int(e_target_mb),
+                            "snapshot_retention_days":       int(e_snap_days),
+                            "snapshot_min_to_keep":          int(e_snap_min),
+                            "orphan_file_retention_days":    int(e_orphan),
+                            "run_frequency":                 e_freq,
+                        })
+
+                        with open(tmpl_path, 'w') as f:
+                            _json.dump(all_tmpls, f, indent=2)
+
+                        audit(AuditEvent(
+                            actor=current_user(),
+                            action_type=AuditAction.POLICY_CHANGE,
+                            page_source="3_Policy_Configuration",
+                            target_type="template",
+                            target_id=tmpl_to_edit,
+                            environment=APP_ENV,
+                            dry_run=False,
+                            status="SUCCESS",
+                            after_value=f"strategy={e_strategy},freq={e_freq}",
+                        ))
+                        st.success(f"✅ Template `{tmpl_to_edit}` saved.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to save template: {e}")
+
+    # ── Add Template ──────────────────────────────────────────────────────────
+    with tmpl_tab_add:
+        st.caption(
+            "Add a new custom template. "
+            "It will appear in the Bulk Apply dropdown and on table registration."
+        )
+
+        with st.form("tmpl_add_form", clear_on_submit=True):
+            tmpl_name = st.text_input(
+                "Template Name *",
+                placeholder="CUSTOM_HIGH_VOLUME",
+                help="Uppercase, underscores. This becomes the key in policy_templates.json.",
+            )
+            tmpl_desc = st.text_area(
+                "Description",
+                placeholder="High-volume tables with hourly CDC",
+            )
+
+            col1, col2 = st.columns(2)
+            with col1:
+                a_strategy = st.selectbox("Strategy", ["binpack","sort","zorder"], key="add_strat")
+                a_engine   = st.selectbox("Engine",   ["athena","glue"],           key="add_eng")
+                a_mb       = st.number_input("Target MB", value=256, min_value=64, key="add_mb")
+                a_freq     = st.selectbox("Frequency",
+                                          ["every_trigger","daily","weekly","monthly"],
+                                          index=1, key="add_freq")
+            with col2:
+                a_snap     = st.number_input("Snapshot Retention (days)", value=7,  min_value=1, key="add_snap")
+                a_snap_min = st.number_input("Min Snapshots",             value=30, min_value=2, key="add_snap_min")
+                a_orphan   = st.number_input("Orphan Retention (days)",   value=3,  min_value=2, key="add_orp")
+
+            if st.form_submit_button("➕ Add Template", type="primary"):
+                if not tmpl_name.strip():
+                    st.error("Template name is required.")
+                elif tmpl_name.strip() in templates:
+                    st.error(f"Template `{tmpl_name}` already exists. Use Edit tab.")
+                else:
+                    try:
+                        import json as _json
+                        tmpl_path = _ROOT / "config" / "policy_templates.json"
+                        with open(tmpl_path) as f:
+                            all_tmpls = _json.load(f)
+
+                        all_tmpls[tmpl_name.strip().upper()] = {
+                            "description":                   tmpl_desc.strip(),
+                            "compaction_strategy":           a_strategy,
+                            "compaction_engine":             a_engine,
+                            "compaction_target_file_size_mb":int(a_mb),
+                            "snapshot_retention_days":       int(a_snap),
+                            "snapshot_min_to_keep":          int(a_snap_min),
+                            "orphan_file_retention_days":    int(a_orphan),
+                            "run_frequency":                 a_freq,
+                            "window_config": {
+                                "type": "post_batch",
+                                "timezone": "America/Los_Angeles",
+                                "delay_minutes": 30,
+                                "duration_hours": 4,
+                                "blackout_hours": [6,7,8,9,18,19,20,21],
+                            },
+                        }
+
+                        with open(tmpl_path, 'w') as f:
+                            _json.dump(all_tmpls, f, indent=2)
+
+                        audit(AuditEvent(
+                            actor=current_user(),
+                            action_type=AuditAction.POLICY_CHANGE,
+                            page_source="3_Policy_Configuration",
+                            target_type="template",
+                            target_id=tmpl_name.strip().upper(),
+                            environment=APP_ENV,
+                            dry_run=False,
+                            status="SUCCESS",
+                            after_value=f"new template: strategy={a_strategy}",
+                        ))
+                        st.success(
+                            f"✅ Template `{tmpl_name.strip().upper()}` added."
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to add template: {e}")
