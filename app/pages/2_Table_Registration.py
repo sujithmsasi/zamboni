@@ -639,28 +639,30 @@ with tab_registered:
                     _r = _row.iloc[0]
                     st.caption(f"`{_flag_fqn}`")
 
-                    with st.form("flag_single_form"):
+                    # Key includes FQN so switching tables resets all checkboxes
+                    _ffk = _flag_fqn.replace(".", "_").replace("/", "_")
+                    with st.form(f"flag_single_form_{_ffk}"):
                         fc1, fc2, fc3 = st.columns(3)
                         with fc1:
                             new_hk = st.checkbox(
                                 "🔧 Housekeeping Enabled",
-                                value=bool(_r.get("hk_enabled", False)),
-                                key="flag_hk",
+                                value=bool(int(_r.get("hk_enabled") or 0)),
+                                key=f"{_ffk}_flag_hk",
                                 help="Enable HK Engine (compaction + vacuum) for this table.",
                             )
                         with fc2:
                             new_archive = st.checkbox(
                                 "📦 Archival Enabled",
-                                value=bool(_r.get("archive_enabled", False)),
-                                key="flag_archive",
+                                value=bool(int(_r.get("archive_enabled") or 0)),
+                                key=f"{_ffk}_flag_archive",
                                 help="Enable Archival Engine to export and delete "
                                      "cold staging partitions.",
                             )
                         with fc3:
                             new_lifecycle = st.checkbox(
                                 "♻️ Lifecycle Enabled",
-                                value=bool(_r.get("lifecycle_enabled", False)),
-                                key="flag_lifecycle",
+                                value=bool(int(_r.get("lifecycle_enabled") or 0)),
+                                key=f"{_ffk}_flag_lifecycle",
                                 help="Enable Lifecycle Engine for non-prod state machine "
                                      "(ACTIVE→STALE→GREENZONE→DROPPED).",
                             )

@@ -549,14 +549,11 @@ with tab_templates:
     )
 
     templates = get_policy_templates()
-    # Flash message from edit/add operations (survives rerun)
-    if "tmpl_flash" in st.session_state:
-        st.success(st.session_state.pop("tmpl_flash"))
-
-    tmpl_tab_view, tmpl_tab_edit, tmpl_tab_add = st.tabs([
+    tmpl_tab_view, tmpl_tab_edit, tmpl_tab_add, tmpl_tab_del = st.tabs([
         "📋 View All",
         "✏️ Edit Template",
         "➕ Add Template",
+        "🗑️ Delete Template",
     ])
 
     # ── View All Templates ────────────────────────────────────────────────────
@@ -583,11 +580,22 @@ with tab_templates:
 
     # ── Edit Template ─────────────────────────────────────────────────────────
     with tmpl_tab_edit:
+        # Show flash message if present (from previous save)
+        if st.session_state.get("tmpl_edit_flash"):
+            st.success(st.session_state.pop("tmpl_edit_flash"))
+
+        tmpl_names = list(templates.keys())
+        # Restore last-used selection if still valid
+        _prev_tmpl = st.session_state.get("tmpl_edit_last", tmpl_names[0])
+        _tmpl_idx  = tmpl_names.index(_prev_tmpl) if _prev_tmpl in tmpl_names else 0
+
         tmpl_to_edit = st.selectbox(
             "Select template to edit",
-            list(templates.keys()),
+            tmpl_names,
+            index=_tmpl_idx,
             key="tmpl_edit_sel",
         )
+        st.session_state["tmpl_edit_last"] = tmpl_to_edit
 
         if tmpl_to_edit:
             t = templates[tmpl_to_edit].copy()
@@ -686,13 +694,15 @@ with tab_templates:
                             status="SUCCESS",
                             after_value=f"strategy={e_strategy},freq={e_freq}",
                         ))
-                        st.session_state["tmpl_flash"] = f"✅ Template `{tmpl_to_edit}` saved."
+                        st.session_state["tmpl_edit_flash"] = f"✅ Template `{tmpl_to_edit}` saved."
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to save template: {e}")
 
     # ── Add Template ──────────────────────────────────────────────────────────
     with tmpl_tab_add:
+        if st.session_state.get("tmpl_add_flash"):
+            st.success(st.session_state.pop("tmpl_add_flash"))
         st.caption(
             "Add a new custom template. "
             "It will appear in the Bulk Apply dropdown and on table registration."
@@ -770,7 +780,99 @@ with tab_templates:
                             status="SUCCESS",
                             after_value=f"new template: strategy={a_strategy}",
                         ))
-                        st.session_state["tmpl_flash"] = f"✅ Template `{tmpl_name.strip().upper()}` added."
+                        st.session_state["tmpl_add_flash"] = f"✅ Template `{tmpl_name.strip().upper()}` added."
+                        st.session_state["tmpl_edit_last"] = tmpl_name.strip().upper()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to add template: {e}")
+
+    # ── Delete Template ───────────────────────────────────────────────────────
+    with tmpl_tab_del:
+        st.caption(
+            "Delete a custom template. Built-in templates cannot be deleted. "
+            "Templates assigned to registered tables must be unassigned first."
+        )
+
+        if st.session_state.get("tmpl_del_flash"):
+            msg, is_error = st.session_state.pop("tmpl_del_flash")
+            (st.error if is_error else st.success)(msg)
+
+        _BUILTIN = {
+            "STAGING_DEFAULT", "DATALAKE_DEFAULT", "BASE_SCD2",
+            "MASTER_DEFAULT", "CRITICAL_HIGH_VOL", "NON_PROD_DEFAULT",
+        }
+        _deletable = [k for k in templates if k not in _BUILTIN]
+
+        if not _deletable:
+            st.info(
+                "No custom templates to delete. "
+                "Built-in templates cannot be removed."
+            )
+        else:
+            tmpl_to_del = st.selectbox(
+                "Select custom template to delete",
+                ["-- select --"] + _deletable,
+                key="tmpl_del_sel",
+            )
+            if tmpl_to_del and tmpl_to_del != "-- select --":
+                # Check usage
+                try:
+                    _usage_df = cached_read_registry(
+                        f"SELECT table_fqn FROM {HK_CONFIG_TABLE} "
+                        f"WHERE policy_template = '{tmpl_to_del}'"
+                    )
+                    _usage_count = len(_usage_df) if not _usage_df.empty else 0
+                except Exception:
+                    _usage_count = 0
+
+                if _usage_count > 0:
+                    st.warning(
+                        f"⚠️ Cannot delete `{tmpl_to_del}` — assigned to "
+                        f"**{_usage_count} table(s)**. "
+                        "Apply a different template to those tables first."
+                    )
+                    with st.expander(f"Show {_usage_count} affected table(s)"):
+                        st.dataframe(_usage_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"`{tmpl_to_del}` is not assigned to any tables — safe to delete.")
+                    confirm = st.checkbox(
+                        f"Yes, permanently delete `{tmpl_to_del}`",
+                        value=False,
+                        key="tmpl_del_confirm",
+                    )
+                    if st.button(
+                        "🗑️ Delete Template",
+                        type="primary",
+                        disabled=not confirm,
+                        key="tmpl_del_btn",
+                    ):
+                        try:
+                            import json as _json2
+                            _tp = _ROOT / "config" / "policy_templates.json"
+                            with open(_tp) as f:
+                                _all = _json2.load(f)
+                            if tmpl_to_del in _all:
+                                del _all[tmpl_to_del]
+                                with open(_tp, 'w') as f:
+                                    _json2.dump(_all, f, indent=2)
+                                from engine.core.config import reload_templates
+                                reload_templates()
+                                audit(AuditEvent(
+                                    actor=current_user(),
+                                    action_type=AuditAction.POLICY_CHANGE,
+                                    page_source="3_Policy_Configuration",
+                                    target_type="template",
+                                    target_id=tmpl_to_del,
+                                    environment=APP_ENV,
+                                    dry_run=False,
+                                    status="SUCCESS",
+                                    after_value="DELETED",
+                                ))
+                                st.session_state["tmpl_del_flash"] = (
+                                    f"✅ Template `{tmpl_to_del}` deleted.", False
+                                )
+                                for _k2 in ("tmpl_del_sel","tmpl_del_confirm","tmpl_edit_last"):
+                                    st.session_state.pop(_k2, None)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
