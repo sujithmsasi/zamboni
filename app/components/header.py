@@ -35,7 +35,7 @@ def _logo_img_html(size: int = 32) -> str:
     b64 = _logo_b64()
     if b64:
         return (
-            f"<img src='data:image/jpeg;base64,{b64}' "
+            f"<img src='data:image/png;base64,{b64}' "
             f"style='height:{size}px;width:{size}px;"
             f"object-fit:contain;border-radius:4px;display:block;' />"
         )
@@ -74,7 +74,7 @@ def render(
     logo_html = _logo_img_html(size=34)
     b64       = _logo_b64()
     sidebar_logo = (
-        f"url('data:image/jpeg;base64,{b64}')"
+        f"url('data:image/png;base64,{b64}')"
         if b64 else "none"
     )
 
