@@ -54,15 +54,19 @@ with tab1:
             st.session_state.pop("dr_fqn", None)
             st.rerun()
 
-    # Clear results when nothing is selected (fresh page arrival)
-    # OR when user selects a different table
-    if not table_fqn:
+    # Clear stale results on fresh arrival from another page
+    if "dr_on_page" not in st.session_state:
         st.session_state.pop("dr_result",   None)
         st.session_state.pop("dr_reg",      None)
         st.session_state.pop("dr_cfg",      None)
         st.session_state.pop("dr_fqn",      None)
         st.session_state.pop("dr_promoted", None)
-    elif table_fqn and table_fqn != st.session_state.get("dr_fqn"):
+        # Also reset the flat selector to blank
+        st.session_state.pop("dr_sel_flat", None)
+        st.session_state["dr_on_page"] = True
+
+    # Clear when user selects a different table
+    if table_fqn and table_fqn != st.session_state.get("dr_fqn"):
         st.session_state.pop("dr_result", None)
         st.session_state.pop("dr_reg",    None)
         st.session_state.pop("dr_cfg",    None)

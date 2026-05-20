@@ -45,12 +45,17 @@ st.caption(
     "Templates provide sensible defaults; individual fields can be overridden."
 )
 
-# On every page load, reset the table selector to blank UNLESS
-# the user just saved (they may want to continue editing).
-# This prevents stale data from a previous session appearing.
-if not st.session_state.pop("pc_just_saved", False):
+# Clear stale table selection ONLY on fresh arrival from another page.
+# Signal: "pc_on_page" is absent → first render on this page.
+# Once set, it persists while user stays here — selectbox works normally.
+# Cleared by other pages when they set their own "active page" marker.
+if "pc_on_page" not in st.session_state:
+    # Fresh arrival — reset any stale selection
     st.session_state.pop("pc_edit_table_label", None)
     st.session_state.pop("pc_edit_table_sel",   None)
+    st.session_state["pc_on_page"] = True
+# Also clear when navigating away: other pages do NOT set pc_on_page,
+# so next time this page loads it will be absent again.
 
 tab_view, tab_edit, tab_bulk, tab_templates = st.tabs([
     "📋 View Configs",
@@ -97,9 +102,15 @@ with tab_view:
         key="pc_show_all",
     )
 
-    if st.button("🔄 Refresh", key="pc_view_refresh"):
-        cached_read_registry.clear()
-        st.rerun()
+    pc_col_refresh, pc_col_pagesize = st.columns([2, 1])
+    with pc_col_refresh:
+        if st.button("🔄 Refresh", key="pc_view_refresh"):
+            cached_read_registry.clear()
+            st.rerun()
+    with pc_col_pagesize:
+        from app.components.grid_utils import page_size_selector
+        from app.components.grid_utils import render_grid as _rg
+        _pc_limit = page_size_selector(key="pc_view", default=100)
 
     conditions = ["r.table_format = 'iceberg'"]
     if not show_all:
@@ -131,7 +142,7 @@ with tab_view:
         LEFT JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn
         {where}
         ORDER BY r.domain, r.layer, r.table_fqn
-        LIMIT 500
+        LIMIT {_pc_limit}
     """
     try:
         df = cached_read_registry(sql)
@@ -154,11 +165,7 @@ with tab_view:
                 "manually_overridden":         "Status",
             }, inplace=True, errors="ignore")
 
-            st.dataframe(
-                df, use_container_width=True,
-                hide_index=True, height=420,
-            )
-            st.caption(f"{len(df)} table(s) shown")
+            _rg(df, key="pc_view", height=420)
 
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("⬇️ Export CSV", csv,
