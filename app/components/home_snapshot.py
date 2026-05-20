@@ -13,15 +13,13 @@ from datetime import UTC, date, datetime
 
 from config.settings import (
     EXECUTION_LOG_TABLE,
+    HOME_SNAPSHOT_TABLE,
     STREAM_REGISTRY_TABLE,
 )
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
-
-HOME_SNAPSHOT_TABLE = "glue_catalog.zamboni_catalog.home_snapshot"
-
 
 def get_or_generate(force_refresh: bool = False, generated_by: str = "unknown") -> tuple[dict, str]:
     """
@@ -264,10 +262,18 @@ def _save_snapshot(snapshot_date: date, snapshot: dict, generated_by: str) -> No
         pass  # Probably no row yet
 
     kpi = snapshot.get("kpi", {})
+    _now_str = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
     insert_sql = f"""
-        INSERT INTO {HOME_SNAPSHOT_TABLE} VALUES (
-            DATE '{snapshot_date.isoformat()}',
-            TIMESTAMP '{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}',
+        INSERT INTO {HOME_SNAPSHOT_TABLE} (
+            snapshot_date, generated_at, generated_by,
+            total_tables, hk_enabled_count,
+            failures_7d, bytes_reclaimed_30d,
+            fleet_coverage_json, compaction_needed_json,
+            recent_failures_json, domain_stats_json,
+            cost_summary_json
+        ) VALUES (
+            '{snapshot_date.isoformat()}',
+            '{_now_str}',
             '{_esc(generated_by)}',
             {kpi.get('total_tables', 0)},
             {kpi.get('hk_enabled', 0)},

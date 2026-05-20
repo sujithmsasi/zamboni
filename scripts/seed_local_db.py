@@ -172,17 +172,17 @@ CREATE TABLE IF NOT EXISTS nonprod_registry (
 "home_snapshot": """
 CREATE TABLE IF NOT EXISTS home_snapshot (
     snapshot_date           TEXT PRIMARY KEY,
-    environment             TEXT DEFAULT 'prod',
+    generated_at            TEXT,
+    generated_by            TEXT DEFAULT 'system',
     total_tables            INTEGER DEFAULT 0,
     hk_enabled_count        INTEGER DEFAULT 0,
-    hk_coverage_pct         REAL DEFAULT 0,
-    dry_run_count           INTEGER DEFAULT 0,
-    tables_needing_hk       INTEGER DEFAULT 0,
-    gb_compacted_today      REAL DEFAULT 0,
-    snapshots_expired_today INTEGER DEFAULT 0,
-    failures_today          INTEGER DEFAULT 0,
-    circuit_breakers_open   INTEGER DEFAULT 0,
-    generated_at            TEXT
+    failures_7d             INTEGER DEFAULT 0,
+    bytes_reclaimed_30d     INTEGER DEFAULT 0,
+    fleet_coverage_json     TEXT DEFAULT '[]',
+    compaction_needed_json  TEXT DEFAULT '[]',
+    recent_failures_json    TEXT DEFAULT '[]',
+    domain_stats_json       TEXT DEFAULT '[]',
+    cost_summary_json       TEXT DEFAULT '[]'
 )""",
 
 "audit_log": """

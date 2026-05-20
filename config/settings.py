@@ -67,6 +67,10 @@ EXECUTION_LOG_TABLE    = os.getenv(
     "EXECUTION_LOG_TABLE",
     "glue_catalog.zamboni_catalog.execution_log"
 )
+HOME_SNAPSHOT_TABLE = os.getenv(
+    "ZAMBONI_HOME_SNAPSHOT_TABLE",
+    "glue_catalog.zamboni_catalog.home_snapshot"
+)
 NONPROD_REGISTRY_TABLE = os.getenv(
     "NONPROD_REGISTRY_TABLE",
     "glue_catalog.zamboni_catalog.nonprod_registry"

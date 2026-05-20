@@ -45,18 +45,10 @@ st.caption(
     "Templates provide sensible defaults; individual fields can be overridden."
 )
 
-# Always reset table selection on page load — prevents stale data display.
-# User re-selects the table they want to edit. This is the safest approach.
-if "pc_fresh_load" not in st.session_state:
-    st.session_state["pc_fresh_load"] = True
-    st.session_state.pop("pc_edit_table_label", None)
-    st.session_state.pop("pc_edit_table_sel",   None)
-elif st.session_state.get("pc_just_saved"):
-    # After a save, keep selection (user likely wants to tweak more)
-    st.session_state.pop("pc_just_saved", None)
-else:
-    # Clear on every new page load after the first
-    st.session_state.pop("pc_fresh_load", None)
+# On every page load, reset the table selector to blank UNLESS
+# the user just saved (they may want to continue editing).
+# This prevents stale data from a previous session appearing.
+if not st.session_state.pop("pc_just_saved", False):
     st.session_state.pop("pc_edit_table_label", None)
     st.session_state.pop("pc_edit_table_sel",   None)
 
