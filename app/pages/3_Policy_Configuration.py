@@ -338,6 +338,66 @@ with tab_edit:
                                      "correct SQL date literal in compaction filter.",
                             )
 
+                        st.markdown("**⏰ Safe Window & Blackout Hours**")
+                        st.caption(
+                            "`post_batch`: waits for upstream job + delay minutes, then runs for duration. "
+                            "Blackout hours: HK will not START during these hours."
+                        )
+                        import json as _wjson
+                        _wc = cfg.get("window_config")
+                        try:
+                            _wd = _wjson.loads(_wc) if isinstance(_wc, str) and _wc else (
+                                _wc if isinstance(_wc, dict) else {})
+                        except Exception:
+                            _wd = {}
+                        wc1, wc2 = st.columns(2)
+                        with wc1:
+                            w_type = st.selectbox(
+                                "Window Type",
+                                ["post_batch", "scheduled"],
+                                index=0 if _wd.get("type","post_batch") == "post_batch" else 1,
+                                key=f"{_fk}_wtype",
+                                help="post_batch: starts after Gate 1 + delay. "
+                                     "scheduled: fixed daily time window.",
+                            )
+                            w_delay = st.number_input(
+                                "Delay after job (minutes)",
+                                value=int(_wd.get("delay_minutes", 30)),
+                                min_value=0, max_value=240,
+                                key=f"{_fk}_wdelay",
+                            )
+                            w_duration = st.number_input(
+                                "Window duration (hours)",
+                                value=int(_wd.get("duration_hours", 4)),
+                                min_value=1, max_value=12,
+                                key=f"{_fk}_wdur",
+                            )
+                            w_tz = st.selectbox(
+                                "Timezone",
+                                ["America/Los_Angeles","America/New_York",
+                                 "America/Chicago","UTC"],
+                                index=(["America/Los_Angeles","America/New_York",
+                                        "America/Chicago","UTC"]
+                                       .index(_wd.get("timezone","America/Los_Angeles"))
+                                       if _wd.get("timezone") in
+                                       ["America/Los_Angeles","America/New_York",
+                                        "America/Chicago","UTC"] else 0),
+                                key=f"{_fk}_wtz",
+                            )
+                        with wc2:
+                            st.markdown("**Blackout hours** (HK will not start)")
+                            _cur_bh = _wd.get("blackout_hours", [6,7,8,9,18,19,20,21])
+                            _bh_cols = st.columns(4)
+                            _new_bh = []
+                            for _h in range(24):
+                                _checked = _bh_cols[_h % 4].checkbox(
+                                    f"{_h:02d}:00",
+                                    value=(_h in _cur_bh),
+                                    key=f"{_fk}_bh_{_h}",
+                                )
+                                if _checked:
+                                    _new_bh.append(_h)
+
                         override_notes = st.text_input(
                             "Reason for override *",
                             key=f"{_fk}_reason",
@@ -366,6 +426,15 @@ with tab_edit:
                                 def _esc(s): return str(s).replace("'", "''")
 
                                 # Single UPDATE covering all fields at once
+                                import json as _json_upd
+                                _window_cfg = _json_upd.dumps({
+                                    "type":           w_type,
+                                    "timezone":       w_tz,
+                                    "delay_minutes":  int(w_delay),
+                                    "duration_hours": int(w_duration),
+                                    "blackout_hours": sorted(_new_bh),
+                                })
+                                def _esc(s): return str(s).replace("'", "''")
                                 upd_sql = f"""
                                     UPDATE {HK_CONFIG_TABLE}
                                     SET snapshot_retention_days        = {int(snap_days)},
@@ -379,6 +448,7 @@ with tab_edit:
                                         sort_order_cols                = '{_esc(sort_cols)}',
                                         partition_column               = '{_esc(partition_col)}',
                                         partition_type                 = '{part_type}',
+                                        window_config                  = '{_esc(_window_cfg)}',
                                         manually_overridden            = 1,
                                         override_notes                 = '{_esc(override_notes)}',
                                         updated_at                     = '{now}'

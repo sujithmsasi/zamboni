@@ -163,7 +163,7 @@ with tab1:
             st.download_button(
                 "📋 Copy SQL to clipboard",
                 data=sql_preview,
-                file_name=f"zamboni_optimize_{table_fqn.split('.')[-1]}.sql",
+                file_name=f"zamboni_optimize_{_fqn.split('.')[-1]}.sql",
                 mime="text/plain",
             )
 
@@ -186,7 +186,7 @@ with tab1:
                     actor=_cuser(),
                     action_type=AuditAction.DRY_RUN_PROMOTE,
                     page_source="6_Dry_Run_Viewer",
-                    target_type="table", target_id=table_fqn,
+                    target_type="table", target_id=_fqn,
                     environment=_ENV, dry_run=False,
                     status="SUCCESS",
                     reason=reason, ticket_number=ticket,

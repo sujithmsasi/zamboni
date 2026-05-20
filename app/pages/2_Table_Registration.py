@@ -543,6 +543,37 @@ with tab_registered:
                                      "drives partition filter window.",
                             )
 
+                        st.markdown("**🔗 Control-M Integration**")
+                        cm1, cm2, cm3 = st.columns(3)
+                        with cm1:
+                            e_pipeline_job = st.text_input(
+                                "Pipeline Job (writes to table)",
+                                value=str(trow.get("controlm_pipeline_job") or ""),
+                                key=f"{_ek}_pipeline_job",
+                                placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                                help="The Control-M job that writes data to this table. "
+                                     "Used for downstream lineage lookup.",
+                            )
+                        with cm2:
+                            e_hk_job = st.text_input(
+                                "HK Job (runs Zamboni)",
+                                value=str(trow.get("controlm_hk_job") or ""),
+                                key=f"{_ek}_hk_job",
+                                placeholder="ACE-DA-FIN-APS-HK-PRD",
+                                help="The Control-M job that triggers Zamboni HK "
+                                     "for this table.",
+                            )
+                        with cm3:
+                            e_upstream_job = st.text_input(
+                                "Gate 1 — Upstream Job",
+                                value=str(trow.get("dependent_on_controlm_job") or ""),
+                                key=f"{_ek}_upstream_job",
+                                placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                                help="Control-M job that must SUCCEED before HK runs. "
+                                     "Gate 1 check — protects against running HK "
+                                     "while a write is still in progress.",
+                            )
+
                             if is_dry_run():
                                 st.info("🔵 Dry Run — no writes.")
 
@@ -551,19 +582,23 @@ with tab_registered:
                                     _now_edit = datetime.now(UTC).strftime(
                                         "%Y-%m-%d %H:%M:%S"
                                     )
+                                    def _esc_v(s): return str(s).replace("'","''")
                                     upd_sql = f"""
                                         UPDATE {STREAM_REGISTRY_TABLE}
-                                        SET domain             = '{e_domain}',
-                                            layer              = '{e_layer}',
-                                            tier               = '{e_tier}',
-                                            stream_id          = '{e_stream}',
-                                            owner_email        = '{e_owner}',
-                                            ci_number          = '{e_ci}',
-                                            hk_enabled         = {'1' if e_hk else '0'},
-                                            archive_enabled    = {'1' if e_archive else '0'},
-                                            lifecycle_enabled  = {'1' if e_lifecycle else '0'},
-                                            processing_cadence = '{e_cadence}',
-                                            updated_at         = '{_now_edit}'
+                                        SET domain                     = '{e_domain}',
+                                            layer                      = '{e_layer}',
+                                            tier                       = '{e_tier}',
+                                            stream_id                  = '{e_stream}',
+                                            owner_email                = '{e_owner}',
+                                            ci_number                  = '{e_ci}',
+                                            hk_enabled                 = {'1' if e_hk else '0'},
+                                            archive_enabled            = {'1' if e_archive else '0'},
+                                            lifecycle_enabled          = {'1' if e_lifecycle else '0'},
+                                            processing_cadence         = '{e_cadence}',
+                                            controlm_pipeline_job      = '{_esc_v(e_pipeline_job)}',
+                                            controlm_hk_job            = '{_esc_v(e_hk_job)}',
+                                            dependent_on_controlm_job  = '{_esc_v(e_upstream_job)}',
+                                            updated_at                 = '{_now_edit}'
                                         WHERE table_fqn = '{edit_fqn}'
                                     """
                                     execute_write(upd_sql, dry_run=is_dry_run())
