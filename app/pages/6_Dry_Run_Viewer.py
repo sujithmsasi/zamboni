@@ -38,16 +38,6 @@ with tab1:
     from app.components.table_selector import render_flat as _flat_sel
     from config.settings import APP_ENV as _ENV
 
-    # Clear stale results when navigating to this page fresh
-    # (detect by checking if we just arrived from a different page)
-    if st.session_state.get("_last_page") != "dry_run":
-        st.session_state.pop("dr_result",   None)
-        st.session_state.pop("dr_reg",      None)
-        st.session_state.pop("dr_cfg",      None)
-        st.session_state.pop("dr_fqn",      None)
-        st.session_state.pop("dr_promoted", None)
-    st.session_state["_last_page"] = "dry_run"
-
     table_fqn = _flat_sel(
         key_prefix="dr_sel",
         label="Select Table to Simulate",
@@ -64,8 +54,15 @@ with tab1:
             st.session_state.pop("dr_fqn", None)
             st.rerun()
 
-    # Clear stale results when user selects a different table
-    if table_fqn and table_fqn != st.session_state.get("dr_fqn"):
+    # Clear results when nothing is selected (fresh page arrival)
+    # OR when user selects a different table
+    if not table_fqn:
+        st.session_state.pop("dr_result",   None)
+        st.session_state.pop("dr_reg",      None)
+        st.session_state.pop("dr_cfg",      None)
+        st.session_state.pop("dr_fqn",      None)
+        st.session_state.pop("dr_promoted", None)
+    elif table_fqn and table_fqn != st.session_state.get("dr_fqn"):
         st.session_state.pop("dr_result", None)
         st.session_state.pop("dr_reg",    None)
         st.session_state.pop("dr_cfg",    None)
@@ -137,9 +134,16 @@ with tab1:
         # Compaction SQL preview
         if cfg.get("compaction_strategy") == "binpack":
             st.markdown("#### 🔧 Compaction SQL Preview")
-            part_col    = cfg.get("partition_column")
-            part_days   = cfg.get("partition_filter_days")
-            part_filter = build_hot_partition_filter(part_col, part_days) if part_col else None
+            part_col  = cfg.get("partition_column")
+            part_days = cfg.get("partition_filter_days")
+            part_type = cfg.get("partition_type", "date") or "date"
+            _no_filter = part_type in ("none", "identity") or not part_col
+            part_filter = (
+                build_hot_partition_filter(
+                    part_col, days=part_days,
+                    partition_type=part_type,
+                ) if not _no_filter else None
+            )
             sql_preview = build_optimize_sql(
                 table_fqn=_fqn,
                 target_file_size_mb=cfg.get("compaction_target_file_size_mb", 128),

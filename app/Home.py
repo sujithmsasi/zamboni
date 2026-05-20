@@ -47,7 +47,7 @@ snapshot, source = get_or_generate(force_refresh=refresh, generated_by=current_u
 with col_a:
     generated_at = snapshot.get("generated_at", "")
     if source == "cached":
-        st.info(f"📊 Snapshot from {generated_at[:19]} (cached) — click Refresh for latest data")
+        st.caption(f"📊 Snapshot: {generated_at[:10]} — click Refresh for today's data")
     else:
         st.success(f"✨ Snapshot generated just now ({generated_at[:19]})")
 

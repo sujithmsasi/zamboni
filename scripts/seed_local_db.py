@@ -632,6 +632,45 @@ def main():
     print("Creating tables...")
     create_tables(TABLES)
 
+    # Schema migrations: add missing columns to existing tables
+    # Safe to run repeatedly — ALTER TABLE is skipped if column exists
+    _migrations = [
+        ("execution_log",    "rows_archived",      "INTEGER DEFAULT 0"),
+        ("execution_log",    "vacuum_iterations",  "INTEGER DEFAULT 1"),
+        ("execution_log",    "oldest_snapshot_id", "TEXT"),
+        ("execution_log",    "newest_snapshot_id", "TEXT"),
+        ("nonprod_registry", "dropped_at",         "TEXT"),
+        ("nonprod_registry", "bytes_reclaimed",    "INTEGER DEFAULT 0"),
+        ("nonprod_registry", "s3_cleaned",         "INTEGER DEFAULT 0"),
+        ("nonprod_registry", "catalog_dropped",    "INTEGER DEFAULT 0"),
+        ("nonprod_registry", "previous_state",     "TEXT"),
+        ("nonprod_registry", "is_backup_pattern",  "INTEGER DEFAULT 0"),
+        ("stream_registry",  "owner_name",         "TEXT DEFAULT ''"),
+        ("stream_registry",  "notes",              "TEXT DEFAULT ''"),
+        ("stream_registry",  "partition_type",     "TEXT DEFAULT 'date'"),
+        ("hk_config",        "partition_type",     "TEXT DEFAULT 'date'"),
+        ("domain_registry",  "display_name",       "TEXT"),
+        ("domain_registry",  "registered_at",      "TEXT DEFAULT (datetime('now'))"),
+        ("domain_registry",  "owner_name",         "TEXT DEFAULT ''"),
+        ("domain_registry",  "team_name",          "TEXT DEFAULT ''"),
+        ("domain_registry",  "description",        "TEXT DEFAULT ''"),
+        ("domain_registry",  "archive_duration_days",  "INTEGER DEFAULT 365"),
+        ("domain_registry",  "auto_delete_after_days", "INTEGER DEFAULT 120"),
+        ("domain_registry",  "registered_by",      "TEXT DEFAULT ''"),
+    ]
+    from engine.utils.local_db import get_connection as _gc
+    _conn = _gc()
+    _migrated = 0
+    for _tbl, _col, _typ in _migrations:
+        try:
+            _conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_typ}")
+            _conn.commit()
+            _migrated += 1
+        except Exception:
+            pass  # column already exists
+    if _migrated:
+        print(f"  {_migrated} schema migration(s) applied")
+
     print("Seeding domain_registry...")
     domains = seed_domains()
     n = insert_rows("domain_registry", domains)

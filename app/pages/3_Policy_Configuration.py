@@ -45,11 +45,20 @@ st.caption(
     "Templates provide sensible defaults; individual fields can be overridden."
 )
 
-# Clear stale table selection when navigating to this page fresh
-if st.session_state.get("_last_page") != "policy_config":
+# Always reset table selection on page load — prevents stale data display.
+# User re-selects the table they want to edit. This is the safest approach.
+if "pc_fresh_load" not in st.session_state:
+    st.session_state["pc_fresh_load"] = True
     st.session_state.pop("pc_edit_table_label", None)
     st.session_state.pop("pc_edit_table_sel",   None)
-st.session_state["_last_page"] = "policy_config"
+elif st.session_state.get("pc_just_saved"):
+    # After a save, keep selection (user likely wants to tweak more)
+    st.session_state.pop("pc_just_saved", None)
+else:
+    # Clear on every new page load after the first
+    st.session_state.pop("pc_fresh_load", None)
+    st.session_state.pop("pc_edit_table_label", None)
+    st.session_state.pop("pc_edit_table_sel",   None)
 
 tab_view, tab_edit, tab_bulk, tab_templates = st.tabs([
     "📋 View Configs",
@@ -325,14 +334,7 @@ with tab_edit:
                                 help="Comma-separated columns for sort or zorder strategy. "
                                      "Ignored for binpack.",
                             )
-                            partition_col = st.text_input(
-                                "Partition Column",
-                                value=str(cfg.get("partition_column") or ""),
-                                key=f"{_fk}_part_col",
-                                placeholder="partition_date",
-                                help="Primary partition column — drives hot-partition "
-                                     "filter window for compaction.",
-                            )
+                            # Partition Type first — drives whether column is relevant
                             part_type_opts = ["date","timestamp","int_yyyymmdd","string","identity","none"]
                             cur_pt = str(cfg.get("partition_type") or "date")
                             part_type = st.selectbox(
@@ -340,8 +342,19 @@ with tab_edit:
                                 part_type_opts,
                                 index=(part_type_opts.index(cur_pt)
                                        if cur_pt in part_type_opts else 0),
-                                help="How the partition column is typed — drives the "
-                                     "correct SQL date literal in compaction filter.",
+                                key=f"{_fk}_part_type",
+                                help="Set to 'none' or 'identity' to skip date filter "
+                                     "(full table compaction). Otherwise drives the "
+                                     "correct SQL date literal.",
+                            )
+                            _no_date_filter = part_type in ("none", "identity")
+                            partition_col = st.text_input(
+                                "Partition Column",
+                                value=str(cfg.get("partition_column") or ""),
+                                key=f"{_fk}_part_col",
+                                placeholder="partition_date" if not _no_date_filter else "N/A",
+                                help="Ignored when Partition Type is none/identity.",
+                                disabled=_no_date_filter,
                             )
 
                         st.markdown("**⏰ Safe Window & Blackout Hours**")
@@ -363,24 +376,29 @@ with tab_edit:
                                 ["post_batch", "scheduled"],
                                 index=0 if _wd.get("type","post_batch") == "post_batch" else 1,
                                 key=f"{_fk}_wtype",
-                                help="post_batch: starts after Gate 1 + delay. "
+                                help="post_batch: starts after Gate 1 + delay minutes. "
                                      "scheduled: runs at a fixed daily start time.",
                             )
+                            # Show start_time only for scheduled type
+                            if w_type == "scheduled":
+                                w_start_time = st.text_input(
+                                    "Start time (HH:MM)",
+                                    value=str(_wd.get("start_time", "02:00")),
+                                    key=f"{_fk}_wstart",
+                                    placeholder="02:00",
+                                    help="Daily start time in 24h format (e.g. 02:00). "
+                                         "HK runs from this time for the duration below.",
+                                )
+                            else:
+                                w_start_time = _wd.get("start_time", "02:00")
                             w_delay = st.number_input(
                                 "Delay after job (minutes)",
                                 value=int(_wd.get("delay_minutes", 30)),
                                 min_value=0, max_value=240,
                                 key=f"{_fk}_wdelay",
-                                help="post_batch only: wait N minutes after Gate 1 "
-                                     "before starting HK.",
-                            )
-                            w_start_time = st.text_input(
-                                "Scheduled start time (HH:MM)",
-                                value=str(_wd.get("start_time", "02:00")),
-                                key=f"{_fk}_wstart",
-                                placeholder="02:00",
-                                help="scheduled only: daily start time in 24h format. "
-                                     "HK runs from this time for the duration below.",
+                                help="post_batch: wait N minutes after Gate 1 passes "
+                                     "before starting HK. Ignored for scheduled.",
+                                disabled=(w_type == "scheduled"),
                             )
                             w_duration = st.number_input(
                                 "Window duration (hours)",
@@ -495,8 +513,7 @@ with tab_edit:
                                 ))
                                 clear_caches()
                                 st.session_state["pc_needs_refresh"] = True
-                                # Keep current selection visible after save
-                                # (don't clear -- user may want to tweak again)
+                                st.session_state["pc_just_saved"] = True
                                 st.success(
                                     f"✅ Config saved for `{table_fqn}`."
                                     + (" (dry run)" if is_dry_run() else "")
