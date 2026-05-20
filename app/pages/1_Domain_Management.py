@@ -41,6 +41,7 @@ st.set_page_config(
 if not check_login():
     st.stop()
 render_sidebar()
+st.session_state["_current_page"] = "domain_mgmt"
 render_header(page_title="Domain Management", page_icon="📋")
 
 tab_list, tab_register, tab_edit = st.tabs([

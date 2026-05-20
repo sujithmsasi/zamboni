@@ -52,6 +52,7 @@ st.set_page_config(
 if not check_login():
     st.stop()
 render_sidebar()
+st.session_state["_current_page"] = "table_reg"
 render_header(page_title="Table Registration", page_icon="➕")
 
 

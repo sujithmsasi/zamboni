@@ -24,6 +24,7 @@ from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 st.set_page_config(page_title="Zamboni — Execution Log", page_icon="📜", layout="wide")
 check_login()
 render_sidebar()
+st.session_state["_current_page"] = "exec_log"
 render_header(page_title="Execution Log", page_icon="📜")
 
 # ── Filters ───────────────────────────────────────────────────────────────────

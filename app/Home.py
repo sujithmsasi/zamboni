@@ -29,6 +29,7 @@ st.set_page_config(page_title="Zamboni — Home", page_icon="🏠", layout="wide
 if not check_login():
     st.stop()
 render_sidebar()
+st.session_state["_current_page"] = "home"
 render_header(page_title="Home", page_icon="🏠")
 
 

@@ -45,17 +45,13 @@ st.caption(
     "Templates provide sensible defaults; individual fields can be overridden."
 )
 
-# Clear stale table selection ONLY on fresh arrival from another page.
-# Signal: "pc_on_page" is absent → first render on this page.
-# Once set, it persists while user stays here — selectbox works normally.
-# Cleared by other pages when they set their own "active page" marker.
-if "pc_on_page" not in st.session_state:
-    # Fresh arrival — reset any stale selection
+# Track navigation using a shared "current_page" key set by every page.
+# When this page loads and sees a different current_page, user just arrived.
+_MY_PAGE = "policy_config"
+if st.session_state.get("_current_page") != _MY_PAGE:
     st.session_state.pop("pc_edit_table_label", None)
     st.session_state.pop("pc_edit_table_sel",   None)
-    st.session_state["pc_on_page"] = True
-# Also clear when navigating away: other pages do NOT set pc_on_page,
-# so next time this page loads it will be absent again.
+st.session_state["_current_page"] = _MY_PAGE
 
 tab_view, tab_edit, tab_bulk, tab_templates = st.tabs([
     "📋 View Configs",
@@ -102,15 +98,10 @@ with tab_view:
         key="pc_show_all",
     )
 
-    pc_col_refresh, pc_col_pagesize = st.columns([2, 1])
-    with pc_col_refresh:
-        if st.button("🔄 Refresh", key="pc_view_refresh"):
-            cached_read_registry.clear()
-            st.rerun()
-    with pc_col_pagesize:
-        from app.components.grid_utils import page_size_selector
-        from app.components.grid_utils import render_grid as _rg
-        _pc_limit = page_size_selector(key="pc_view", default=100)
+    if st.button("🔄 Refresh", key="pc_view_refresh"):
+        cached_read_registry.clear()
+        st.rerun()
+    _pc_limit = 5000  # itables handles client-side pagination
 
     conditions = ["r.table_format = 'iceberg'"]
     if not show_all:
@@ -165,7 +156,13 @@ with tab_view:
                 "manually_overridden":         "Status",
             }, inplace=True, errors="ignore")
 
-            _rg(df, key="pc_view", height=420)
+            from itables.streamlit import interactive_table as _it
+            _it(df, key="pc_view_it",
+                style="width:100%",
+                classes="display compact",
+                lengthMenu=[[25,50,100,250,-1],["25","50","100","250","All"]],
+                pageLength=50,
+                caption=f"{len(df)} table(s) total")
 
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("⬇️ Export CSV", csv,
@@ -242,6 +239,77 @@ with tab_edit:
 
                     # Use table_fqn in form key so switching tables resets all widgets
                     _fk = table_fqn.replace(".", "_").replace("/", "_")
+
+                    # ── Window & Blackout Config (outside form — reacts immediately) ──
+                    import json as _wjson
+                    _wc = cfg.get("window_config")
+                    try:
+                        _wd = _wjson.loads(_wc) if isinstance(_wc, str) and _wc else (
+                            _wc if isinstance(_wc, dict) else {})
+                    except Exception:
+                        _wd = {}
+
+                    st.markdown("**⏰ Safe Window & Blackout**")
+                    _wc1, _wc2 = st.columns(2)
+                    with _wc1:
+                        w_type = st.selectbox(
+                            "Window Type",
+                            ["post_batch", "scheduled"],
+                            index=0 if _wd.get("type","post_batch") == "post_batch" else 1,
+                            key=f"{_fk}_wtype",
+                            help="post_batch: Gate 1 + delay. scheduled: fixed daily time.",
+                        )
+                        if w_type == "scheduled":
+                            _raw_start = str(_wd.get("start_time", "02:00"))
+                            w_start_time = st.text_input(
+                                "Start time (HH:MM) *",
+                                value=_raw_start,
+                                key=f"{_fk}_wstart",
+                                placeholder="02:00",
+                                help="24h format, e.g. 02:00. Must not fall in a blackout hour.",
+                            )
+                        else:
+                            w_start_time = _wd.get("start_time", "02:00")
+                            st.caption(f"start_time stored: `{w_start_time}` (used when switching to scheduled)")
+                        w_delay = st.number_input(
+                            "Delay after job (minutes)",
+                            value=int(_wd.get("delay_minutes", 30)),
+                            min_value=0, max_value=240,
+                            key=f"{_fk}_wdelay",
+                            disabled=(w_type == "scheduled"),
+                        )
+                        w_duration = st.number_input(
+                            "Window duration (hours)",
+                            value=int(_wd.get("duration_hours", 4)),
+                            min_value=1, max_value=12,
+                            key=f"{_fk}_wdur",
+                        )
+                        w_tz = st.selectbox(
+                            "Timezone",
+                            ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
+                            index=(["America/Los_Angeles","America/New_York",
+                                    "America/Chicago","UTC"]
+                                   .index(_wd.get("timezone","America/Los_Angeles"))
+                                   if _wd.get("timezone") in
+                                   ["America/Los_Angeles","America/New_York",
+                                    "America/Chicago","UTC"] else 0),
+                            key=f"{_fk}_wtz",
+                        )
+                    with _wc2:
+                        st.markdown("**Blackout hours** — HK will not start")
+                        _cur_bh = _wd.get("blackout_hours", [6,7,8,9,18,19,20,21])
+                        _bh_cols = st.columns(4)
+                        _new_bh = []
+                        for _h in range(24):
+                            _bh_checked = _bh_cols[_h % 4].checkbox(
+                                f"{_h:02d}:00",
+                                value=(_h in _cur_bh),
+                                key=f"{_fk}_bh_{_h}",
+                            )
+                            if _bh_checked:
+                                _new_bh.append(_h)
+                    st.divider()
+
                     with st.form(f"edit_config_form_{_fk}", clear_on_submit=False):
                         col1, col2 = st.columns(2)
 
@@ -448,8 +516,31 @@ with tab_edit:
                         )
 
                     if submitted:
+                        _save_errors = []
                         if not override_notes.strip():
-                            st.error("Reason is required before saving an override.")
+                            _save_errors.append("Reason for override is required.")
+                        # Validate start_time for scheduled windows
+                        if w_type == "scheduled":
+                            _st_val = (w_start_time or "").strip()
+                            if not _st_val:
+                                _save_errors.append("Start time is required for scheduled windows.")
+                            else:
+                                import re as _re
+                                if not _re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", _st_val):
+                                    _save_errors.append(
+                                        f"Start time `{_st_val}` is not valid HH:MM (24h format)."
+                                    )
+                                else:
+                                    _start_hour = int(_st_val.split(":")[0])
+                                    if _start_hour in _new_bh:
+                                        _save_errors.append(
+                                            f"Start time {_st_val} falls in a blackout hour "
+                                            f"({_start_hour:02d}:00 is blacked out). "
+                                            "Either change the start time or uncheck that blackout hour."
+                                        )
+                        if _save_errors:
+                            for _err in _save_errors:
+                                st.error(_err)
                         else:
                             try:
                                 from datetime import datetime
