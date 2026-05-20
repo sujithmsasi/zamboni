@@ -52,11 +52,7 @@ st.set_page_config(
 if not check_login():
     st.stop()
 render_sidebar()
-render_header()
-
-st.markdown("# ➕ Table Registration")
-st.markdown("Browse the Glue catalog and register Iceberg tables with Zamboni.")
-st.markdown("---")
+render_header(page_title="Table Registration", page_icon="➕")
 
 
 # ── Helper: load domain list ──────────────────────────────────────────────────
