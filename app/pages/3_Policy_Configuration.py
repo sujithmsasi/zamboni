@@ -93,9 +93,10 @@ with tab_view:
         t = tier_filter(key="pc_tier")
 
     show_all = st.checkbox(
-        "Include tables without HK enabled",
-        value=False,
+        "Show all tables (including HK-disabled)",
+        value=True,
         key="pc_show_all",
+        help="When unchecked, only shows tables with Housekeeping enabled.",
     )
 
     if st.button("🔄 Refresh", key="pc_view_refresh"):
@@ -157,12 +158,25 @@ with tab_view:
             }, inplace=True, errors="ignore")
 
             from itables.streamlit import interactive_table as _it
-            _it(df, key="pc_view_it",
-                style="width:100%",
-                classes="display compact",
-                lengthMenu=[[25,50,100,250,-1],["25","50","100","250","All"]],
-                pageLength=50,
-                caption=f"{len(df)} table(s) total")
+            _it(
+                df,
+                key="pc_view_it",
+                style="width:100%;font-size:12px;",
+                classes="display compact stripe hover nowrap",
+                lengthMenu=[[25, 50, 100, 250, -1],
+                            ["25", "50", "100", "250", "All"]],
+                pageLength=100,
+                scrollX=True,
+                columnDefs=[
+                    {"width": "280px", "targets": 0},    # Table FQN
+                    {"width": "90px",  "targets": [1,2,3]},  # domain/layer/tier
+                    {"width": "90px",  "targets": [4,5]},    # template/strategy
+                    {"width": "70px",  "targets": "_all"},   # rest
+                    {"className": "dt-center", "targets": "_all"},
+                    {"className": "dt-left",   "targets": [0, 1]},
+                ],
+                caption=f"{len(df):,} table(s)",
+            )
 
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("⬇️ Export CSV", csv,
@@ -305,35 +319,40 @@ with tab_edit:
                         col1, col2 = st.columns(2)
 
                         with col1:
+                            st.caption("Fields marked * are required")
                             snap_days = st.number_input(
-                                "Snapshot Retention (days)",
+                                "Snapshot Retention (days) *",
                                 value=int(cfg.get("snapshot_retention_days") or 7),
                                 min_value=1,
                                 key=f"{_fk}_snap_days",
-                                help="Drives vacuum_max_snapshot_age_seconds.",
+                                help="How long to keep snapshots before expiry. "
+                                     "Drives vacuum_max_snapshot_age_seconds TBLPROPERTY.",
                             )
                             snap_min = st.number_input(
-                                "Min Snapshots to Keep",
+                                "Min Snapshots to Keep *",
                                 value=max(int(cfg.get("snapshot_min_to_keep") or 30), 2),
                                 min_value=2,
                                 key=f"{_fk}_snap_min",
-                                help="Safety floor — VACUUM never removes below this.",
+                                help="Safety floor — VACUUM never removes below this count. "
+                                     "Zamboni default: 30 (conservative SCD2 buffer).",
                             )
                             orphan = st.number_input(
-                                "Orphan Retention (days)",
+                                "Orphan Retention (days) *",
                                 value=max(int(cfg.get("orphan_file_retention_days") or 2), 2),
                                 min_value=2,
                                 key=f"{_fk}_orphan",
-                                help="Minimum 2 days — protects in-flight writers.",
+                                help="Minimum 2 days — protects in-flight writers "
+                                     "from having their uncommitted files deleted.",
                             )
                             orphan_cadence = st.number_input(
                                 "Orphan Cleanup Cadence (days)",
                                 value=int(cfg.get("orphan_cleanup_cadence_days") or 7),
                                 min_value=0,
                                 key=f"{_fk}_orphan_cad",
+                                help="How often orphan cleanup runs. 0 = disabled.",
                             )
                             run_freq = st.selectbox(
-                                "Run Frequency",
+                                "Run Frequency *",
                                 ["every_trigger", "daily", "weekly", "monthly"],
                                 index=(
                                     ["every_trigger", "daily", "weekly", "monthly"]
@@ -343,6 +362,7 @@ with tab_edit:
                                     else 1
                                 ),
                                 key=f"{_fk}_run_freq",
+                                help="How often Zamboni HK runs on this table.",
                             )
 
                         with col2:
@@ -370,7 +390,7 @@ with tab_edit:
                                 help="Ignored when Partition Type is none/identity.",
                             )
                             strategy = st.selectbox(
-                                "Compaction Strategy",
+                                "Compaction Strategy *",
                                 ["binpack", "sort", "zorder"],
                                 index=(
                                     ["binpack", "sort", "zorder"]
@@ -379,9 +399,11 @@ with tab_edit:
                                     in ["binpack", "sort", "zorder"] else 0
                                 ),
                                 key=f"{_fk}_strategy",
+                                help="binpack → Athena OPTIMIZE (default). "
+                                     "sort/zorder → Glue PySpark (requires Glue engine).",
                             )
                             engine_choice = st.selectbox(
-                                "Compaction Engine",
+                                "Compaction Engine *",
                                 ["athena", "glue"],
                                 index=(
                                     ["athena", "glue"]
@@ -390,19 +412,24 @@ with tab_edit:
                                     in ["athena", "glue"] else 0
                                 ),
                                 key=f"{_fk}_engine",
+                                help="athena = OPTIMIZE SQL. "
+                                     "glue = PySpark rewrite_data_files (required for sort/zorder).",
                             )
                             target_mb = st.number_input(
-                                "Target File Size (MB)",
+                                "Target File Size (MB) *",
                                 value=int(cfg.get("compaction_target_file_size_mb") or 128),
                                 min_value=64,
                                 key=f"{_fk}_target_mb",
+                                help="Target output file size after compaction. "
+                                     "128 MB staging, 256 MB datalake, 512 MB base/master.",
                             )
                             sort_cols = st.text_input(
                                 "Sort / Z-Order Columns",
                                 value=str(cfg.get("sort_order_cols") or ""),
                                 key=f"{_fk}_sort_cols",
                                 placeholder="partition_date, customer_id",
-                                help="Comma-separated. Ignored for binpack.",
+                                help="Comma-separated column list. Only used for "
+                                     "sort and zorder strategies. Ignored for binpack.",
                             )
 
                         override_notes = st.text_input(
@@ -422,8 +449,22 @@ with tab_edit:
                     # ── Save handler (outside form, after submit) ─────────────────
                     if submitted:
                         _save_errors = []
+                        # Required field validation
                         if not override_notes.strip():
                             _save_errors.append("Reason for override is required.")
+                        if snap_days < 1:
+                            _save_errors.append("Snapshot Retention must be at least 1 day.")
+                        if snap_min < 2:
+                            _save_errors.append("Min Snapshots to Keep must be at least 2.")
+                        if orphan < 2:
+                            _save_errors.append("Orphan Retention must be at least 2 days.")
+                        if target_mb < 64:
+                            _save_errors.append("Target File Size must be at least 64 MB.")
+                        if strategy in ("sort", "zorder") and engine_choice == "athena":
+                            _save_errors.append(
+                                f"Strategy '{strategy}' requires Glue engine. "
+                                "Athena only supports 'binpack'."
+                            )
                         if w_type == "scheduled":
                             import re as _re
                             _st_val = (w_start_time or "").strip()

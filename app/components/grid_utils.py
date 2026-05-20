@@ -64,14 +64,16 @@ def render_grid(
         _it(
             df,
             key=key,
-            style="width:100%;font-size:13px;",
-            classes="display compact stripe hover",
+            style="width:100%;font-size:12px;",
+            classes="display compact stripe hover nowrap",
             lengthMenu=[[25, 50, 100, 250, -1], ["25", "50", "100", "250", "All"]],
             pageLength=page_length,
-            layout={"topStart": "search", "topEnd": "pageLength",
-                    "bottomStart": "info",  "bottomEnd": "paging"},
-            caption=caption,
             scrollX=True,
+            columnDefs=[
+                {"className": "dt-center", "targets": "_all"},
+                {"className": "dt-left",   "targets": [0]},
+            ],
+            caption=caption,
         )
     else:
         st.dataframe(
