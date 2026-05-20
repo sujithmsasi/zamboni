@@ -101,11 +101,19 @@ with tab2:
     st.markdown("#### Submit an Exemption")
     st.info("Submitting an exemption moves the table back to ACTIVE and prevents deletion for one more cycle. Provide a clear business reason.")
 
-    exempt_fqn = st.text_input(
-        "Table FQN",
-        placeholder="glue_catalog.finance_preprod.finance_staging",
-        key="np_exempt_fqn",
+    from app.components.table_selector import render_flat as _flat
+    exempt_fqn = _flat(
+        key_prefix="exempt",
+        label="Table",
+        registry_filter="environment IN ('preprod','dev','test')",
+        help_text="Search by table name or database.",
     )
+    if not exempt_fqn:
+        exempt_fqn = st.text_input(
+            "Or enter FQN manually",
+            placeholder="glue_catalog.preprod_db.my_table",
+            key="exempt_fqn_manual",
+        )
 
     if exempt_fqn:
         check_sql = f"""
@@ -184,7 +192,17 @@ with tab3:
         "Requires a reason. Audited."
     )
     from app.components.auth import current_user as _cu_claim
-    claim_fqn = st.text_input("Table FQN to Claim", placeholder="glue_catalog.preprod_db.my_table", key="claim_fqn")
+    from app.components.table_selector import render_flat as _flat_claim
+    claim_fqn = _flat_claim(
+        key_prefix="claim",
+        label="Table to Claim",
+        registry_filter="environment IN ('preprod','dev','test')",
+        help_text="Search by table name. Only non-prod tables shown.",
+    ) or st.text_input(
+        "Or enter FQN manually",
+        placeholder="glue_catalog.preprod_db.my_table",
+        key="claim_fqn_manual",
+    )
     claim_reason = st.text_area("Reason for claiming *", key="claim_reason",
                                  placeholder="Why are you claiming ownership of this table?")
     if st.button("🙋 Claim This Table", type="primary", key="claim_btn"):

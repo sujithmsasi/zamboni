@@ -147,14 +147,48 @@ with tab2:
     st.markdown("Iceberg tables that exist in the Glue catalog but are **not registered** in Zamboni.")
     st.info("These tables have no HK policy — they may be accumulating snapshots and orphan files unmanaged.")
 
-    sel_db = st.text_input(
-        "Glue Database to scan",
-        placeholder="finance_db",
-        key="sr_unrg_db",
-        help="Enter the Glue database name to scan for unregistered tables"
-    )
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _known_dbs() -> list[str]:
+        try:
+            from app.components.athena_runner import cached_read_registry
+            from config.settings import STREAM_REGISTRY_TABLE
+            df = cached_read_registry(
+                f"SELECT DISTINCT database_name FROM {STREAM_REGISTRY_TABLE} "
+                "WHERE database_name IS NOT NULL AND database_name != '' "
+                "ORDER BY database_name"
+            )
+            return df["database_name"].tolist() if not df.empty else []
+        except Exception:
+            return []
 
-    if sel_db and st.button("🔍 Scan Database", key="sr_scan"):
+    _dbs = _known_dbs()
+    _col_db, _col_scan = st.columns([4, 1])
+    with _col_db:
+        if _dbs:
+            _db_sel = st.selectbox(
+                "Glue Database to scan",
+                ["-- select --"] + _dbs,
+                key="sr_unrg_db",
+                help="Select a database to scan for unregistered Iceberg tables.",
+            )
+            sel_db = "" if _db_sel == "-- select --" else _db_sel
+        else:
+            sel_db = st.text_input(
+                "Glue Database to scan",
+                placeholder="finance_staging_db",
+                key="sr_unrg_db",
+                help="Enter the Glue database name manually.",
+            )
+    with _col_scan:
+        st.write("")  # spacer for alignment
+        _scan_clicked = st.button(
+            "🔍 Scan",
+            key="sr_scan",
+            disabled=not bool(sel_db),
+            type="primary",
+        )
+
+    if sel_db and _scan_clicked:
         with st.spinner(f"Scanning `{sel_db}` for unregistered tables..."):
             try:
                 from engine.utils.glue_client import get_tables, is_iceberg_table
@@ -270,7 +304,7 @@ with tab2:
             except Exception as e:
                 st.error(f"Scan failed: {e}")
     elif not sel_db:
-        st.caption("Enter a Glue database name above and click Scan.")
+        st.caption("Select a database above, then click Scan.")
 
 
 # ── Tab 3: Orphaned S3 Locations ──────────────────────────────────────────────
@@ -278,16 +312,29 @@ with tab3:
     st.markdown("S3 prefixes that contain data but have **no corresponding Glue table**.")
     st.info("These are typically leftover from dropped tables where the S3 data was not cleaned up.")
 
-    s3_prefix = st.text_input(
-        "S3 Base Prefix to Scan",
-        placeholder="s3://your-staging-bucket/staging/finance/",
-        key="sr_s3_prefix",
-        help="Top-level S3 prefix to scan for orphaned data"
+    _s3_col1, _s3_col2 = st.columns([4, 1])
+    with _s3_col1:
+        s3_prefix = st.text_input(
+            "S3 Base Prefix to Scan",
+            placeholder="s3://your-staging-bucket/staging/finance/",
+            key="sr_s3_prefix",
+            help="Top-level S3 prefix to scan for orphaned data. "
+                 "Large buckets may take several minutes.",
+        )
+    with _s3_col2:
+        st.write("")  # spacer
+        _s3_clicked = st.button(
+            "🔍 Scan S3",
+            key="sr_s3_scan",
+            disabled=not bool(s3_prefix),
+            type="primary",
+        )
+    st.caption(
+        "ℹ️ Lists S3 prefixes not in the Glue catalog. "
+        "Large buckets may take a few minutes."
     )
 
-    st.caption("ℹ️ This scan lists S3 prefixes and cross-references them against the Glue catalog. Large buckets may take a few minutes.")
-
-    if s3_prefix and st.button("🔍 Scan S3 Prefix", key="sr_s3_scan"):
+    if s3_prefix and _s3_clicked:
         with st.spinner(f"Scanning `{s3_prefix}`..."):
             try:
                 from engine.utils.glue_client import get_tables
