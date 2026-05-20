@@ -144,10 +144,10 @@ def render(
             background-image: {sidebar_logo};
             background-size: contain;
             background-repeat: no-repeat;
-            background-position: center;
+            background-position: left center;
             width: 100%;
-            height: 90px;
-            margin: 12px 0 8px 0;
+            height: 80px;
+            margin: 8px 0 4px 4px;
           }}
 
           /* Tighten sidebar nav spacing */

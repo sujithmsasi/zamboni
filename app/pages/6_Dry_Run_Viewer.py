@@ -34,13 +34,28 @@ tab1, tab2 = st.tabs(["🔍 Single Table", "📂 Domain Dry Run"])
 
 # ── Tab 1: Single Table ───────────────────────────────────────────────────────
 with tab1:
-    # Cascading domain → database → table selector (with manual fallback)
     from app.components.auth import current_user as _cuser
-    from app.components.table_selector import render as _table_selector
+    from app.components.table_selector import render_flat as _flat_sel
     from config.settings import APP_ENV as _ENV
-    _domain, _db, table_fqn = _table_selector(key_prefix="dr_sel", label="Select Table to Simulate")
 
-    if table_fqn and st.button("▶ Run Dry Run", type="primary", key="dr_run"):
+    table_fqn = _flat_sel(
+        key_prefix="dr_sel",
+        label="Select Table to Simulate",
+        help_text="Type table name or database to search. All registered tables shown.",
+    )
+
+    col_run, col_clear = st.columns([2, 1])
+    with col_run:
+        run_clicked = st.button("▶ Run Dry Run", type="primary", key="dr_run",
+                                disabled=not bool(table_fqn))
+    with col_clear:
+        if st.button("✕ Clear", key="dr_clear"):
+            st.session_state.pop("dr_result", None)
+            st.session_state.pop("dr_fqn", None)
+            st.rerun()
+
+    if run_clicked and table_fqn:
+        st.session_state["dr_fqn"] = table_fqn
         with st.spinner("Running dry run..."):
 
             # Load registry row
@@ -58,6 +73,7 @@ with tab1:
                 reg = reg_df.iloc[0].to_dict()
                 cfg = cfg_df.iloc[0].to_dict() if not cfg_df.empty else {}
 
+                st.session_state["dr_result"] = True
                 st.success(f"Dry run complete for `{table_fqn}`")
 
                 col1, col2, col3 = st.columns(3)
@@ -157,6 +173,7 @@ with tab1:
                             status="SUCCESS",
                             reason=reason, ticket_number=ticket,
                         ))
+                        st.session_state["dr_promoted"] = True
                         st.success(
                             "✅ Promote to live recorded. "
                             "The next EventBridge trigger will run this table with dry_run=False."

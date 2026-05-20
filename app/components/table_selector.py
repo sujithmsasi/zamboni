@@ -25,12 +25,12 @@ def _get_domains() -> list[str]:
         from app.components.athena_runner import cached_read_registry
         from config.settings import DOMAIN_REGISTRY_TABLE
         df = cached_read_registry(
-            f"SELECT DISTINCT domain FROM {DOMAIN_REGISTRY_TABLE} "
-            "WHERE environment = 'prod' ORDER BY domain"
+            f"SELECT DISTINCT domain_name FROM {DOMAIN_REGISTRY_TABLE} "
+            "WHERE is_active = 1 ORDER BY domain_name"
         )
         if df.empty:
             return []
-        return df["domain"].tolist()
+        return df["domain_name"].tolist()
     except Exception as e:
         log.warning("table_selector.get_domains_failed", error=str(e))
         return []

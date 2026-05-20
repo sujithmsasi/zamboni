@@ -136,20 +136,17 @@ with tab_browse:
     if not databases:
         st.warning("No Glue databases found.")
     else:
-        col_db, col_filter = st.columns([2, 2])
-        with col_db:
-            selected_db = st.selectbox(
-                "Glue Database",
-                ["-- All Databases --"] + databases,
-                help="Select a specific database or browse all databases.",
-            )
-        with col_filter:
-            show_unregistered_only = st.checkbox(
-                "Show only unregistered tables",
-                value=False,
-                key="browse_unreg_only",
-                help="Filter to tables not yet registered with Zamboni.",
-            )
+        selected_db = st.selectbox(
+            "Glue Database",
+            ["-- All Databases --"] + databases,
+            help="Select a specific database or browse all databases.",
+        )
+        show_unregistered_only = st.checkbox(
+            "Show only unregistered tables",
+            value=False,
+            key="browse_unreg_only",
+            help="Filter to tables not yet registered with Zamboni.",
+        )
 
         # If All selected, aggregate tables across all databases
         if selected_db == "-- All Databases --":

@@ -13,13 +13,8 @@ from config.settings import APP_ENV, AWS_REGION
 def render() -> None:
     with st.sidebar:
 
-        # ── Zamboni logo ──────────────────────────────────────────────────────
-        from pathlib import Path as _P
-        _logo = _P(__file__).parent.parent / "assets" / "zamboni_logo.png"
-        if _logo.exists():
-            st.image(str(_logo), width=160)
-        else:
-            st.markdown("**🧊 Zamboni**")
+        # Logo is shown above sidebar nav via CSS in header.py
+        # No duplicate logo here — keeps sidebar clean.
         st.divider()
 
         # ── User & Environment ────────────────────────────────────────────────
