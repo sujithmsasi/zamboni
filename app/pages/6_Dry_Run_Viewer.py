@@ -54,6 +54,13 @@ with tab1:
             st.session_state.pop("dr_fqn", None)
             st.rerun()
 
+    # Clear stale results when user selects a different table
+    if table_fqn and table_fqn != st.session_state.get("dr_fqn"):
+        st.session_state.pop("dr_result", None)
+        st.session_state.pop("dr_reg",    None)
+        st.session_state.pop("dr_cfg",    None)
+        st.session_state.pop("dr_promoted", None)
+
     # Run dry run and store results in session_state
     if run_clicked and table_fqn:
         st.session_state["dr_fqn"] = table_fqn
@@ -124,7 +131,7 @@ with tab1:
             part_days   = cfg.get("partition_filter_days")
             part_filter = build_hot_partition_filter(part_col, part_days) if part_col else None
             sql_preview = build_optimize_sql(
-                table_fqn=table_fqn,
+                table_fqn=_fqn,
                 target_file_size_mb=cfg.get("compaction_target_file_size_mb", 128),
                 partition_filter=part_filter,
             )
