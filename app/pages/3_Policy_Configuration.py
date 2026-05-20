@@ -175,49 +175,38 @@ with tab_view:
 with tab_edit:
     st.subheader("Edit HK Config for a Table")
     st.caption(
-        "Select a table from the dropdown — type to search. "
-        "All fields are pre-populated from the current config."
+        "Select a table — type to search. "
+        "Fields are pre-populated from the current config."
     )
 
-    # Cascading selector: domain → database → table
     all_tables = _get_all_tables()
 
     if not all_tables:
         st.warning("No tables registered. Register tables in Table Registration first.")
     else:
-        # Build display labels and reverse map
         label_to_fqn = {_table_short_name(fqn): fqn for fqn in all_tables}
-        fqn_to_label = {v: k for k, v in label_to_fqn.items()}
         labels = ["-- select a table --"] + list(label_to_fqn.keys())
 
-        # Default to "-- select a table --" on every fresh page load
-        # Only restore previous selection if user explicitly made one this session
-        _prev_label = st.session_state.get("pc_edit_table_label", labels[0])
-        # If previous label is no longer in labels (stale), reset to default
-        if _prev_label not in labels:
-            _prev_label = labels[0]
-            st.session_state["pc_edit_table_label"] = _prev_label
-        _default_idx = labels.index(_prev_label)
+        _prev = st.session_state.get("pc_edit_table_label", labels[0])
+        if _prev not in labels:
+            _prev = labels[0]
+        _default_idx = labels.index(_prev)
 
         selected_label = st.selectbox(
             "Table (type to search)",
             labels,
             index=_default_idx,
             key="pc_edit_table_sel",
-            help="Type the table name or database to filter. "
-                 "Defaults to blank on each visit.",
+            help="Type the table name or database to filter.",
         )
-        # Only persist selection if user actually chose something
         if selected_label != labels[0]:
             st.session_state["pc_edit_table_label"] = selected_label
-        elif st.session_state.get("pc_edit_table_label") != labels[0]:
-            # User navigated back without selecting — reset
+        else:
             st.session_state["pc_edit_table_label"] = labels[0]
 
         table_fqn = label_to_fqn.get(selected_label)
 
         if table_fqn:
-            # Load current config
             try:
                 df_cfg = cached_read_registry(
                     f"SELECT * FROM {HK_CONFIG_TABLE} "
@@ -226,8 +215,7 @@ with tab_edit:
                 if df_cfg.empty:
                     st.warning(
                         f"No HK config found for `{table_fqn}`. "
-                        "Apply a template in the **Bulk Apply** tab first, "
-                        "then return here to override individual fields."
+                        "Apply a template in the **Bulk Apply** tab first."
                     )
                 else:
                     cfg = df_cfg.iloc[0].to_dict()
@@ -237,46 +225,46 @@ with tab_edit:
                         f"{'⚠️ Manually overridden' if cfg.get('manually_overridden') else '✅ On template'}"
                     )
 
-                    # Use table_fqn in form key so switching tables resets all widgets
+                    # Unique key prefix per table
                     _fk = table_fqn.replace(".", "_").replace("/", "_")
 
-                    # ── Window & Blackout Config (outside form — reacts immediately) ──
+                    # ── Window & Blackout (OUTSIDE form — reacts immediately) ─────
                     import json as _wjson
                     _wc = cfg.get("window_config")
                     try:
-                        _wd = _wjson.loads(_wc) if isinstance(_wc, str) and _wc else (
-                            _wc if isinstance(_wc, dict) else {})
+                        _wd = (_wjson.loads(_wc) if isinstance(_wc, str) and _wc
+                               else (_wc if isinstance(_wc, dict) else {}))
                     except Exception:
                         _wd = {}
 
                     st.markdown("**⏰ Safe Window & Blackout**")
-                    _wc1, _wc2 = st.columns(2)
-                    with _wc1:
+                    _wcol1, _wcol2 = st.columns(2)
+                    with _wcol1:
                         w_type = st.selectbox(
                             "Window Type",
                             ["post_batch", "scheduled"],
-                            index=0 if _wd.get("type","post_batch") == "post_batch" else 1,
+                            index=0 if _wd.get("type", "post_batch") == "post_batch" else 1,
                             key=f"{_fk}_wtype",
-                            help="post_batch: Gate 1 + delay. scheduled: fixed daily time.",
+                            help="post_batch: Gate 1 + delay. "
+                                 "scheduled: fixed daily start time.",
                         )
                         if w_type == "scheduled":
-                            _raw_start = str(_wd.get("start_time", "02:00"))
                             w_start_time = st.text_input(
                                 "Start time (HH:MM) *",
-                                value=_raw_start,
+                                value=str(_wd.get("start_time", "02:00")),
                                 key=f"{_fk}_wstart",
                                 placeholder="02:00",
-                                help="24h format, e.g. 02:00. Must not fall in a blackout hour.",
+                                help="24h format. Must not fall in a blackout hour.",
                             )
                         else:
-                            w_start_time = _wd.get("start_time", "02:00")
-                            st.caption(f"start_time stored: `{w_start_time}` (used when switching to scheduled)")
+                            w_start_time = str(_wd.get("start_time", "02:00"))
                         w_delay = st.number_input(
                             "Delay after job (minutes)",
                             value=int(_wd.get("delay_minutes", 30)),
                             min_value=0, max_value=240,
                             key=f"{_fk}_wdelay",
                             disabled=(w_type == "scheduled"),
+                            help="post_batch only. Ignored for scheduled.",
                         )
                         w_duration = st.number_input(
                             "Window duration (hours)",
@@ -286,30 +274,33 @@ with tab_edit:
                         )
                         w_tz = st.selectbox(
                             "Timezone",
-                            ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
-                            index=(["America/Los_Angeles","America/New_York",
-                                    "America/Chicago","UTC"]
-                                   .index(_wd.get("timezone","America/Los_Angeles"))
-                                   if _wd.get("timezone") in
-                                   ["America/Los_Angeles","America/New_York",
-                                    "America/Chicago","UTC"] else 0),
+                            ["America/Los_Angeles", "America/New_York",
+                             "America/Chicago", "UTC"],
+                            index=(
+                                ["America/Los_Angeles", "America/New_York",
+                                 "America/Chicago", "UTC"]
+                                .index(_wd.get("timezone", "America/Los_Angeles"))
+                                if _wd.get("timezone") in
+                                ["America/Los_Angeles", "America/New_York",
+                                 "America/Chicago", "UTC"] else 0
+                            ),
                             key=f"{_fk}_wtz",
                         )
-                    with _wc2:
+                    with _wcol2:
                         st.markdown("**Blackout hours** — HK will not start")
-                        _cur_bh = _wd.get("blackout_hours", [6,7,8,9,18,19,20,21])
+                        _cur_bh = _wd.get("blackout_hours", [6, 7, 8, 9, 18, 19, 20, 21])
                         _bh_cols = st.columns(4)
                         _new_bh = []
                         for _h in range(24):
-                            _bh_checked = _bh_cols[_h % 4].checkbox(
+                            if _bh_cols[_h % 4].checkbox(
                                 f"{_h:02d}:00",
                                 value=(_h in _cur_bh),
                                 key=f"{_fk}_bh_{_h}",
-                            )
-                            if _bh_checked:
+                            ):
                                 _new_bh.append(_h)
                     st.divider()
 
+                    # ── Main config fields (INSIDE form) ─────────────────────────
                     with st.form(f"edit_config_form_{_fk}", clear_on_submit=False):
                         col1, col2 = st.columns(2)
 
@@ -319,16 +310,14 @@ with tab_edit:
                                 value=int(cfg.get("snapshot_retention_days") or 7),
                                 min_value=1,
                                 key=f"{_fk}_snap_days",
-                                help="How long to keep snapshots before expiry. "
-                                     "Drives TBLPROPERTIES vacuum_max_snapshot_age_seconds.",
+                                help="Drives vacuum_max_snapshot_age_seconds.",
                             )
                             snap_min = st.number_input(
                                 "Min Snapshots to Keep",
-                                value=int(cfg.get("snapshot_min_to_keep") or 30),
+                                value=max(int(cfg.get("snapshot_min_to_keep") or 30), 2),
                                 min_value=2,
                                 key=f"{_fk}_snap_min",
-                                help="Safety floor — VACUUM never removes below this. "
-                                     "Zamboni default: 30 (conservative buffer).",
+                                help="Safety floor — VACUUM never removes below this.",
                             )
                             orphan = st.number_input(
                                 "Orphan Retention (days)",
@@ -342,67 +331,26 @@ with tab_edit:
                                 value=int(cfg.get("orphan_cleanup_cadence_days") or 7),
                                 min_value=0,
                                 key=f"{_fk}_orphan_cad",
-                                help="How often to run orphan cleanup. 0 = disabled.",
                             )
                             run_freq = st.selectbox(
                                 "Run Frequency",
                                 ["every_trigger", "daily", "weekly", "monthly"],
-                                key=f"{_fk}_run_freq",
                                 index=(
-                                    ["every_trigger","daily","weekly","monthly"]
-                                    .index(cfg.get("run_frequency","daily"))
-                                    if cfg.get("run_frequency","daily") in
-                                       ["every_trigger","daily","weekly","monthly"]
+                                    ["every_trigger", "daily", "weekly", "monthly"]
+                                    .index(cfg.get("run_frequency", "daily"))
+                                    if cfg.get("run_frequency", "daily") in
+                                    ["every_trigger", "daily", "weekly", "monthly"]
                                     else 1
                                 ),
-                                help="How often HK runs on this table.",
+                                key=f"{_fk}_run_freq",
                             )
 
                         with col2:
-                            strategy = st.selectbox(
-                                "Compaction Strategy",
-                                ["binpack", "sort", "zorder"],
-                                key=f"{_fk}_strategy",
-                                index=(
-                                    ["binpack","sort","zorder"]
-                                    .index(cfg.get("compaction_strategy","binpack"))
-                                    if cfg.get("compaction_strategy","binpack")
-                                       in ["binpack","sort","zorder"] else 0
-                                ),
-                                help="binpack → Athena OPTIMIZE. "
-                                     "sort/zorder → Glue PySpark rewrite_data_files.",
-                            )
-                            engine_choice = st.selectbox(
-                                "Compaction Engine",
-                                ["athena", "glue"],
-                                key=f"{_fk}_engine",
-                                index=(
-                                    ["athena","glue"]
-                                    .index(cfg.get("compaction_engine","athena"))
-                                    if cfg.get("compaction_engine","athena")
-                                       in ["athena","glue"] else 0
-                                ),
-                                help="athena = OPTIMIZE via Athena SQL. "
-                                     "glue = Glue PySpark job (required for sort/zorder).",
-                            )
-                            target_mb = st.number_input(
-                                "Target File Size (MB)",
-                                value=int(cfg.get("compaction_target_file_size_mb") or 128),
-                                min_value=64,
-                                key=f"{_fk}_target_mb",
-                                help="Target output file size after compaction. "
-                                     "128 MB staging, 256 MB datalake, 512 MB base/master.",
-                            )
-                            sort_cols = st.text_input(
-                                "Sort / Z-Order Columns",
-                                value=str(cfg.get("sort_order_cols") or ""),
-                                key=f"{_fk}_sort_cols",
-                                placeholder="partition_date, customer_id",
-                                help="Comma-separated columns for sort or zorder strategy. "
-                                     "Ignored for binpack.",
-                            )
-                            # Partition Type first — drives whether column is relevant
-                            part_type_opts = ["date","timestamp","int_yyyymmdd","string","identity","none"]
+                            # Partition Type first
+                            part_type_opts = [
+                                "date", "timestamp", "int_yyyymmdd",
+                                "string", "identity", "none",
+                            ]
                             cur_pt = str(cfg.get("partition_type") or "date")
                             part_type = st.selectbox(
                                 "Partition Type",
@@ -410,9 +358,7 @@ with tab_edit:
                                 index=(part_type_opts.index(cur_pt)
                                        if cur_pt in part_type_opts else 0),
                                 key=f"{_fk}_part_type",
-                                help="Set to 'none' or 'identity' to skip date filter "
-                                     "(full table compaction). Otherwise drives the "
-                                     "correct SQL date literal.",
+                                help="Set to 'none' or 'identity' to skip date filter.",
                             )
                             _no_date_filter = part_type in ("none", "identity")
                             partition_col = st.text_input(
@@ -420,86 +366,44 @@ with tab_edit:
                                 value=str(cfg.get("partition_column") or ""),
                                 key=f"{_fk}_part_col",
                                 placeholder="partition_date" if not _no_date_filter else "N/A",
-                                help="Ignored when Partition Type is none/identity.",
                                 disabled=_no_date_filter,
+                                help="Ignored when Partition Type is none/identity.",
                             )
-
-                        st.markdown("**⏰ Safe Window & Blackout Hours**")
-                        st.caption(
-                            "`post_batch`: waits for upstream job + delay minutes, then runs for duration. "
-                            "Blackout hours: HK will not START during these hours."
-                        )
-                        import json as _wjson
-                        _wc = cfg.get("window_config")
-                        try:
-                            _wd = _wjson.loads(_wc) if isinstance(_wc, str) and _wc else (
-                                _wc if isinstance(_wc, dict) else {})
-                        except Exception:
-                            _wd = {}
-                        wc1, wc2 = st.columns(2)
-                        with wc1:
-                            w_type = st.selectbox(
-                                "Window Type",
-                                ["post_batch", "scheduled"],
-                                index=0 if _wd.get("type","post_batch") == "post_batch" else 1,
-                                key=f"{_fk}_wtype",
-                                help="post_batch: starts after Gate 1 + delay minutes. "
-                                     "scheduled: runs at a fixed daily start time.",
+                            strategy = st.selectbox(
+                                "Compaction Strategy",
+                                ["binpack", "sort", "zorder"],
+                                index=(
+                                    ["binpack", "sort", "zorder"]
+                                    .index(cfg.get("compaction_strategy", "binpack"))
+                                    if cfg.get("compaction_strategy", "binpack")
+                                    in ["binpack", "sort", "zorder"] else 0
+                                ),
+                                key=f"{_fk}_strategy",
                             )
-                            # Show start_time only for scheduled type
-                            if w_type == "scheduled":
-                                w_start_time = st.text_input(
-                                    "Start time (HH:MM)",
-                                    value=str(_wd.get("start_time", "02:00")),
-                                    key=f"{_fk}_wstart",
-                                    placeholder="02:00",
-                                    help="Daily start time in 24h format (e.g. 02:00). "
-                                         "HK runs from this time for the duration below.",
-                                )
-                            else:
-                                w_start_time = _wd.get("start_time", "02:00")
-                            w_delay = st.number_input(
-                                "Delay after job (minutes)",
-                                value=int(_wd.get("delay_minutes", 30)),
-                                min_value=0, max_value=240,
-                                key=f"{_fk}_wdelay",
-                                help="post_batch: wait N minutes after Gate 1 passes "
-                                     "before starting HK. Ignored for scheduled.",
-                                disabled=(w_type == "scheduled"),
+                            engine_choice = st.selectbox(
+                                "Compaction Engine",
+                                ["athena", "glue"],
+                                index=(
+                                    ["athena", "glue"]
+                                    .index(cfg.get("compaction_engine", "athena"))
+                                    if cfg.get("compaction_engine", "athena")
+                                    in ["athena", "glue"] else 0
+                                ),
+                                key=f"{_fk}_engine",
                             )
-                            w_duration = st.number_input(
-                                "Window duration (hours)",
-                                value=int(_wd.get("duration_hours", 4)),
-                                min_value=1, max_value=12,
-                                key=f"{_fk}_wdur",
-                                help="How long the window stays open. "
-                                     "HK will not start after this closes.",
+                            target_mb = st.number_input(
+                                "Target File Size (MB)",
+                                value=int(cfg.get("compaction_target_file_size_mb") or 128),
+                                min_value=64,
+                                key=f"{_fk}_target_mb",
                             )
-                            w_tz = st.selectbox(
-                                "Timezone",
-                                ["America/Los_Angeles","America/New_York",
-                                 "America/Chicago","UTC"],
-                                index=(["America/Los_Angeles","America/New_York",
-                                        "America/Chicago","UTC"]
-                                       .index(_wd.get("timezone","America/Los_Angeles"))
-                                       if _wd.get("timezone") in
-                                       ["America/Los_Angeles","America/New_York",
-                                        "America/Chicago","UTC"] else 0),
-                                key=f"{_fk}_wtz",
+                            sort_cols = st.text_input(
+                                "Sort / Z-Order Columns",
+                                value=str(cfg.get("sort_order_cols") or ""),
+                                key=f"{_fk}_sort_cols",
+                                placeholder="partition_date, customer_id",
+                                help="Comma-separated. Ignored for binpack.",
                             )
-                        with wc2:
-                            st.markdown("**Blackout hours** (HK will not start)")
-                            _cur_bh = _wd.get("blackout_hours", [6,7,8,9,18,19,20,21])
-                            _bh_cols = st.columns(4)
-                            _new_bh = []
-                            for _h in range(24):
-                                _checked = _bh_cols[_h % 4].checkbox(
-                                    f"{_h:02d}:00",
-                                    value=(_h in _cur_bh),
-                                    key=f"{_fk}_bh_{_h}",
-                                )
-                                if _checked:
-                                    _new_bh.append(_h)
 
                         override_notes = st.text_input(
                             "Reason for override *",
@@ -515,44 +419,37 @@ with tab_edit:
                             "💾 Save Changes", type="primary"
                         )
 
+                    # ── Save handler (outside form, after submit) ─────────────────
                     if submitted:
                         _save_errors = []
                         if not override_notes.strip():
                             _save_errors.append("Reason for override is required.")
-                        # Validate start_time for scheduled windows
                         if w_type == "scheduled":
+                            import re as _re
                             _st_val = (w_start_time or "").strip()
                             if not _st_val:
                                 _save_errors.append("Start time is required for scheduled windows.")
+                            elif not _re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", _st_val):
+                                _save_errors.append(
+                                    f"Start time `{_st_val}` is not valid HH:MM (24h format)."
+                                )
                             else:
-                                import re as _re
-                                if not _re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", _st_val):
+                                _sh = int(_st_val.split(":")[0])
+                                if _sh in _new_bh:
                                     _save_errors.append(
-                                        f"Start time `{_st_val}` is not valid HH:MM (24h format)."
+                                        f"Start time {_st_val} falls in blackout hour "
+                                        f"{_sh:02d}:00. Change start time or uncheck "
+                                        "that blackout hour."
                                     )
-                                else:
-                                    _start_hour = int(_st_val.split(":")[0])
-                                    if _start_hour in _new_bh:
-                                        _save_errors.append(
-                                            f"Start time {_st_val} falls in a blackout hour "
-                                            f"({_start_hour:02d}:00 is blacked out). "
-                                            "Either change the start time or uncheck that blackout hour."
-                                        )
+
                         if _save_errors:
                             for _err in _save_errors:
                                 st.error(_err)
                         else:
                             try:
-                                from datetime import datetime
-
-
-                                now = datetime.now(UTC).strftime(
-                                    "%Y-%m-%d %H:%M:%S"
-                                )
-                                def _esc(s): return str(s).replace("'", "''")
-
-                                # Single UPDATE covering all fields at once
                                 import json as _json_upd
+                                from datetime import UTC, datetime
+
                                 _window_cfg = _json_upd.dumps({
                                     "type":           w_type,
                                     "timezone":       w_tz,
@@ -561,7 +458,11 @@ with tab_edit:
                                     "duration_hours": int(w_duration),
                                     "blackout_hours": sorted(_new_bh),
                                 })
-                                def _esc(s): return str(s).replace("'", "''")
+
+                                def _esc(s):
+                                    return str(s).replace("'", "''")
+
+                                now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                                 upd_sql = f"""
                                     UPDATE {HK_CONFIG_TABLE}
                                     SET snapshot_retention_days        = {int(snap_days)},
@@ -599,10 +500,10 @@ with tab_edit:
                                         "engine": engine_choice,
                                         "snap_days": snap_days,
                                         "snap_min": snap_min,
+                                        "window_type": w_type,
                                     }),
                                 ))
                                 clear_caches()
-                                st.session_state["pc_needs_refresh"] = True
                                 st.session_state["pc_just_saved"] = True
                                 st.success(
                                     f"✅ Config saved for `{table_fqn}`."
