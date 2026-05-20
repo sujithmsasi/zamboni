@@ -38,6 +38,16 @@ with tab1:
     from app.components.table_selector import render_flat as _flat_sel
     from config.settings import APP_ENV as _ENV
 
+    # Clear stale results when navigating to this page fresh
+    # (detect by checking if we just arrived from a different page)
+    if st.session_state.get("_last_page") != "dry_run":
+        st.session_state.pop("dr_result",   None)
+        st.session_state.pop("dr_reg",      None)
+        st.session_state.pop("dr_cfg",      None)
+        st.session_state.pop("dr_fqn",      None)
+        st.session_state.pop("dr_promoted", None)
+    st.session_state["_last_page"] = "dry_run"
+
     table_fqn = _flat_sel(
         key_prefix="dr_sel",
         label="Select Table to Simulate",

@@ -63,10 +63,19 @@ def run_compaction(
 
     # Build partition filter if configured. Cadence-driven window takes
     # priority; legacy partition_filter_days is the fallback.
+    part_type = (
+        hk_config.get("partition_type")
+        or (table_row.get("partition_type") if table_row else None)
+        or "date"
+    )
+    # partition_type = "none" or "identity" → no date filter applicable
+    _skip_filter = part_type in ("none", "identity") or not part_col
     partition_filter = (
         build_hot_partition_filter(
-            part_col, days=part_days, processing_cadence=cadence
-        ) if part_col else None
+            part_col, days=part_days,
+            processing_cadence=cadence,
+            partition_type=part_type,
+        ) if not _skip_filter else None
     )
 
     # Dynamic routing — worker type + execution class from metrics

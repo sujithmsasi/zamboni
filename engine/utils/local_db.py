@@ -255,6 +255,23 @@ def _translate(sql: str) -> str:
     )
     # DATE_DIFF translation — scan-based to handle nested parens in args
     sql = _translate_date_diff(sql)
+    # DATE_TRUNC('month'/'week'/'day', col) -> SQLite strftime equivalent
+    def _replace_date_trunc(m: re.Match) -> str:
+        unit = m.group(1).lower()
+        col  = m.group(2).strip()
+        if unit == "month":
+            return f"strftime('%Y-%m-01', {col})"
+        if unit == "week":
+            return f"date({col}, 'weekday 0', '-6 days')"
+        if unit == "year":
+            return f"strftime('%Y-01-01', {col})"
+        return f"date({col})"  # day default
+    sql = re.sub(
+        r"DATE_TRUNC\s*\(\s*'(\w+)'\s*,\s*([^)]+)\)",
+        _replace_date_trunc,
+        sql, flags=re.IGNORECASE,
+    )
+
     # NOW() -> datetime('now')
     sql = re.sub(r'\bNOW\(\)', "datetime('now')", sql, flags=re.IGNORECASE)
     # CURRENT_DATE -> date('now')

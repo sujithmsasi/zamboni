@@ -127,8 +127,8 @@ display_cols = [
 ]
 
 try:
-    styled = df[display_cols].style.applymap(_style_status, subset=["status"])
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=450)
+    styled = df[display_cols].style.map(_style_status, subset=["status"])
+    st.dataframe(styled, width='stretch', hide_index=True, height=450)
 except Exception:
     st.dataframe(df[display_cols], use_container_width=True,
                  hide_index=True, height=450)

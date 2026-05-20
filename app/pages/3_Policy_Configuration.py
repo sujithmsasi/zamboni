@@ -45,6 +45,12 @@ st.caption(
     "Templates provide sensible defaults; individual fields can be overridden."
 )
 
+# Clear stale table selection when navigating to this page fresh
+if st.session_state.get("_last_page") != "policy_config":
+    st.session_state.pop("pc_edit_table_label", None)
+    st.session_state.pop("pc_edit_table_sel",   None)
+st.session_state["_last_page"] = "policy_config"
+
 tab_view, tab_edit, tab_bulk, tab_templates = st.tabs([
     "📋 View Configs",
     "✏️ Edit Single Table",
@@ -358,19 +364,31 @@ with tab_edit:
                                 index=0 if _wd.get("type","post_batch") == "post_batch" else 1,
                                 key=f"{_fk}_wtype",
                                 help="post_batch: starts after Gate 1 + delay. "
-                                     "scheduled: fixed daily time window.",
+                                     "scheduled: runs at a fixed daily start time.",
                             )
                             w_delay = st.number_input(
                                 "Delay after job (minutes)",
                                 value=int(_wd.get("delay_minutes", 30)),
                                 min_value=0, max_value=240,
                                 key=f"{_fk}_wdelay",
+                                help="post_batch only: wait N minutes after Gate 1 "
+                                     "before starting HK.",
+                            )
+                            w_start_time = st.text_input(
+                                "Scheduled start time (HH:MM)",
+                                value=str(_wd.get("start_time", "02:00")),
+                                key=f"{_fk}_wstart",
+                                placeholder="02:00",
+                                help="scheduled only: daily start time in 24h format. "
+                                     "HK runs from this time for the duration below.",
                             )
                             w_duration = st.number_input(
                                 "Window duration (hours)",
                                 value=int(_wd.get("duration_hours", 4)),
                                 min_value=1, max_value=12,
                                 key=f"{_fk}_wdur",
+                                help="How long the window stays open. "
+                                     "HK will not start after this closes.",
                             )
                             w_tz = st.selectbox(
                                 "Timezone",
@@ -431,6 +449,7 @@ with tab_edit:
                                     "type":           w_type,
                                     "timezone":       w_tz,
                                     "delay_minutes":  int(w_delay),
+                                    "start_time":     w_start_time.strip() or "02:00",
                                     "duration_hours": int(w_duration),
                                     "blackout_hours": sorted(_new_bh),
                                 })
