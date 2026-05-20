@@ -13,10 +13,6 @@ from config.settings import APP_ENV, AWS_REGION
 def render() -> None:
     with st.sidebar:
 
-        # Logo is shown above sidebar nav via CSS in header.py
-        # No duplicate logo here — keeps sidebar clean.
-        st.divider()
-
         # ── User & Environment ────────────────────────────────────────────────
         env_color = {
             "prod":    "🔴", "preprod": "🟡",

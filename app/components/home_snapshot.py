@@ -224,15 +224,22 @@ def _load_snapshot(snapshot_date: date) -> dict | None:
         if df.empty:
             return None
         row = df.iloc[0]
+        def _si(v, default=0):
+            """Safe int — returns default if v is non-numeric string."""
+            try:
+                return int(v or default)
+            except (ValueError, TypeError):
+                return default
+
         return {
             "snapshot_date":     str(row.get("snapshot_date", "")),
             "generated_at":      str(row.get("generated_at", "")),
-            "generated_by":      row.get("generated_by", ""),
+            "generated_by":      str(row.get("generated_by", "") or ""),
             "kpi": {
-                "total_tables":        int(row.get("total_tables") or 0),
-                "hk_enabled":          int(row.get("hk_enabled_count") or 0),
-                "failures_7d":         int(row.get("failures_7d") or 0),
-                "bytes_reclaimed_30d": int(row.get("bytes_reclaimed_30d") or 0),
+                "total_tables":        _si(row.get("total_tables")),
+                "hk_enabled":          _si(row.get("hk_enabled_count")),
+                "failures_7d":         _si(row.get("failures_today") or row.get("failures_7d")),
+                "bytes_reclaimed_30d": _si(row.get("bytes_reclaimed_30d")),
             },
             "fleet_coverage":    _safe_json(row.get("fleet_coverage_json")),
             "compaction_needed": _safe_json(row.get("compaction_needed_json")),
