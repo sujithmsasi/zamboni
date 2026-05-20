@@ -26,9 +26,7 @@ st.set_page_config(
 )
 check_login()
 render_sidebar()
-render_header()
-
-st.title("🔍 Audit Log")
+render_header(page_title="Audit Log", page_icon="🔍")
 st.caption(
     "Complete audit trail of all user and system actions. "
     "Every domain change, table registration, policy edit, HK enable/disable, "

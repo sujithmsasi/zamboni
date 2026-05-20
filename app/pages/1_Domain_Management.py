@@ -41,11 +41,7 @@ st.set_page_config(
 if not check_login():
     st.stop()
 render_sidebar()
-render_header()
-
-st.markdown("# 📋 Domain Management")
-st.markdown("Register, configure, and manage Zamboni-tracked domains.")
-st.markdown("---")
+render_header(page_title="Domain Management", page_icon="📋")
 
 tab_list, tab_register, tab_edit = st.tabs([
     "📊 All Domains",

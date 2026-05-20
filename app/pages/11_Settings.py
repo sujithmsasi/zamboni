@@ -45,9 +45,7 @@ st.set_page_config(
 )
 check_login()
 render_sidebar()
-render_header()
-
-st.title("⚙️ Settings & Administration")
+render_header(page_title="Settings", page_icon="🔧")
 st.caption(
     "Platform-wide configuration for Zamboni. "
     "All changes are audited. Changes take effect immediately without restart."

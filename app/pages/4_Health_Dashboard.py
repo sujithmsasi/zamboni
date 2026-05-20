@@ -26,10 +26,7 @@ from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 st.set_page_config(page_title="Zamboni — Health Dashboard", page_icon="📊", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("📊 Health Dashboard")
-st.caption("Real-time fleet health analysis. Data refreshes on every page load.")
+render_header(page_title="Health Dashboard", page_icon="💚")
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)

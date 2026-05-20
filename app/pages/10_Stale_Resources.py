@@ -34,10 +34,7 @@ from engine.core.audit import AuditAction, AuditEvent, audit
 st.set_page_config(page_title="Zamboni — Stale Resources", page_icon="🔎", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("🔎 Stale Resources")
-st.caption("Identify stale tables, orphaned S3 locations, unregistered tables, and zero-row tables wasting storage.")
+render_header(page_title="Stale Resources", page_icon="🗑️")
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "🕰️ Stale Tables",

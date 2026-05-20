@@ -25,9 +25,7 @@ from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 st.set_page_config(page_title="Zamboni — Live Activity", page_icon="🔴", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("🔴 Live Activity Monitor")
+render_header(page_title="Live Activity", page_icon="⚡")
 
 # ── Auto-refresh ───────────────────────────────────────────────────────────────
 col1, col2, col3 = st.columns([2, 1, 1])

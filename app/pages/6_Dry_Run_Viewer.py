@@ -28,10 +28,7 @@ from engine.utils.partition_utils import build_hot_partition_filter
 st.set_page_config(page_title="Zamboni — Dry Run", page_icon="🧪", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("🧪 Dry Run Viewer")
-st.caption("Simulate HK Engine operations without writing anything. Use this to validate config before enabling a table.")
+render_header(page_title="Dry Run Viewer", page_icon="🔵")
 
 tab1, tab2 = st.tabs(["🔍 Single Table", "📂 Domain Dry Run"])
 

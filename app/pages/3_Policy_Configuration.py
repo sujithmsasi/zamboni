@@ -39,9 +39,7 @@ st.set_page_config(
 )
 check_login()
 render_sidebar()
-render_header()
-
-st.title("⚙️ Policy Configuration")
+render_header(page_title="Policy Configuration", page_icon="⚙️")
 st.caption(
     "Manage housekeeping policies per table. "
     "Templates provide sensible defaults; individual fields can be overridden."

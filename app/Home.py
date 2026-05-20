@@ -29,7 +29,7 @@ st.set_page_config(page_title="Zamboni — Home", page_icon="🏠", layout="wide
 if not check_login():
     st.stop()
 render_sidebar()
-render_header()
+render_header(page_title="Home", page_icon="🏠")
 
 
 # ── Header ────────────────────────────────────────────────────────────────────

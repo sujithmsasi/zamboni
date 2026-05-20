@@ -25,10 +25,7 @@ from engine.core.audit import AuditAction, AuditEvent, audit
 st.set_page_config(page_title="Zamboni — Non-Prod Lifecycle", page_icon="🗑️", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("🗑️ Non-Prod Lifecycle Manager")
-st.caption("Manage lifecycle states for preprod/dev/test tables. Submit exemptions to prevent deletion.")
+render_header(page_title="Non-Prod Lifecycle", page_icon="♻️")
 
 # ── Environment selector ───────────────────────────────────────────────────────
 env = st.selectbox("Environment", ["preprod", "dev", "test"], key="np_env")

@@ -24,10 +24,7 @@ from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 st.set_page_config(page_title="Zamboni — Execution Log", page_icon="📜", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("📜 Execution Log")
-st.caption("Unified audit log for all three engines. Every operation is recorded here.")
+render_header(page_title="Execution Log", page_icon="📜")
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 with st.expander("🔍 Filters", expanded=True):
