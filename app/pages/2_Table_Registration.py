@@ -552,8 +552,7 @@ with tab_registered:
                                 value=str(trow.get("controlm_pipeline_job") or ""),
                                 key=f"{_ek}_pipeline_job",
                                 placeholder="ACE-DA-FIN-APS-INGEST-PRD",
-                                help="The Control-M job that writes data to this table. "
-                                     "Used for downstream lineage lookup.",
+                                help="The Control-M job that loads data into this table.",
                             )
                         with cm2:
                             e_hk_job = st.text_input(
@@ -561,8 +560,7 @@ with tab_registered:
                                 value=str(trow.get("controlm_hk_job") or ""),
                                 key=f"{_ek}_hk_job",
                                 placeholder="ACE-DA-FIN-APS-HK-PRD",
-                                help="The Control-M job that triggers Zamboni HK "
-                                     "for this table.",
+                                help="The Control-M job that triggers Zamboni HK.",
                             )
                         with cm3:
                             e_upstream_job = st.text_input(
@@ -570,15 +568,41 @@ with tab_registered:
                                 value=str(trow.get("dependent_on_controlm_job") or ""),
                                 key=f"{_ek}_upstream_job",
                                 placeholder="ACE-DA-FIN-APS-INGEST-PRD",
-                                help="Control-M job that must SUCCEED before HK runs. "
-                                     "Gate 1 check — protects against running HK "
-                                     "while a write is still in progress.",
+                                help="Must SUCCEED before HK starts (Gate 1 check).",
                             )
 
-                            if is_dry_run():
-                                st.info("🔵 Dry Run — no writes.")
+                        # Job run schedule (time picker)
+                        import datetime as _dt
+                        _raw_start = str(trow.get("controlm_job_start_time") or "02:00")
+                        try:
+                            _h, _m = [int(x) for x in _raw_start.split(":")]
+                        except Exception:
+                            _h, _m = 2, 0
+                        cm4, cm5, _cm6 = st.columns([1, 1, 2])
+                        with cm4:
+                            e_job_start = st.time_input(
+                                "Job run start time",
+                                value=_dt.time(_h, _m),
+                                key=f"{_ek}_job_start",
+                                step=_dt.timedelta(minutes=15),
+                                help="Scheduled start time of the upstream pipeline job. "
+                                     "Zamboni uses this for Gate 1 timing calculations.",
+                            )
+                        with cm5:
+                            e_expected_dur = st.number_input(
+                                "Expected job duration (min)",
+                                value=int(trow.get("controlm_expected_duration_min") or 0),
+                                min_value=0,
+                                max_value=480,
+                                key=f"{_ek}_expected_dur",
+                                help="Expected pipeline run duration. "
+                                     "HK delay starts after start_time + duration.",
+                            )
 
-                            if st.form_submit_button("💾 Save Changes", type="primary"):
+                        if is_dry_run():
+                            st.info("🔵 Dry Run — no writes.")
+
+                        if st.form_submit_button("💾 Save Changes", type="primary"):
                                 try:
                                     _now_edit = datetime.now(UTC).strftime(
                                         "%Y-%m-%d %H:%M:%S"
@@ -596,9 +620,11 @@ with tab_registered:
                                             archive_enabled            = {'1' if e_archive else '0'},
                                             lifecycle_enabled          = {'1' if e_lifecycle else '0'},
                                             processing_cadence         = '{e_cadence}',
-                                            controlm_pipeline_job      = '{_esc_v(e_pipeline_job)}',
-                                            controlm_hk_job            = '{_esc_v(e_hk_job)}',
-                                            dependent_on_controlm_job  = '{_esc_v(e_upstream_job)}',
+                                            controlm_pipeline_job           = '{_esc_v(e_pipeline_job)}',
+                                            controlm_hk_job                 = '{_esc_v(e_hk_job)}',
+                                            dependent_on_controlm_job       = '{_esc_v(e_upstream_job)}',
+                                            controlm_job_start_time         = '{e_job_start.strftime("%H:%M")}',
+                                            controlm_expected_duration_min  = {int(e_expected_dur)},
                                             updated_at                 = '{_now_edit}'
                                         WHERE table_fqn = '{edit_fqn}'
                                     """
