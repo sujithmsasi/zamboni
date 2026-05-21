@@ -459,15 +459,10 @@ with tab_registered:
         if df.empty:
             st.info("No registered tables match your filters.")
         else:
-            # Apply bool formatting in a safe order
-            for col, label in [
-                ("hk_enabled",        "Housekeeping"),
-                ("archive_enabled",   "Archival"),
-                ("lifecycle_enabled", "Lifecycle"),
-            ]:
+            # Apply bool formatting without renaming — rename happens in display block
+            for col in ["hk_enabled", "archive_enabled", "lifecycle_enabled"]:
                 if col in df.columns:
                     df[col] = df[col].apply(yes_no)
-                    df.rename(columns={col: label}, inplace=True, errors="ignore")
 
             if "registered_at" in df.columns:
                 df["registered_at"] = df["registered_at"].astype(str).str[:10]
@@ -1006,7 +1001,14 @@ with tab_engine_flags:
 with tab_bulk_ctrlm:
     st.subheader("🔗 Bulk Apply Control-M Job Names")
     if "bulk_ctrlm_flash" in st.session_state:
-        st.success(st.session_state.pop("bulk_ctrlm_flash"))
+        _flash_msg = st.session_state["bulk_ctrlm_flash"]
+        st.success(_flash_msg)
+        # Clear after showing (uses a shown flag so it persists through one rerun)
+        if st.session_state.get("bulk_ctrlm_flash_shown"):
+            del st.session_state["bulk_ctrlm_flash"]
+            st.session_state.pop("bulk_ctrlm_flash_shown", None)
+        else:
+            st.session_state["bulk_ctrlm_flash_shown"] = True
     st.caption(
         "One Control-M job typically loads multiple tables. "
         "Apply the same job names, start time, and CI number to all matching tables."
@@ -1201,6 +1203,7 @@ with tab_bulk_ctrlm:
                 # Clear preview after apply
                 st.session_state.pop("bulk_ctrlm_preview_df", None)
                 st.session_state.pop("bulk_ctrlm_excluded", None)
+                st.session_state.pop("bulk_ctrlm_preview_where", None)
                 audit(AuditEvent(
                     actor=current_user(),
                     action_type=AuditAction.HK_ENABLE,
@@ -1214,6 +1217,6 @@ with tab_bulk_ctrlm:
                     f"✅ Applied to {_applied} table(s)."
                     + (" (dry run)" if is_dry_run() else "")
                 )
-                st.rerun()   # Clear preview from screen
+                # No st.rerun() — let the flash message render first
             except Exception as e:
                 st.error(f"Bulk apply failed: {e}")

@@ -49,7 +49,11 @@ with tab1:
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        sel_domain = domain_filter(key="sr_domain")
+        _sd_raw = domain_filter(key="sr_domain")
+        sel_domain: str | None = (
+            str(_sd_raw) if isinstance(_sd_raw, str)
+            else None
+        )
     with col2:
         sel_env    = environment_filter(key="sr_env")
     with col3:
@@ -369,7 +373,11 @@ with tab4:
     st.markdown("Tables registered in Zamboni that appear to have very few or no recent records.")
     st.info("These are candidates for review — they may be safe to deregister or archive entirely.")
 
-    sel_domain_zr = domain_filter(key="sr_zr_domain")
+    _sd_zr_raw = domain_filter(key="sr_zr_domain")
+    sel_domain_zr: str | None = (
+        str(_sd_zr_raw) if isinstance(_sd_zr_raw, str)
+        else None
+    )
     threshold     = st.number_input("Max row count threshold", value=0, min_value=0, key="sr_zr_threshold",
                                     help="Tables where the last archival exported fewer than this many rows")
 
