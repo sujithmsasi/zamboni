@@ -397,13 +397,16 @@ with tab_registered:
     sql = f"""
         SELECT
             table_fqn, stream_id, domain, layer, tier,
-            table_format, hk_enabled, archive_enabled,
-            lifecycle_enabled, dry_run_until, processing_cadence,
-            owner_email, registered_at
+            ci_number, owner_email,
+            controlm_pipeline_job, controlm_hk_job,
+            dependent_on_controlm_job,
+            controlm_job_start_time, controlm_expected_duration_min,
+            hk_enabled, archive_enabled, lifecycle_enabled,
+            processing_cadence, dry_run_until
         FROM {STREAM_REGISTRY_TABLE}
         {where}
         ORDER BY domain, layer, table_fqn
-        LIMIT 500
+        LIMIT 5000
     """
     try:
         df = cached_read_registry(sql)
@@ -1079,39 +1082,39 @@ with tab_bulk_ctrlm:
         _pdf = st.session_state["bulk_ctrlm_preview_df"]
         _excluded = st.session_state.get("bulk_ctrlm_excluded", set())
 
-        st.markdown(
-            f"**{len(_pdf)} table(s) matched** — uncheck any you want to exclude:"
-        )
-        # Render checkboxes in a compact grid
-        _check_cols = st.columns([1, 5, 2, 2, 2])
-        _check_cols[0].markdown("**✓**")
-        _check_cols[1].markdown("**Table**")
-        _check_cols[2].markdown("**Domain**")
-        _check_cols[3].markdown("**Layer**")
-        _check_cols[4].markdown("**Current Job**")
+        st.markdown(f"**{len(_pdf)} table(s) matched**")
 
-        for _, _row in _pdf.iterrows():
-            _fqn = _row["table_fqn"]
-            _cc = st.columns([1, 5, 2, 2, 2])
-            _checked = _cc[0].checkbox(
-                "incl", value=(_fqn not in _excluded),
-                key=f"bulk_excl_{_fqn}",
-                label_visibility="collapsed",
-            )
-            _cc[1].caption(_fqn)
-            _cc[2].caption(str(_row.get("domain", "")))
-            _cc[3].caption(str(_row.get("layer", "")))
-            _cc[4].caption(str(_row.get("controlm_pipeline_job", "") or "—"))
-            if not _checked:
-                _excluded.add(_fqn)
-            else:
-                _excluded.discard(_fqn)
+        # Show in compact itables grid
+        from itables.streamlit import interactive_table as _it_prev
+        _show = _pdf.copy()
+        _show.insert(0, "#", range(1, len(_show)+1))
+        _it_prev(
+            _show, key="bulk_prev_it",
+            style="width:100%;font-size:12px;",
+            classes="display compact cell-border stripe hover nowrap",
+            maxBytes=0, downsampling_warning=False,
+            lengthMenu=[[15,25,50,100,-1],["15","25","50","100","All"]],
+            pageLength=15, scrollX=True,
+            caption=f"{len(_pdf)} table(s) will receive: {_bulk_pipeline.strip()}",
+        )
+
+        # Exclude specific tables via multiselect
+        _all_fqns = list(_pdf["table_fqn"].values)
+        _excl_list = st.multiselect(
+            "Exclude tables (optional — select any you want to skip)",
+            options=_all_fqns,
+            default=list(_excluded),
+            key="bulk_ctrlm_exclude_sel",
+            help="Any tables selected here will NOT be updated.",
+        )
+        _excluded = set(_excl_list)
         st.session_state["bulk_ctrlm_excluded"] = _excluded
 
-        _to_apply = [r["table_fqn"] for _, r in _pdf.iterrows()
-                     if r["table_fqn"] not in _excluded]
-        st.caption(f"{len(_to_apply)} table(s) will be updated, "
-                   f"{len(_excluded)} excluded.")
+        _to_apply = [f for f in _all_fqns if f not in _excluded]
+        if _excluded:
+            st.caption(f"✅ {len(_to_apply)} will be updated  ·  ⛔ {len(_excluded)} excluded")
+        else:
+            st.caption(f"✅ All {len(_to_apply)} table(s) will be updated")
 
         if st.button(
             f"🔗 Apply to {len(_to_apply)} Table(s)",
@@ -1163,5 +1166,6 @@ with tab_bulk_ctrlm:
                     f"✅ Applied to {_applied} table(s)."
                     + (" (dry run)" if is_dry_run() else "")
                 )
+                st.rerun()   # Clear preview from screen
             except Exception as e:
                 st.error(f"Bulk apply failed: {e}")
