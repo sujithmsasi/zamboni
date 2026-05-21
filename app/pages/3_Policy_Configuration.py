@@ -952,6 +952,53 @@ with tab_templates:
                     _te_new_bh.append(_h)
             st.divider()
 
+            # ── Gate Flags (outside form — immediate toggle) ──────────────────
+            st.markdown("**🚦 Gate Enable / Disable**")
+            st.caption(
+                "Gate flags saved to the template are applied when the template is "
+                "bulk-applied to tables — the fastest way to configure gates for all "
+                "30K tables at once."
+            )
+            _tg1, _tg2, _tg3, _tg4 = st.columns(4)
+            with _tg1:
+                te_gate1 = st.toggle(
+                    "Gate 1 — Control-M upstream check",
+                    value=bool(t.get("gate1_enabled", False)),
+                    key=f"{_k}_te_gate1",
+                    help=(
+                        "Checks upstream pipeline job completed before HK starts. "
+                        "Requires Control-M API integration. "
+                        "**Keep OFF until integration is available.**"
+                    ),
+                )
+            with _tg2:
+                te_gate2 = st.toggle(
+                    "Gate 2 — Blackout window",
+                    value=bool(t.get("gate2_enabled", True)),
+                    key=f"{_k}_te_gate2",
+                    help="Prevents HK from starting during configured blackout hours.",
+                )
+            with _tg3:
+                te_gate3 = st.toggle(
+                    "Gate 3 — Circuit breaker",
+                    value=bool(t.get("gate3_enabled", True)),
+                    key=f"{_k}_te_gate3",
+                    help="Blocks HK if recent failure count exceeds threshold.",
+                )
+            with _tg4:
+                _tg_status = []
+                if not te_gate1:
+                    _tg_status.append("⚠️ Gate 1 OFF")
+                if not te_gate2:
+                    _tg_status.append("⚠️ Gate 2 OFF")
+                if not te_gate3:
+                    _tg_status.append("⚠️ Gate 3 OFF")
+                if _tg_status:
+                    st.warning("  \n".join(_tg_status))
+                else:
+                    st.success("All gates active")
+            st.divider()
+
             with st.form(f"tmpl_edit_form_{_k}"):
                 col1, col2 = st.columns(2)
 
@@ -1025,6 +1072,9 @@ with tab_templates:
                             "snapshot_min_to_keep":          int(e_snap_min),
                             "orphan_file_retention_days":    int(e_orphan),
                             "run_frequency":                 e_freq,
+                            "gate1_enabled":                 int(te_gate1),
+                            "gate2_enabled":                 int(te_gate2),
+                            "gate3_enabled":                 int(te_gate3),
                             "window_config": {
                                 "type":           te_wtype,
                                 "timezone":       te_tz,

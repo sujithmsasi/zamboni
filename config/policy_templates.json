@@ -24,7 +24,10 @@
         20,
         21
       ]
-    }
+    },
+    "gate1_enabled": 0,
+    "gate2_enabled": 1,
+    "gate3_enabled": 1
   },
   "DATALAKE_DEFAULT": {
     "description": "Default for datalake layer \u2014 moderate churn, medium retention",
@@ -50,7 +53,10 @@
         20,
         21
       ]
-    }
+    },
+    "gate1_enabled": 0,
+    "gate2_enabled": 1,
+    "gate3_enabled": 1
   },
   "BASE_SCD2": {
     "description": "Base layer SCD2 tables \u2014 sort compaction, longer retention",
@@ -69,7 +75,10 @@
       ],
       "start_time": "02:00",
       "duration_hours": 6
-    }
+    },
+    "gate1_enabled": 0,
+    "gate2_enabled": 1,
+    "gate3_enabled": 1
   },
   "MASTER_DEFAULT": {
     "description": "Master layer \u2014 zorder compaction, long retention",
@@ -88,7 +97,10 @@
       ],
       "start_time": "04:00",
       "duration_hours": 6
-    }
+    },
+    "gate1_enabled": 0,
+    "gate2_enabled": 1,
+    "gate3_enabled": 1
   },
   "CRITICAL_HIGH_VOL": {
     "description": "Critical high-volume tables \u2014 run on every trigger",
@@ -104,7 +116,10 @@
       "timezone": "America/Los_Angeles",
       "delay_minutes": 15,
       "duration_hours": 8
-    }
+    },
+    "gate1_enabled": 0,
+    "gate2_enabled": 1,
+    "gate3_enabled": 1
   },
   "NON_PROD_DEFAULT": {
     "description": "Non-production tables \u2014 lightweight, weekly",
@@ -123,6 +138,9 @@
       ],
       "start_time": "03:00",
       "duration_hours": 6
-    }
+    },
+    "gate1_enabled": 0,
+    "gate2_enabled": 1,
+    "gate3_enabled": 1
   }
 }

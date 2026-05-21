@@ -143,6 +143,11 @@ def apply_template(
     _delete_hk_config(table_fqn, dry_run=dry_run)
 
     orphan_cadence = t.get("orphan_cleanup_cadence_days", 7)
+    # Gate flags from template (with safe defaults)
+    gate1 = int(t.get("gate1_enabled", 0))  # Default OFF — ControlM not ready
+    gate2 = int(t.get("gate2_enabled", 1))  # Default ON  — blackout window
+    gate3 = int(t.get("gate3_enabled", 1))  # Default ON  — circuit breaker
+
     sql = f"""
         INSERT INTO {HK_CONFIG_TABLE} (
             table_fqn, policy_template, compaction_strategy,
@@ -150,7 +155,8 @@ def apply_template(
             sort_order_cols, snapshot_retention_days, snapshot_min_to_keep,
             orphan_file_retention_days, orphan_cleanup_cadence_days,
             run_frequency, partition_column, partition_filter_days,
-            window_config, manually_overridden, override_notes,
+            window_config, gate1_enabled, gate2_enabled, gate3_enabled,
+            manually_overridden, override_notes,
             created_at, updated_at
         ) VALUES (
             '{table_fqn}',
@@ -167,6 +173,7 @@ def apply_template(
             {f"'{partition_column}'" if partition_column else "NULL"},
             {partition_filter_days if partition_filter_days else "NULL"},
             '{window_json}',
+            {gate1}, {gate2}, {gate3},
             0,
             NULL,
             '{now}',
