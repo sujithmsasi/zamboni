@@ -305,7 +305,30 @@ with tab_edit:
                         )
                     with _wcol2:
                         st.markdown("**Blackout hours** — HK will not start")
-                        _cur_bh = _wd.get("blackout_hours", [6, 7, 8, 9, 18, 19, 20, 21])
+
+                        # Presets for quick selection
+                        _BH_PRESETS = {
+                            "— manual —":             None,
+                            "Business hours (6–18)":  list(range(6, 19)),
+                            "Midnight window (22–5)":  [22,23,0,1,2,3,4,5],
+                            "Peak hours (7–9, 17–20)": [7,8,9,17,18,19,20],
+                            "Weekday peak (7–20)":     list(range(7, 21)),
+                            "None (always allowed)":  [],
+                            "Always blocked":          list(range(24)),
+                        }
+                        _preset_sel = st.selectbox(
+                            "Quick preset",
+                            list(_BH_PRESETS.keys()),
+                            key=f"{_fk}_bh_preset",
+                            help="Select a preset to pre-fill the checkboxes below, "
+                                 "or tick/untick hours manually.",
+                        )
+                        _preset_hours = _BH_PRESETS[_preset_sel]
+                        _cur_bh = (
+                            _preset_hours if _preset_hours is not None
+                            else _wd.get("blackout_hours", [6, 7, 8, 9, 18, 19, 20, 21])
+                        )
+
                         _bh_cols = st.columns(4)
                         _new_bh = []
                         for _h in range(24):
@@ -318,42 +341,27 @@ with tab_edit:
                     st.divider()
 
                     # ── Main config fields (INSIDE form) ─────────────────────────
+                    st.caption(r"Fields marked \* are required")
                     with st.form(f"edit_config_form_{_fk}", clear_on_submit=False):
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.caption("Fields marked * are required")
+                        # Row 1: Snapshot settings
+                        r1c1, r1c2, r1c3 = st.columns(3)
+                        with r1c1:
                             snap_days = st.number_input(
                                 "Snapshot Retention (days) *",
                                 value=int(cfg.get("snapshot_retention_days") or 7),
                                 min_value=1,
                                 key=f"{_fk}_snap_days",
-                                help="How long to keep snapshots before expiry. "
-                                     "Drives vacuum_max_snapshot_age_seconds TBLPROPERTY.",
+                                help="How long to keep snapshots before expiry.",
                             )
+                        with r1c2:
                             snap_min = st.number_input(
                                 "Min Snapshots to Keep *",
                                 value=max(int(cfg.get("snapshot_min_to_keep") or 30), 2),
                                 min_value=2,
                                 key=f"{_fk}_snap_min",
-                                help="Safety floor — VACUUM never removes below this count. "
-                                     "Zamboni default: 30 (conservative SCD2 buffer).",
+                                help="Safety floor — VACUUM never goes below this count.",
                             )
-                            orphan = st.number_input(
-                                "Orphan Retention (days) *",
-                                value=max(int(cfg.get("orphan_file_retention_days") or 2), 2),
-                                min_value=2,
-                                key=f"{_fk}_orphan",
-                                help="Minimum 2 days — protects in-flight writers "
-                                     "from having their uncommitted files deleted.",
-                            )
-                            orphan_cadence = st.number_input(
-                                "Orphan Cleanup Cadence (days)",
-                                value=int(cfg.get("orphan_cleanup_cadence_days") or 7),
-                                min_value=0,
-                                key=f"{_fk}_orphan_cad",
-                                help="How often orphan cleanup runs. 0 = disabled.",
-                            )
+                        with r1c3:
                             run_freq = st.selectbox(
                                 "Run Frequency *",
                                 ["every_trigger", "daily", "weekly", "monthly"],
@@ -368,8 +376,62 @@ with tab_edit:
                                 help="How often Zamboni HK runs on this table.",
                             )
 
-                        with col2:
-                            # Partition Type first
+                        # Row 2: Orphan settings
+                        r2c1, r2c2, r2c3 = st.columns(3)
+                        with r2c1:
+                            orphan = st.number_input(
+                                "Orphan Retention (days) *",
+                                value=max(int(cfg.get("orphan_file_retention_days") or 2), 2),
+                                min_value=2,
+                                key=f"{_fk}_orphan",
+                                help="Min 2 days — protects in-flight writers.",
+                            )
+                        with r2c2:
+                            orphan_cadence = st.number_input(
+                                "Orphan Cleanup Cadence (days)",
+                                value=int(cfg.get("orphan_cleanup_cadence_days") or 7),
+                                min_value=0,
+                                key=f"{_fk}_orphan_cad",
+                                help="How often orphan cleanup runs. 0 = disabled.",
+                            )
+                        with r2c3:
+                            target_mb = st.number_input(
+                                "Target File Size (MB) *",
+                                value=int(cfg.get("compaction_target_file_size_mb") or 128),
+                                min_value=64,
+                                key=f"{_fk}_target_mb",
+                                help="128 MB staging · 256 MB datalake · 512 MB base/master",
+                            )
+
+                        # Row 3: Compaction + Partition
+                        r3c1, r3c2, r3c3 = st.columns(3)
+                        with r3c1:
+                            strategy = st.selectbox(
+                                "Compaction Strategy *",
+                                ["binpack", "sort", "zorder"],
+                                index=(
+                                    ["binpack", "sort", "zorder"]
+                                    .index(cfg.get("compaction_strategy", "binpack"))
+                                    if cfg.get("compaction_strategy", "binpack")
+                                    in ["binpack", "sort", "zorder"] else 0
+                                ),
+                                key=f"{_fk}_strategy",
+                                help="binpack → Athena. sort/zorder → Glue PySpark.",
+                            )
+                        with r3c2:
+                            engine_choice = st.selectbox(
+                                "Compaction Engine *",
+                                ["athena", "glue"],
+                                index=(
+                                    ["athena", "glue"]
+                                    .index(cfg.get("compaction_engine", "athena"))
+                                    if cfg.get("compaction_engine", "athena")
+                                    in ["athena", "glue"] else 0
+                                ),
+                                key=f"{_fk}_engine",
+                                help="athena = OPTIMIZE SQL. glue = PySpark.",
+                            )
+                        with r3c3:
                             part_type_opts = [
                                 "date", "timestamp", "int_yyyymmdd",
                                 "string", "identity", "none",
@@ -381,9 +443,13 @@ with tab_edit:
                                 index=(part_type_opts.index(cur_pt)
                                        if cur_pt in part_type_opts else 0),
                                 key=f"{_fk}_part_type",
-                                help="Set to 'none' or 'identity' to skip date filter.",
+                                help="'none' or 'identity' → no date filter (full table).",
                             )
-                            _no_date_filter = part_type in ("none", "identity")
+
+                        # Row 4: Partition column + Sort cols
+                        _no_date_filter = part_type in ("none", "identity")
+                        r4c1, r4c2 = st.columns(2)
+                        with r4c1:
                             partition_col = st.text_input(
                                 "Partition Column",
                                 value=str(cfg.get("partition_column") or ""),
@@ -392,47 +458,13 @@ with tab_edit:
                                 disabled=_no_date_filter,
                                 help="Ignored when Partition Type is none/identity.",
                             )
-                            strategy = st.selectbox(
-                                "Compaction Strategy *",
-                                ["binpack", "sort", "zorder"],
-                                index=(
-                                    ["binpack", "sort", "zorder"]
-                                    .index(cfg.get("compaction_strategy", "binpack"))
-                                    if cfg.get("compaction_strategy", "binpack")
-                                    in ["binpack", "sort", "zorder"] else 0
-                                ),
-                                key=f"{_fk}_strategy",
-                                help="binpack → Athena OPTIMIZE (default). "
-                                     "sort/zorder → Glue PySpark (requires Glue engine).",
-                            )
-                            engine_choice = st.selectbox(
-                                "Compaction Engine *",
-                                ["athena", "glue"],
-                                index=(
-                                    ["athena", "glue"]
-                                    .index(cfg.get("compaction_engine", "athena"))
-                                    if cfg.get("compaction_engine", "athena")
-                                    in ["athena", "glue"] else 0
-                                ),
-                                key=f"{_fk}_engine",
-                                help="athena = OPTIMIZE SQL. "
-                                     "glue = PySpark rewrite_data_files (required for sort/zorder).",
-                            )
-                            target_mb = st.number_input(
-                                "Target File Size (MB) *",
-                                value=int(cfg.get("compaction_target_file_size_mb") or 128),
-                                min_value=64,
-                                key=f"{_fk}_target_mb",
-                                help="Target output file size after compaction. "
-                                     "128 MB staging, 256 MB datalake, 512 MB base/master.",
-                            )
+                        with r4c2:
                             sort_cols = st.text_input(
                                 "Sort / Z-Order Columns",
                                 value=str(cfg.get("sort_order_cols") or ""),
                                 key=f"{_fk}_sort_cols",
                                 placeholder="partition_date, customer_id",
-                                help="Comma-separated column list. Only used for "
-                                     "sort and zorder strategies. Ignored for binpack.",
+                                help="Comma-separated. Only for sort and zorder.",
                             )
 
                         override_notes = st.text_input(
@@ -740,6 +772,85 @@ with tab_templates:
             t = templates[tmpl_to_edit].copy()
             _k = tmpl_to_edit
 
+            # ── Window / Blackout editor (outside form — reacts immediately) ──
+            import json as _tj
+            _twc = t.get("window_config", {})
+            if isinstance(_twc, str):
+                try:
+                    _twc = _tj.loads(_twc)
+                except Exception:
+                    _twc = {}
+
+            st.markdown("**⏰ Window & Blackout**")
+            _twc1, _twc2 = st.columns(2)
+            with _twc1:
+                te_wtype = st.selectbox(
+                    "Window Type",
+                    ["post_batch", "scheduled"],
+                    index=0 if _twc.get("type","post_batch") == "post_batch" else 1,
+                    key=f"{_k}_te_wtype",
+                )
+                if te_wtype == "scheduled":
+                    te_start = st.text_input(
+                        "Start time (HH:MM)",
+                        value=str(_twc.get("start_time","02:00")),
+                        key=f"{_k}_te_start",
+                        placeholder="02:00",
+                    )
+                else:
+                    te_start = str(_twc.get("start_time","02:00"))
+                te_delay = st.number_input(
+                    "Delay (minutes)", value=int(_twc.get("delay_minutes",30)),
+                    min_value=0, max_value=240, key=f"{_k}_te_delay",
+                    disabled=(te_wtype == "scheduled"),
+                )
+                te_dur = st.number_input(
+                    "Duration (hours)", value=int(_twc.get("duration_hours",4)),
+                    min_value=1, max_value=12, key=f"{_k}_te_dur",
+                )
+                te_tz = st.selectbox(
+                    "Timezone",
+                    ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
+                    index=(
+                        ["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
+                        .index(_twc.get("timezone","America/Los_Angeles"))
+                        if _twc.get("timezone") in
+                        ["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
+                        else 0
+                    ),
+                    key=f"{_k}_te_tz",
+                )
+            with _twc2:
+                st.markdown("**Blackout hours**")
+                _BH_PRESETS_T = {
+                    "— manual —":             None,
+                    "Business hours (6–18)":  list(range(6, 19)),
+                    "Midnight window (22–5)":  [22,23,0,1,2,3,4,5],
+                    "Peak hours (7–9, 17–20)": [7,8,9,17,18,19,20],
+                    "Weekday peak (7–20)":     list(range(7, 21)),
+                    "None (always allowed)":  [],
+                }
+                _te_preset = st.selectbox(
+                    "Quick preset",
+                    list(_BH_PRESETS_T.keys()),
+                    key=f"{_k}_te_bh_preset",
+                )
+                _te_preset_hours = _BH_PRESETS_T[_te_preset]
+                _te_cur_bh = (
+                    _te_preset_hours if _te_preset_hours is not None
+                    else _twc.get("blackout_hours", [6,7,8,9,18,19,20,21])
+                )
+                _te_bh_cols = st.columns(4)
+                _te_new_bh = []
+                for _h in range(24):
+                    if _te_bh_cols[_h % 4].checkbox(
+                        f"{_h:02d}:00",
+                        value=(_h in _te_cur_bh),
+                        key=f"{_k}_te_bh_{_h}",
+                    ):
+                        _te_new_bh.append(_h)
+            st.divider()
+
             with st.form(f"tmpl_edit_form_{_k}"):
                 col1, col2 = st.columns(2)
 
@@ -813,6 +924,14 @@ with tab_templates:
                             "snapshot_min_to_keep":          int(e_snap_min),
                             "orphan_file_retention_days":    int(e_orphan),
                             "run_frequency":                 e_freq,
+                            "window_config": {
+                                "type":           te_wtype,
+                                "timezone":       te_tz,
+                                "delay_minutes":  int(te_delay),
+                                "start_time":     te_start,
+                                "duration_hours": int(te_dur),
+                                "blackout_hours": sorted(_te_new_bh),
+                            },
                         })
 
                         with open(tmpl_path, 'w') as f:
