@@ -308,10 +308,10 @@ with tab_edit:
                                     st.session_state[f"{_fk}_bh_{_h}"] = (_h in _preset_hours)
                                 st.rerun()
 
-                    # ── Row 2: Start time (scheduled only) ───────────────────
-                    if w_type == "scheduled":
-                        _ws1, _ws2 = st.columns([2, 5])
-                        with _ws1:
+                    # ── Row 2+3: Start time + Delay + Duration + Timezone ────
+                    _wr1, _wr2, _wr3, _wr4 = st.columns([1, 1, 1, 2])
+                    with _wr1:
+                        if w_type == "scheduled":
                             w_start_time = st.text_input(
                                 "Start time (HH:MM) *",
                                 value=str(_wd.get("start_time", "02:00")),
@@ -319,42 +319,71 @@ with tab_edit:
                                 placeholder="02:00",
                                 help="24h format. Must not fall in a blackout hour.",
                             )
-                    else:
-                        w_start_time = str(_wd.get("start_time", "02:00"))
-
-                    # ── Row 3: Delay, Duration, Timezone ─────────────────────
-                    _wd1, _wd2, _wd3 = st.columns(3)
-                    with _wd1:
-                        w_delay = st.number_input(
-                            "Delay after job (min)",
-                            value=int(_wd.get("delay_minutes", 30)),
-                            min_value=0, max_value=240,
-                            key=f"{_fk}_wdelay",
-                            disabled=(w_type == "scheduled"),
-                            help="post_batch only: wait N minutes after Gate 1.",
-                        )
-                    with _wd2:
-                        w_duration = st.number_input(
-                            "Window duration (hours)",
-                            value=int(_wd.get("duration_hours", 4)),
-                            min_value=1, max_value=12,
-                            key=f"{_fk}_wdur",
-                        )
-                    with _wd3:
-                        w_tz = st.selectbox(
-                            "Timezone",
-                            ["America/Los_Angeles", "America/New_York",
-                             "America/Chicago", "UTC"],
-                            index=(
+                        else:
+                            w_start_time = str(_wd.get("start_time", "02:00"))
+                            w_delay = st.number_input(
+                                "Delay after job (min)",
+                                value=int(_wd.get("delay_minutes", 30)),
+                                min_value=0, max_value=240,
+                                key=f"{_fk}_wdelay",
+                                help="post_batch: wait N minutes after Gate 1.",
+                            )
+                    with _wr2:
+                        if w_type == "scheduled":
+                            w_delay = st.number_input(
+                                "Delay after job (min)",
+                                value=int(_wd.get("delay_minutes", 30)),
+                                min_value=0, max_value=240,
+                                key=f"{_fk}_wdelay",
+                                disabled=True,
+                                help="Not used for scheduled windows.",
+                            )
+                        else:
+                            w_duration = st.number_input(
+                                "Duration (hours)",
+                                value=int(_wd.get("duration_hours", 4)),
+                                min_value=1, max_value=12,
+                                key=f"{_fk}_wdur",
+                            )
+                    with _wr3:
+                        if w_type == "scheduled":
+                            w_duration = st.number_input(
+                                "Duration (hours)",
+                                value=int(_wd.get("duration_hours", 4)),
+                                min_value=1, max_value=12,
+                                key=f"{_fk}_wdur",
+                            )
+                        else:
+                            w_tz = st.selectbox(
+                                "Timezone",
                                 ["America/Los_Angeles", "America/New_York",
-                                 "America/Chicago", "UTC"]
-                                .index(_wd.get("timezone", "America/Los_Angeles"))
-                                if _wd.get("timezone") in
+                                 "America/Chicago", "UTC"],
+                                index=(
+                                    ["America/Los_Angeles", "America/New_York",
+                                     "America/Chicago", "UTC"]
+                                    .index(_wd.get("timezone", "America/Los_Angeles"))
+                                    if _wd.get("timezone") in
+                                    ["America/Los_Angeles", "America/New_York",
+                                     "America/Chicago", "UTC"] else 0
+                                ),
+                                key=f"{_fk}_wtz",
+                            )
+                    with _wr4:
+                        if w_type == "scheduled":
+                            w_tz = st.selectbox(
+                                "Timezone",
                                 ["America/Los_Angeles", "America/New_York",
-                                 "America/Chicago", "UTC"] else 0
-                            ),
-                            key=f"{_fk}_wtz",
-                        )
+                                 "America/Chicago", "UTC"],
+                                index=(
+                                    ["America/Los_Angeles", "America/New_York",
+                                     "America/Chicago", "UTC"]
+                                    .index(_wd.get("timezone", "America/Los_Angeles"))
+                                    if _wd.get("timezone") in
+                                    ["America/Los_Angeles", "America/New_York",
+                                     "America/Chicago", "UTC"] else 0
+                                ),
+                                key=f"{_fk}_wtz",
+                            )
 
                     # ── Row 4: Blackout checkboxes (6 cols × 4 hours) ────────
                     st.caption("☑ Blackout hours — HK will not start during checked hours")
@@ -849,45 +878,62 @@ with tab_templates:
                             st.session_state[f"{_k}_te_bh_{_h}"] = (_h in _te_preset_hours)
                         st.rerun()
 
-            # Row 2: Start time (scheduled only)
-            if te_wtype == "scheduled":
-                _ts1, _ts2 = st.columns([2, 5])
-                with _ts1:
+            # Row 2: Start/Delay/Duration/Timezone in one line
+            _tr1, _tr2, _tr3, _tr4 = st.columns([1, 1, 1, 2])
+            with _tr1:
+                if te_wtype == "scheduled":
                     te_start = st.text_input(
                         "Start time (HH:MM)",
                         value=str(_twc.get("start_time","02:00")),
-                        key=f"{_k}_te_start",
-                        placeholder="02:00",
+                        key=f"{_k}_te_start", placeholder="02:00",
                     )
-            else:
-                te_start = str(_twc.get("start_time","02:00"))
-
-            # Row 3: Delay, Duration, Timezone
-            _td1, _td2, _td3 = st.columns(3)
-            with _td1:
-                te_delay = st.number_input(
-                    "Delay (minutes)", value=int(_twc.get("delay_minutes",30)),
-                    min_value=0, max_value=240, key=f"{_k}_te_delay",
-                    disabled=(te_wtype == "scheduled"),
-                )
-            with _td2:
-                te_dur = st.number_input(
-                    "Duration (hours)", value=int(_twc.get("duration_hours",4)),
-                    min_value=1, max_value=12, key=f"{_k}_te_dur",
-                )
-            with _td3:
-                te_tz = st.selectbox(
-                    "Timezone",
-                    ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
-                    index=(
-                        ["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
-                        .index(_twc.get("timezone","America/Los_Angeles"))
-                        if _twc.get("timezone") in
-                        ["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
-                        else 0
-                    ),
-                    key=f"{_k}_te_tz",
-                )
+                else:
+                    te_start = str(_twc.get("start_time","02:00"))
+                    te_delay = st.number_input(
+                        "Delay (min)", value=int(_twc.get("delay_minutes",30)),
+                        min_value=0, max_value=240, key=f"{_k}_te_delay",
+                    )
+            with _tr2:
+                if te_wtype == "scheduled":
+                    te_delay = st.number_input(
+                        "Delay (min)", value=int(_twc.get("delay_minutes",30)),
+                        min_value=0, max_value=240, key=f"{_k}_te_delay",
+                        disabled=True,
+                    )
+                else:
+                    te_dur = st.number_input(
+                        "Duration (hrs)", value=int(_twc.get("duration_hours",4)),
+                        min_value=1, max_value=12, key=f"{_k}_te_dur",
+                    )
+            with _tr3:
+                if te_wtype == "scheduled":
+                    te_dur = st.number_input(
+                        "Duration (hrs)", value=int(_twc.get("duration_hours",4)),
+                        min_value=1, max_value=12, key=f"{_k}_te_dur",
+                    )
+                else:
+                    te_tz = st.selectbox(
+                        "Timezone",
+                        ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
+                        index=(["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
+                               .index(_twc.get("timezone","America/Los_Angeles"))
+                               if _twc.get("timezone") in
+                               ["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
+                               else 0),
+                        key=f"{_k}_te_tz",
+                    )
+            with _tr4:
+                if te_wtype == "scheduled":
+                    te_tz = st.selectbox(
+                        "Timezone",
+                        ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
+                        index=(["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
+                               .index(_twc.get("timezone","America/Los_Angeles"))
+                               if _twc.get("timezone") in
+                               ["America/Los_Angeles","America/New_York","America/Chicago","UTC"]
+                               else 0),
+                        key=f"{_k}_te_tz",
+                    )
 
             # Row 4: Blackout checkboxes (6 cols)
             st.caption("☑ Blackout hours — HK will not start during checked hours")

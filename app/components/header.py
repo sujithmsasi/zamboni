@@ -92,6 +92,59 @@ def render(
             display: none !important;
           }}
 
+          /* ── itables header: filled color + column borders ────────── */
+          table.dataTable thead th,
+          table.dataTable thead td {{
+            background: #1e3a5f !important;
+            color: #93c5fd !important;
+            font-weight: 700 !important;
+            font-size: 11px !important;
+            letter-spacing: .4px !important;
+            text-transform: uppercase !important;
+            border-right: 1px solid #2d5a8e !important;
+            border-bottom: 2px solid #3b82f6 !important;
+            padding: 6px 8px !important;
+          }}
+          table.dataTable thead th:last-child,
+          table.dataTable thead td:last-child {{
+            border-right: none !important;
+          }}
+          /* Row hover */
+          table.dataTable tbody tr:hover > * {{
+            background: #1e293b !important;
+            color: #e2e8f0 !important;
+          }}
+          /* Stripe rows */
+          table.dataTable.stripe tbody tr.even > * {{
+            background: #111827 !important;
+          }}
+          table.dataTable.stripe tbody tr.odd > * {{
+            background: #0f172a !important;
+          }}
+          /* Cell borders */
+          table.dataTable.cell-border tbody td {{
+            border-right: 1px solid #1e293b !important;
+          }}
+          /* DataTables control bar */
+          .dataTables_wrapper .dataTables_length,
+          .dataTables_wrapper .dataTables_filter,
+          .dataTables_wrapper .dataTables_info,
+          .dataTables_wrapper .dataTables_paginate {{
+            font-size: 12px !important;
+            color: #94a3b8 !important;
+          }}
+          .dataTables_wrapper .dataTables_paginate .paginate_button.current {{
+            background: #1e3a5f !important;
+            color: #93c5fd !important;
+            border: 1px solid #3b82f6 !important;
+            border-radius: 4px !important;
+          }}
+          .dataTables_wrapper .dataTables_paginate .paginate_button:hover {{
+            background: #1e293b !important;
+            color: #e2e8f0 !important;
+            border: 1px solid #334155 !important;
+          }}
+
           /* ── Google Fonts: Inter ──────────────────────────────────── */
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
