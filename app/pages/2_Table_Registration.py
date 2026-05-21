@@ -434,7 +434,7 @@ with tab_registered:
             _k=[c for c in ["table_fqn","domain","layer","tier","ci_number","controlm_pipeline_job","controlm_hk_job","controlm_job_start_time","hk_enabled","archive_enabled","lifecycle_enabled","processing_cadence"] if c in _d.columns]
             _d=_d[_k].rename(columns={"table_fqn":"Table","ci_number":"CI","controlm_pipeline_job":"Pipeline Job","controlm_hk_job":"HK Job","controlm_job_start_time":"Start","hk_enabled":"HK","archive_enabled":"Archive","lifecycle_enabled":"Lifecycle","processing_cadence":"Cadence"})
             _d.insert(0,"#",range(1,len(_d)+1))
-            _itr(_d,key="tr_it",style="width:100%;font-size:12px;",classes="display compact cell-border stripe hover nowrap",maxBytes=0,downsampling_warning=False,lengthMenu=[[25,50,100,250,-1],["25","50","100","250","All"]],pageLength=100,scrollX=True,caption=f"{len(df):,} table(s)")
+            _itr(_d,key="tr_it",style="width:100%;font-size:12px;",classes="display compact cell-border stripe hover nowrap",maxBytes=0,downsampling_warning=False,lengthMenu=[[50,100,250,500,-1],["50","100","250","500","All"]],pageLength=100,scrollX=True,caption=f"{len(df):,} table(s)")
 
             # Download
             csv = df.to_csv(index=False).encode("utf-8")
@@ -973,6 +973,23 @@ with tab_bulk_ctrlm:
         _bulk_db = st.text_input("Database (optional)", key="bulk_ctrlm_db",
                                   placeholder="finance_staging_db")
 
+    _bulk_pattern = st.text_input(
+        "Table name pattern (optional)",
+        key="bulk_ctrlm_pattern",
+        placeholder="aps_%_staging  or  %_ingest_%  or  fin_aps%",
+        help=(
+            "SQL LIKE pattern to match table names (not the full FQN). "
+            "Use `%` as wildcard (matches any characters) and `_` for single character. "
+            "Examples: `aps_%` matches aps_booking, aps_invoice … "
+            "`%_stg_%` matches anything with _stg_ in the name."
+        ),
+    )
+    if _bulk_pattern.strip():
+        st.caption(
+            f"Pattern `{_bulk_pattern.strip()}` will match tables where "
+            f"`table_name LIKE '{_bulk_pattern.strip()}'`"
+        )
+
     if is_dry_run():
         st.info("🔵 Dry Run — no writes.")
 
@@ -980,11 +997,17 @@ with tab_bulk_ctrlm:
                  disabled=not _bulk_pipeline.strip(), key="bulk_ctrlm_apply"):
         from datetime import UTC as _UTC_bc
         from datetime import datetime as _ddt_bc
-        _where = ("WHERE " + " AND ".join(filter(None, [
-            f"domain = '{_bulk_domain}'" if _bulk_domain != "All" else "",
-            f"layer = '{_bulk_layer}'"   if _bulk_layer  != "All" else "",
+        _pat = _bulk_pattern.strip()
+        _conditions = list(filter(None, [
+            f"domain = '{_bulk_domain}'"         if _bulk_domain != "All" else "",
+            f"layer = '{_bulk_layer}'"            if _bulk_layer  != "All" else "",
             f"database_name = '{_bulk_db.strip()}'" if _bulk_db.strip() else "",
-        ]))) if any([_bulk_domain != "All", _bulk_layer != "All", _bulk_db.strip()]) else ""
+            # Pattern matches against table name (last segment of FQN)
+            (f"table_fqn LIKE '%.' || '{_pat}'" if "%" in _pat or "_" in _pat
+             else f"table_fqn LIKE '%.{_pat}%'")
+            if _pat else "",
+        ]))
+        _where = ("WHERE " + " AND ".join(_conditions)) if _conditions else ""
         try:
             _cnt = int(cached_read_registry(
                 f"SELECT COUNT(*) AS n FROM {STREAM_REGISTRY_TABLE} {_where}"
