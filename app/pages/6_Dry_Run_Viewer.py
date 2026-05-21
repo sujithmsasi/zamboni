@@ -163,18 +163,37 @@ with tab1:
                 "target_file_size_mb": cfg.get("compaction_target_file_size_mb"),
             })
 
-        # Gate status
+        # Gate status — reflects actual gate_enabled flags from hk_config
         st.markdown("#### 🚦 Gate Summary")
-        upstream = reg.get("dependent_job_name")
-        gates = [
-            ("Gate 1 — Upstream",  f"Job: `{upstream}`" if upstream else "Not configured", upstream is None),
-            ("Gate 2 — Window",    f"Decision: {decision if window_json else 'EXECUTE (no config)'}", True),
-            ("Gate 3 — Circuit Breaker", "Would check failure count", True),
+        upstream = reg.get("dependent_job_name") or reg.get("controlm_pipeline_job")
+        g1_on = bool(cfg.get("gate1_enabled", 0))
+        g2_on = bool(cfg.get("gate2_enabled", 1))
+        g3_on = bool(cfg.get("gate3_enabled", 1))
+
+        _gate_rows = [
+            (
+                "Gate 1 — Control-M upstream check",
+                ("✅ Enabled" if g1_on else "⚠️ Disabled (gate1_enabled=0)")
+                + (f" — Job: `{upstream}`" if upstream and g1_on else ""),
+                g1_on,
+            ),
+            (
+                "Gate 2 — Safe window",
+                ("✅ Enabled" if g2_on else "⚠️ Disabled — HK will run in any hour")
+                + (f" — Decision: `{decision}`" if window_json and g2_on else ""),
+                g2_on,
+            ),
+            (
+                "Gate 3 — Circuit breaker",
+                "✅ Enabled — would check failure count" if g3_on
+                else "⚠️ Disabled — circuit breaker bypassed",
+                g3_on,
+            ),
             ("Operations", f"Strategy: `{cfg.get('compaction_strategy','—')}`", bool(cfg)),
         ]
-        for name, detail, ok in gates:
-            icon = "✅" if ok else "⚠️"
-            st.markdown(f"{icon} **{name}** — {detail}")
+        for _gname, _gdetail, _gok in _gate_rows:
+            _gicon = "✅" if _gok else "⚠️"
+            st.markdown(f"{_gicon} **{_gname}** — {_gdetail}")
 
         # ── Copyable SQL ─────────────────────────────────────────────
         if cfg.get("compaction_strategy") == "binpack":
