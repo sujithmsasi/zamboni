@@ -177,19 +177,18 @@ with tab_view:
                 df,
                 key="pc_view_it",
                 style="width:100%;font-size:12px;",
-                # "cell-border" adds column lines, "stripe" = alternating rows
                 classes="display compact cell-border stripe hover nowrap",
                 maxBytes=0,
                 downsampling_warning=False,
-                lengthMenu=[[25, 50, 100, 250, -1],
-                            ["25", "50", "100", "250", "All"]],
-                pageLength=100,
+                lengthMenu=[[15, 25, 50, 100, 250, -1],
+                            ["15", "25", "50", "100", "250", "All"]],
+                pageLength=15,
                 scrollX=True,
                 columnDefs=[
-                    {"width": "30px",  "targets": 0},          # #
-                    {"width": "220px", "targets": 1},          # Table
-                    {"width": "75px",  "targets": [2,3,4]},   # domain/layer/tier
-                    {"width": "85px",  "targets": [5,6]},     # template/strategy
+                    {"width": "30px",  "targets": 0},
+                    {"width": "220px", "targets": 1},
+                    {"width": "70px",  "targets": [2, 3, 4]},
+                    {"width": "85px",  "targets": [5, 6]},
                     {"width": "60px",  "targets": "_all"},
                     {"className": "dt-center", "targets": "_all"},
                     {"className": "dt-left",   "targets": [0, 1, 2]},

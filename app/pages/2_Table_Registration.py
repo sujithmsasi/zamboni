@@ -273,10 +273,51 @@ with tab_browse:
                                      "Format: STR-{DOMAIN}-{SOURCE}-{SEQ}. "
                                      "Leave blank for standalone tables.",
                             )
+
+                            st.markdown("**🔗 Control-M Integration (optional)**")
+                            _rc1, _rc2, _rc3 = st.columns(3)
+                            with _rc1:
+                                reg_pipeline_job = st.text_input(
+                                    "Pipeline Job",
+                                    placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                                    key="reg_ctrlm_pipeline",
+                                    help="Control-M ETL job that writes to these tables.",
+                                )
+                            with _rc2:
+                                reg_hk_job = st.text_input(
+                                    "HK Job",
+                                    placeholder="ACE-DA-FIN-HK-PRD",
+                                    key="reg_ctrlm_hk",
+                                    help="Control-M job that triggers Zamboni HK.",
+                                )
+                            with _rc3:
+                                reg_gate1_job = st.text_input(
+                                    "Gate 1 — Upstream Job",
+                                    placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                                    key="reg_ctrlm_gate1",
+                                    help="Must complete before HK starts.",
+                                )
+                            import datetime as _dt_reg
+                            _rt1, _rt2, _rt3 = st.columns(3)
+                            with _rt1:
+                                reg_job_start = st.time_input(
+                                    "Job start time",
+                                    value=_dt_reg.time(2, 0),
+                                    key="reg_ctrlm_start",
+                                    step=_dt_reg.timedelta(minutes=15),
+                                )
+                            with _rt2:
+                                reg_job_dur = st.number_input(
+                                    "Expected duration (min)",
+                                    value=0, min_value=0, max_value=480,
+                                    key="reg_ctrlm_dur",
+                                )
+                            with _rt3:
+                                st.empty()  # spacer
+
                             notes = st.text_area(
                                 "Notes",
-                                help="Registration notes — stored in stream_registry. "
-                                     "Document why this table is being registered.",
+                                help="Registration notes — stored in stream_registry.",
                             )
 
                             template = infer_template(layer, tier)
@@ -308,6 +349,11 @@ with tab_browse:
                                             owner_email=owner_email or "",
                                             ci_number=ci_number or "",
                                             stream_id=stream_id.strip() or None,
+                                            controlm_pipeline_job=reg_pipeline_job.strip() or None,
+                                            controlm_hk_job=reg_hk_job.strip() or None,
+                                            dependent_on_controlm_job=reg_gate1_job.strip() or None,
+                                            controlm_job_start_time=reg_job_start.strftime("%H:%M"),
+                                            controlm_expected_duration_min=int(reg_job_dur),
                                             registered_by=f"streamlit:{current_user()}",
                                             notes=notes or "",
                                             dry_run=is_dry_run(),
@@ -451,7 +497,7 @@ with tab_registered:
                 "ci_number":                    "CI",
                 "stream_id":                    "Stream",
                 "owner_email":                  "Owner",
-                "controlm_pipeline_job":        "Pipeline Job",
+                "controlm_pipeline_job":        "Pipeline ControlM Job",
                 "controlm_hk_job":              "HK Job",
                 "dependent_on_controlm_job":    "Gate 1 Job",
                 "controlm_job_start_time":      "Job Start",
@@ -959,6 +1005,8 @@ with tab_engine_flags:
 # ── Tab 5: Bulk Control-M ─────────────────────────────────────────────────────
 with tab_bulk_ctrlm:
     st.subheader("🔗 Bulk Apply Control-M Job Names")
+    if "bulk_ctrlm_flash" in st.session_state:
+        st.success(st.session_state.pop("bulk_ctrlm_flash"))
     st.caption(
         "One Control-M job typically loads multiple tables. "
         "Apply the same job names, start time, and CI number to all matching tables."
@@ -1162,7 +1210,7 @@ with tab_bulk_ctrlm:
                     status="DRY_RUN" if is_dry_run() else "SUCCESS",
                     after_value=f"pipeline={_bulk_pipeline},count={_applied}",
                 ))
-                st.success(
+                st.session_state["bulk_ctrlm_flash"] = (
                     f"✅ Applied to {_applied} table(s)."
                     + (" (dry run)" if is_dry_run() else "")
                 )

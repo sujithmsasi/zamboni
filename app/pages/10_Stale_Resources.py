@@ -72,7 +72,7 @@ with tab1:
             AND l.status    = 'SUCCESS'
         WHERE r.environment = '{sel_env}'
           AND r.table_format = 'iceberg'
-          {("AND r.domain = '" + sel_domain + "'") if sel_domain else ""}
+          {("AND r.domain = '" + str(sel_domain) + "'") if sel_domain and isinstance(sel_domain, str) else ""}
         GROUP BY r.table_fqn, r.domain, r.layer, r.tier, r.environment, r.hk_enabled
         HAVING MAX(l.completed_at) IS NULL
             OR DATE_DIFF('day', MAX(l.completed_at), NOW()) > {stale_days}
@@ -121,7 +121,7 @@ with tab1:
             created_at, is_backup_pattern
         FROM {NONPROD_REGISTRY_TABLE}
         WHERE lifecycle_state IN ('STALE_CANDIDATE', 'GREENZONE', 'PENDING_DROP')
-          {("AND domain = '" + sel_domain + "'") if sel_domain else ""}
+          {("AND domain = '" + str(sel_domain) + "'") if sel_domain and isinstance(sel_domain, str) else ""}
         ORDER BY lifecycle_state, days_since_activity DESC
         LIMIT 100
     """
@@ -132,7 +132,7 @@ with tab1:
         else:
             np_df["lifecycle_state"]  = np_df["lifecycle_state"].apply(lifecycle_badge)
             np_df["is_backup_pattern"]= np_df["is_backup_pattern"].apply(
-                lambda x: "🗂️ Backup" if x else ""
+                lambda x: "🗂️ Backup" if int(x or 0) else ""
             )
             st.dataframe(np_df, use_container_width=True, hide_index=True, height=300)
     except Exception as e:
@@ -381,7 +381,7 @@ with tab4:
         FROM {EXECUTION_LOG_TABLE}
         WHERE engine = 'archival'
           AND status = 'SUCCESS'
-          {("AND domain = '" + sel_domain_zr + "'") if sel_domain_zr else ""}
+          {("AND domain = '" + str(sel_domain_zr) + "'") if sel_domain_zr and isinstance(sel_domain_zr, str) else ""}
         GROUP BY table_fqn, domain, layer
         HAVING MAX(rows_archived) <= {threshold}
         ORDER BY last_rows_archived ASC
