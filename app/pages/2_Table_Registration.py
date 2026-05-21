@@ -427,14 +427,50 @@ with tab_registered:
                 df["dry_run_until"] = df["dry_run_until"].astype(str).replace("None","")
 
             from itables.streamlit import interactive_table as _itr
-            _d=df.copy()
+            _d = df.copy()
+            # Strip glue_catalog. prefix for readability
             if "table_fqn" in _d.columns:
                 _d["table_fqn"] = _d["table_fqn"].str.replace(
                     r"^glue_catalog[.]", "", regex=True)
-            _k=[c for c in ["table_fqn","domain","layer","tier","ci_number","controlm_pipeline_job","controlm_hk_job","controlm_job_start_time","hk_enabled","archive_enabled","lifecycle_enabled","processing_cadence"] if c in _d.columns]
-            _d=_d[_k].rename(columns={"table_fqn":"Table","ci_number":"CI","controlm_pipeline_job":"Pipeline Job","controlm_hk_job":"HK Job","controlm_job_start_time":"Start","hk_enabled":"HK","archive_enabled":"Archive","lifecycle_enabled":"Lifecycle","processing_cadence":"Cadence"})
-            _d.insert(0,"#",range(1,len(_d)+1))
-            _itr(_d,key="tr_it",style="width:100%;font-size:12px;",classes="display compact cell-border stripe hover nowrap",maxBytes=0,downsampling_warning=False,lengthMenu=[[50,100,250,500,-1],["50","100","250","500","All"]],pageLength=100,scrollX=True,caption=f"{len(df):,} table(s)")
+            # Show all columns in a logical order
+            _col_order = [
+                "table_fqn", "domain", "layer", "tier",
+                "ci_number", "stream_id", "owner_email",
+                "controlm_pipeline_job", "controlm_hk_job",
+                "dependent_on_controlm_job",
+                "controlm_job_start_time", "controlm_expected_duration_min",
+                "hk_enabled", "archive_enabled", "lifecycle_enabled",
+                "processing_cadence", "dry_run_until",
+            ]
+            _k = [c for c in _col_order if c in _d.columns]
+            _d = _d[_k].rename(columns={
+                "table_fqn":                    "Table",
+                "ci_number":                    "CI",
+                "stream_id":                    "Stream",
+                "owner_email":                  "Owner",
+                "controlm_pipeline_job":        "Pipeline Job",
+                "controlm_hk_job":              "HK Job",
+                "dependent_on_controlm_job":    "Gate 1 Job",
+                "controlm_job_start_time":      "Job Start",
+                "controlm_expected_duration_min": "Job Dur (min)",
+                "hk_enabled":                   "HK",
+                "archive_enabled":              "Archive",
+                "lifecycle_enabled":            "Lifecycle",
+                "processing_cadence":           "Cadence",
+                "dry_run_until":                "Dry Run Until",
+            })
+            _d.insert(0, "#", range(1, len(_d) + 1))
+            _itr(
+                _d, key="tr_it",
+                style="width:100%;font-size:12px;",
+                classes="display compact cell-border stripe hover nowrap",
+                maxBytes=0,
+                downsampling_warning=False,
+                lengthMenu=[[15,25,50,100,250,-1],["15","25","50","100","250","All"]],
+                pageLength=15,
+                scrollX=True,
+                caption=f"{len(df):,} table(s)",
+            )
 
             # Download
             csv = df.to_csv(index=False).encode("utf-8")
@@ -990,30 +1026,102 @@ with tab_bulk_ctrlm:
             f"`table_name LIKE '{_bulk_pattern.strip()}'`"
         )
 
-    if is_dry_run():
-        st.info("🔵 Dry Run — no writes.")
-
-    if st.button("🔗 Apply Job Names", type="primary",
-                 disabled=not _bulk_pipeline.strip(), key="bulk_ctrlm_apply"):
-        from datetime import UTC as _UTC_bc
-        from datetime import datetime as _ddt_bc
-        _pat = _bulk_pattern.strip()
-        _conditions = list(filter(None, [
-            f"domain = '{_bulk_domain}'"         if _bulk_domain != "All" else "",
-            f"layer = '{_bulk_layer}'"            if _bulk_layer  != "All" else "",
-            f"database_name = '{_bulk_db.strip()}'" if _bulk_db.strip() else "",
-            # Pattern matches against table name (last segment of FQN)
-            (f"table_fqn LIKE '%.' || '{_pat}'" if "%" in _pat or "_" in _pat
-             else f"table_fqn LIKE '%.{_pat}%'")
-            if _pat else "",
+    # ── Preview + confirm before applying ───────────────────────────────────────
+    def _build_where(domain, layer, db, pat):
+        _conds = list(filter(None, [
+            f"domain = '{domain}'"          if domain != "All" else "",
+            f"layer = '{layer}'"             if layer  != "All" else "",
+            f"database_name = '{db.strip()}'" if db.strip() else "",
+            (f"table_fqn LIKE '%.' || '{pat}'" if "%" in pat or pat.startswith("_")
+             else f"table_fqn LIKE '%.{pat}%'")
+            if pat else "",
         ]))
-        _where = ("WHERE " + " AND ".join(_conditions)) if _conditions else ""
+        return ("WHERE " + " AND ".join(_conds)) if _conds else ""
+
+    _pat = _bulk_pattern.strip()
+    _where_prev = _build_where(_bulk_domain, _bulk_layer, _bulk_db, _pat)
+
+    # Preview button — loads matching tables
+    _prev_col, _apply_col = st.columns([1, 1])
+    with _prev_col:
+        _preview_clicked = st.button(
+            "🔍 Preview Matching Tables",
+            key="bulk_ctrlm_preview",
+            disabled=not _bulk_pipeline.strip(),
+        )
+    with _apply_col:
+        if is_dry_run():
+            st.info("🔵 Dry Run — no writes.")
+
+    if _preview_clicked and _bulk_pipeline.strip():
         try:
-            _cnt = int(cached_read_registry(
-                f"SELECT COUNT(*) AS n FROM {STREAM_REGISTRY_TABLE} {_where}"
-            ).iloc[0]["n"])
-            st.info(f"{_cnt} table(s) will be updated.")
-            if _cnt > 0:
+            _prev_df = cached_read_registry(
+                f"SELECT table_fqn, domain, layer, tier, ci_number, "
+                f"controlm_pipeline_job, controlm_hk_job "
+                f"FROM {STREAM_REGISTRY_TABLE} {_where_prev} "
+                f"ORDER BY domain, table_fqn LIMIT 500"
+            )
+            if _prev_df.empty:
+                st.warning("No tables match the current filters.")
+            else:
+                # Store in session_state so it persists after preview click
+                _prev_df["table_fqn"] = _prev_df["table_fqn"].str.replace(
+                    r"^glue_catalog[.]", "", regex=True
+                )
+                st.session_state["bulk_ctrlm_preview_df"]    = _prev_df
+                st.session_state["bulk_ctrlm_excluded"]      = set()
+                st.session_state["bulk_ctrlm_preview_where"] = _where_prev
+        except Exception as e:
+            st.error(f"Preview failed: {e}")
+
+    # Show preview table with per-row exclude checkboxes
+    if "bulk_ctrlm_preview_df" in st.session_state:
+        _pdf = st.session_state["bulk_ctrlm_preview_df"]
+        _excluded = st.session_state.get("bulk_ctrlm_excluded", set())
+
+        st.markdown(
+            f"**{len(_pdf)} table(s) matched** — uncheck any you want to exclude:"
+        )
+        # Render checkboxes in a compact grid
+        _check_cols = st.columns([1, 5, 2, 2, 2])
+        _check_cols[0].markdown("**✓**")
+        _check_cols[1].markdown("**Table**")
+        _check_cols[2].markdown("**Domain**")
+        _check_cols[3].markdown("**Layer**")
+        _check_cols[4].markdown("**Current Job**")
+
+        for _, _row in _pdf.iterrows():
+            _fqn = _row["table_fqn"]
+            _cc = st.columns([1, 5, 2, 2, 2])
+            _checked = _cc[0].checkbox(
+                "incl", value=(_fqn not in _excluded),
+                key=f"bulk_excl_{_fqn}",
+                label_visibility="collapsed",
+            )
+            _cc[1].caption(_fqn)
+            _cc[2].caption(str(_row.get("domain", "")))
+            _cc[3].caption(str(_row.get("layer", "")))
+            _cc[4].caption(str(_row.get("controlm_pipeline_job", "") or "—"))
+            if not _checked:
+                _excluded.add(_fqn)
+            else:
+                _excluded.discard(_fqn)
+        st.session_state["bulk_ctrlm_excluded"] = _excluded
+
+        _to_apply = [r["table_fqn"] for _, r in _pdf.iterrows()
+                     if r["table_fqn"] not in _excluded]
+        st.caption(f"{len(_to_apply)} table(s) will be updated, "
+                   f"{len(_excluded)} excluded.")
+
+        if st.button(
+            f"🔗 Apply to {len(_to_apply)} Table(s)",
+            type="primary",
+            disabled=(not _to_apply),
+            key="bulk_ctrlm_apply",
+        ):
+            from datetime import UTC as _UTC_bc
+            from datetime import datetime as _ddt_bc
+            try:
                 _now = _ddt_bc.now(_UTC_bc).strftime("%Y-%m-%d %H:%M:%S")
                 _sets = [
                     f"controlm_pipeline_job = '{_bulk_pipeline.strip()}'",
@@ -1025,11 +1133,23 @@ with tab_bulk_ctrlm:
                 ]
                 if _bulk_ci.strip():
                     _sets.append(f"ci_number = '{_bulk_ci.strip()}'")
-                execute_write(
-                    f"UPDATE {STREAM_REGISTRY_TABLE} SET {', '.join(_sets)} {_where}",
-                    dry_run=is_dry_run(),
-                )
+
+                _applied = 0
+                for _tfqn in _to_apply:
+                    # Restore full FQN for the UPDATE
+                    _full_fqn = f"glue_catalog.{_tfqn}" if not _tfqn.startswith("glue_catalog") else _tfqn
+                    execute_write(
+                        f"UPDATE {STREAM_REGISTRY_TABLE} "
+                        f"SET {', '.join(_sets)} "
+                        f"WHERE table_fqn = '{_full_fqn}'",
+                        dry_run=is_dry_run(),
+                    )
+                    _applied += 1
+
                 cached_read_registry.clear()
+                # Clear preview after apply
+                st.session_state.pop("bulk_ctrlm_preview_df", None)
+                st.session_state.pop("bulk_ctrlm_excluded", None)
                 audit(AuditEvent(
                     actor=current_user(),
                     action_type=AuditAction.HK_ENABLE,
@@ -1037,11 +1157,11 @@ with tab_bulk_ctrlm:
                     target_type="domain", target_id=_bulk_domain,
                     dry_run=is_dry_run(),
                     status="DRY_RUN" if is_dry_run() else "SUCCESS",
-                    after_value=f"pipeline={_bulk_pipeline},count={_cnt}",
+                    after_value=f"pipeline={_bulk_pipeline},count={_applied}",
                 ))
                 st.success(
-                    f"✅ Applied to {_cnt} table(s)."
+                    f"✅ Applied to {_applied} table(s)."
                     + (" (dry run)" if is_dry_run() else "")
                 )
-        except Exception as e:
-            st.error(f"Bulk apply failed: {e}")
+            except Exception as e:
+                st.error(f"Bulk apply failed: {e}")

@@ -19,7 +19,7 @@ import streamlit as st
 try:
     import itables.options as _ito
     _ito.lengthMenu = [[50, 100, 250, 500, -1], ["50", "100", "250", "500", "All"]]
-    _ito.pageLength  = 100
+    _ito.pageLength  = 15
     _ito.maxBytes    = 0
     _ito.classes     = "display compact cell-border stripe hover nowrap"
     _ito.style       = "width:100%;font-size:12px;"
