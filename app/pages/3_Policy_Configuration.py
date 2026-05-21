@@ -271,17 +271,47 @@ with tab_edit:
                         _wd = {}
 
                     st.markdown("**⏰ Safe Window & Blackout**")
-                    _wcol1, _wcol2 = st.columns(2)
-                    with _wcol1:
+
+                    # ── Row 1: Window type + preset on the same line ─────────
+                    _wa, _wb, _wc, _wd_col = st.columns([2, 2, 1, 2])
+                    with _wa:
                         w_type = st.selectbox(
                             "Window Type",
                             ["post_batch", "scheduled"],
                             index=0 if _wd.get("type", "post_batch") == "post_batch" else 1,
                             key=f"{_fk}_wtype",
-                            help="post_batch: Gate 1 + delay. "
+                            help="post_batch: runs after Gate 1 + delay. "
                                  "scheduled: fixed daily start time.",
                         )
-                        if w_type == "scheduled":
+                    _BH_PRESETS = {
+                        "— manual —":             None,
+                        "Business hours (6–18)":  list(range(6, 19)),
+                        "Midnight window (22–5)":  [22,23,0,1,2,3,4,5],
+                        "Peak hours (7–9, 17–20)": [7,8,9,17,18,19,20],
+                        "Weekday peak (7–20)":     list(range(7, 21)),
+                        "None (always allowed)":   [],
+                        "Always blocked":           list(range(24)),
+                    }
+                    with _wb:
+                        _prev_preset_key = f"{_fk}_bh_preset_prev"
+                        _preset_sel = st.selectbox(
+                            "Blackout preset",
+                            list(_BH_PRESETS.keys()),
+                            key=f"{_fk}_bh_preset",
+                            help="Quick-fill the blackout checkboxes below.",
+                        )
+                        _preset_hours = _BH_PRESETS[_preset_sel]
+                        if st.session_state.get(_prev_preset_key) != _preset_sel:
+                            st.session_state[_prev_preset_key] = _preset_sel
+                            if _preset_hours is not None:
+                                for _h in range(24):
+                                    st.session_state[f"{_fk}_bh_{_h}"] = (_h in _preset_hours)
+                                st.rerun()
+
+                    # ── Row 2: Start time (scheduled only) ───────────────────
+                    if w_type == "scheduled":
+                        _ws1, _ws2 = st.columns([2, 5])
+                        with _ws1:
                             w_start_time = st.text_input(
                                 "Start time (HH:MM) *",
                                 value=str(_wd.get("start_time", "02:00")),
@@ -289,22 +319,28 @@ with tab_edit:
                                 placeholder="02:00",
                                 help="24h format. Must not fall in a blackout hour.",
                             )
-                        else:
-                            w_start_time = str(_wd.get("start_time", "02:00"))
+                    else:
+                        w_start_time = str(_wd.get("start_time", "02:00"))
+
+                    # ── Row 3: Delay, Duration, Timezone ─────────────────────
+                    _wd1, _wd2, _wd3 = st.columns(3)
+                    with _wd1:
                         w_delay = st.number_input(
-                            "Delay after job (minutes)",
+                            "Delay after job (min)",
                             value=int(_wd.get("delay_minutes", 30)),
                             min_value=0, max_value=240,
                             key=f"{_fk}_wdelay",
                             disabled=(w_type == "scheduled"),
-                            help="post_batch only. Ignored for scheduled.",
+                            help="post_batch only: wait N minutes after Gate 1.",
                         )
+                    with _wd2:
                         w_duration = st.number_input(
                             "Window duration (hours)",
                             value=int(_wd.get("duration_hours", 4)),
                             min_value=1, max_value=12,
                             key=f"{_fk}_wdur",
                         )
+                    with _wd3:
                         w_tz = st.selectbox(
                             "Timezone",
                             ["America/Los_Angeles", "America/New_York",
@@ -319,51 +355,22 @@ with tab_edit:
                             ),
                             key=f"{_fk}_wtz",
                         )
-                    with _wcol2:
-                        st.markdown("**Blackout hours** — HK will not start")
 
-                        # Presets for quick selection
-                        _BH_PRESETS = {
-                            "— manual —":             None,
-                            "Business hours (6–18)":  list(range(6, 19)),
-                            "Midnight window (22–5)":  [22,23,0,1,2,3,4,5],
-                            "Peak hours (7–9, 17–20)": [7,8,9,17,18,19,20],
-                            "Weekday peak (7–20)":     list(range(7, 21)),
-                            "None (always allowed)":  [],
-                            "Always blocked":          list(range(24)),
-                        }
-                        _prev_preset_key = f"{_fk}_bh_preset_prev"
-                        _preset_sel = st.selectbox(
-                            "Quick preset",
-                            list(_BH_PRESETS.keys()),
-                            key=f"{_fk}_bh_preset",
-                            help="Select a preset to immediately update the "
-                                 "checkboxes below, or tick/untick manually.",
-                        )
-                        # When preset changes, flush all checkbox session_state keys
-                        # so the new value= takes effect on next render
-                        _preset_hours = _BH_PRESETS[_preset_sel]
-                        if st.session_state.get(_prev_preset_key) != _preset_sel:
-                            st.session_state[_prev_preset_key] = _preset_sel
-                            if _preset_hours is not None:
-                                for _h in range(24):
-                                    st.session_state[f"{_fk}_bh_{_h}"] = (_h in _preset_hours)
-                                st.rerun()
-
-                        _cur_bh = (
-                            _preset_hours if _preset_hours is not None
-                            else _wd.get("blackout_hours", [6, 7, 8, 9, 18, 19, 20, 21])
-                        )
-
-                        _bh_cols = st.columns(4)
-                        _new_bh = []
-                        for _h in range(24):
-                            if _bh_cols[_h % 4].checkbox(
-                                f"{_h:02d}:00",
-                                value=(_h in _cur_bh),
-                                key=f"{_fk}_bh_{_h}",
-                            ):
-                                _new_bh.append(_h)
+                    # ── Row 4: Blackout checkboxes (6 cols × 4 hours) ────────
+                    st.caption("☑ Blackout hours — HK will not start during checked hours")
+                    _cur_bh = (
+                        _preset_hours if _preset_hours is not None
+                        else _wd.get("blackout_hours", [6, 7, 8, 9, 18, 19, 20, 21])
+                    )
+                    _bh_cols = st.columns(6)
+                    _new_bh = []
+                    for _h in range(24):
+                        if _bh_cols[_h % 6].checkbox(
+                            f"{_h:02d}:00",
+                            value=(_h in _cur_bh),
+                            key=f"{_fk}_bh_{_h}",
+                        ):
+                            _new_bh.append(_h)
                     st.divider()
 
                     # ── Main config fields (INSIDE form) ─────────────────────────
@@ -808,32 +815,67 @@ with tab_templates:
                     _twc = {}
 
             st.markdown("**⏰ Window & Blackout**")
-            _twc1, _twc2 = st.columns(2)
-            with _twc1:
+
+            # Row 1: Window Type + Blackout preset (aligned)
+            _BH_PRESETS_T = {
+                "— manual —":             None,
+                "Business hours (6–18)":  list(range(6, 19)),
+                "Midnight window (22–5)":  [22,23,0,1,2,3,4,5],
+                "Peak hours (7–9, 17–20)": [7,8,9,17,18,19,20],
+                "Weekday peak (7–20)":     list(range(7, 21)),
+                "None (always allowed)":   [],
+                "Always blocked":           list(range(24)),
+            }
+            _ta, _tb, _tc, _td = st.columns([2, 2, 1, 2])
+            with _ta:
                 te_wtype = st.selectbox(
                     "Window Type",
                     ["post_batch", "scheduled"],
                     index=0 if _twc.get("type","post_batch") == "post_batch" else 1,
                     key=f"{_k}_te_wtype",
                 )
-                if te_wtype == "scheduled":
+            with _tb:
+                _te_prev_key = f"{_k}_te_bh_preset_prev"
+                _te_preset = st.selectbox(
+                    "Blackout preset",
+                    list(_BH_PRESETS_T.keys()),
+                    key=f"{_k}_te_bh_preset",
+                )
+                _te_preset_hours = _BH_PRESETS_T[_te_preset]
+                if st.session_state.get(_te_prev_key) != _te_preset:
+                    st.session_state[_te_prev_key] = _te_preset
+                    if _te_preset_hours is not None:
+                        for _h in range(24):
+                            st.session_state[f"{_k}_te_bh_{_h}"] = (_h in _te_preset_hours)
+                        st.rerun()
+
+            # Row 2: Start time (scheduled only)
+            if te_wtype == "scheduled":
+                _ts1, _ts2 = st.columns([2, 5])
+                with _ts1:
                     te_start = st.text_input(
                         "Start time (HH:MM)",
                         value=str(_twc.get("start_time","02:00")),
                         key=f"{_k}_te_start",
                         placeholder="02:00",
                     )
-                else:
-                    te_start = str(_twc.get("start_time","02:00"))
+            else:
+                te_start = str(_twc.get("start_time","02:00"))
+
+            # Row 3: Delay, Duration, Timezone
+            _td1, _td2, _td3 = st.columns(3)
+            with _td1:
                 te_delay = st.number_input(
                     "Delay (minutes)", value=int(_twc.get("delay_minutes",30)),
                     min_value=0, max_value=240, key=f"{_k}_te_delay",
                     disabled=(te_wtype == "scheduled"),
                 )
+            with _td2:
                 te_dur = st.number_input(
                     "Duration (hours)", value=int(_twc.get("duration_hours",4)),
                     min_value=1, max_value=12, key=f"{_k}_te_dur",
                 )
+            with _td3:
                 te_tz = st.selectbox(
                     "Timezone",
                     ["America/Los_Angeles","America/New_York","America/Chicago","UTC"],
@@ -846,42 +888,22 @@ with tab_templates:
                     ),
                     key=f"{_k}_te_tz",
                 )
-            with _twc2:
-                st.markdown("**Blackout hours**")
-                _BH_PRESETS_T = {
-                    "— manual —":             None,
-                    "Business hours (6–18)":  list(range(6, 19)),
-                    "Midnight window (22–5)":  [22,23,0,1,2,3,4,5],
-                    "Peak hours (7–9, 17–20)": [7,8,9,17,18,19,20],
-                    "Weekday peak (7–20)":     list(range(7, 21)),
-                    "None (always allowed)":  [],
-                }
-                _te_preset = st.selectbox(
-                    "Quick preset",
-                    list(_BH_PRESETS_T.keys()),
-                    key=f"{_k}_te_bh_preset",
-                )
-                _te_preset_hours = _BH_PRESETS_T[_te_preset]
-                _te_prev_key = f"{_k}_te_bh_preset_prev"
-                if st.session_state.get(_te_prev_key) != _te_preset:
-                    st.session_state[_te_prev_key] = _te_preset
-                    if _te_preset_hours is not None:
-                        for _h in range(24):
-                            st.session_state[f"{_k}_te_bh_{_h}"] = (_h in _te_preset_hours)
-                        st.rerun()
-                _te_cur_bh = (
-                    _te_preset_hours if _te_preset_hours is not None
-                    else _twc.get("blackout_hours", [6,7,8,9,18,19,20,21])
-                )
-                _te_bh_cols = st.columns(4)
-                _te_new_bh = []
-                for _h in range(24):
-                    if _te_bh_cols[_h % 4].checkbox(
-                        f"{_h:02d}:00",
-                        value=(_h in _te_cur_bh),
-                        key=f"{_k}_te_bh_{_h}",
-                    ):
-                        _te_new_bh.append(_h)
+
+            # Row 4: Blackout checkboxes (6 cols)
+            st.caption("☑ Blackout hours — HK will not start during checked hours")
+            _te_cur_bh = (
+                _te_preset_hours if _te_preset_hours is not None
+                else _twc.get("blackout_hours", [6,7,8,9,18,19,20,21])
+            )
+            _te_bh_cols = st.columns(6)
+            _te_new_bh = []
+            for _h in range(24):
+                if _te_bh_cols[_h % 6].checkbox(
+                    f"{_h:02d}:00",
+                    value=(_h in _te_cur_bh),
+                    key=f"{_k}_te_bh_{_h}",
+                ):
+                    _te_new_bh.append(_h)
             st.divider()
 
             with st.form(f"tmpl_edit_form_{_k}"):
