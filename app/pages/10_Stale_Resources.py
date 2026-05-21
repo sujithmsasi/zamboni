@@ -94,7 +94,7 @@ with tab1:
 
                 # KPIs
                 never_hk    = df["last_successful_hk"].isna().sum()
-                hk_disabled = (not df["hk_enabled"]).sum()
+                hk_disabled = (df["hk_enabled"].fillna(0) == 0).sum()
                 render_kpi_row([
                     {"label": "Stale Tables",       "value": str(len(df))},
                     {"label": "Never Housekept",     "value": str(never_hk)},
@@ -103,7 +103,10 @@ with tab1:
                 ])
 
                 st.divider()
-                df["hk_enabled"]      = df["hk_enabled"].apply(lambda x: "✅" if x else "❌")
+                df["hk_enabled"]      = df["hk_enabled"].apply(
+                    lambda x: "✅" if (not pd.isna(x) and str(x) not in ("0", "False", ""))
+                    else "❌"
+                )
                 df["days_since_hk"]   = df["days_since_hk"].apply(
                     lambda x: f"{int(x)}d" if pd.notna(x) else "Never"
                 )
@@ -136,7 +139,7 @@ with tab1:
         else:
             np_df["lifecycle_state"]  = np_df["lifecycle_state"].apply(lifecycle_badge)
             np_df["is_backup_pattern"]= np_df["is_backup_pattern"].apply(
-                lambda x: "🗂️ Backup" if int(x or 0) else ""
+                lambda x: "🗂️ Backup" if (not pd.isna(x) and int(x)) else ""
             )
             st.dataframe(np_df, use_container_width=True, hide_index=True, height=300)
     except Exception as e:
