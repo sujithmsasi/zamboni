@@ -75,9 +75,12 @@ def _get_domains() -> list[str]:
         return ["finance", "ers", "membership", "claims", "travel"]
 
 
-tab_browse, tab_registered = st.tabs([
+tab_browse, tab_registered, tab_edit_reg, tab_engine_flags, tab_bulk_ctrlm = st.tabs([
     "🔍 Browse & Register",
     "📊 Registered Tables",
+    "✏️ Edit Table",
+    "⚙️ Engine Flags",
+    "🔗 Bulk Control-M",
 ])
 
 
@@ -423,8 +426,15 @@ with tab_registered:
             if "dry_run_until" in df.columns:
                 df["dry_run_until"] = df["dry_run_until"].astype(str).replace("None","")
 
-            st.dataframe(df, use_container_width=True, hide_index=True, height=450)
-            st.caption(f"{len(df)} table(s) shown")
+            from itables.streamlit import interactive_table as _itr
+            _d=df.copy()
+            if "table_fqn" in _d.columns:
+                _d["table_fqn"] = _d["table_fqn"].str.replace(
+                    r"^glue_catalog[.]", "", regex=True)
+            _k=[c for c in ["table_fqn","domain","layer","tier","ci_number","controlm_pipeline_job","controlm_hk_job","controlm_job_start_time","hk_enabled","archive_enabled","lifecycle_enabled","processing_cadence"] if c in _d.columns]
+            _d=_d[_k].rename(columns={"table_fqn":"Table","ci_number":"CI","controlm_pipeline_job":"Pipeline Job","controlm_hk_job":"HK Job","controlm_job_start_time":"Start","hk_enabled":"HK","archive_enabled":"Archive","lifecycle_enabled":"Lifecycle","processing_cadence":"Cadence"})
+            _d.insert(0,"#",range(1,len(_d)+1))
+            _itr(_d,key="tr_it",style="width:100%;font-size:12px;",classes="display compact cell-border stripe hover nowrap",maxBytes=0,downsampling_warning=False,lengthMenu=[[25,50,100,250,-1],["25","50","100","250","All"]],pageLength=100,scrollX=True,caption=f"{len(df):,} table(s)")
 
             # Download
             csv = df.to_csv(index=False).encode("utf-8")
@@ -436,224 +446,229 @@ with tab_registered:
             )
 
 
-            # ── Edit a registered table ───────────────────────────────────────
-            st.divider()
-            st.subheader("✏️ Edit Registered Table")
-            st.caption(
-                "Select a table from the list above to update its "
-                "domain, tier, layer, owner, or stream ID."
-            )
-            # Rebuild unformatted FQN list from raw query
-            try:
-                raw_df = cached_read_registry(
-                    f"SELECT table_fqn, domain, layer, tier, "
-                    f"owner_email, ci_number, stream_id, hk_enabled, "
-                    f"archive_enabled, lifecycle_enabled, processing_cadence, "
-                    f"dry_run_until "
-                    f"FROM {STREAM_REGISTRY_TABLE} "
-                    f"{('WHERE domain = ' + chr(39) + sel_domain + chr(39)) if sel_domain != 'All' else ''} "
-                    f"ORDER BY domain, table_fqn LIMIT 500"
-                )
-                if not raw_df.empty:
-                    edit_fqn = st.selectbox(
-                        "Select table to edit",
-                        ["-- select --"] + raw_df["table_fqn"].tolist(),
-                        key="edit_table_fqn_sel",
-                        help="Pick a registered table to edit its metadata.",
-                    )
-                    if edit_fqn and edit_fqn != "-- select --":
-                        trow = raw_df[raw_df["table_fqn"] == edit_fqn].iloc[0].to_dict()
-                        _ek  = edit_fqn.replace(".", "_")  # key prefix
-
-                        with st.form(f"edit_table_form_{_ek}"):
-                            st.markdown(f"**Editing:** `{edit_fqn}`")
-                            ec1, ec2, ec3 = st.columns(3)
-                            with ec1:
-                                e_domain = st.selectbox(
-                                    "Domain",
-                                    _get_domains(),
-                                    index=(_get_domains().index(trow.get("domain",""))
-                                           if trow.get("domain","") in _get_domains() else 0),
-                                    key=f"{_ek}_domain",
-                                )
-                                e_layer = st.selectbox(
-                                    "Layer",
-                                    VALID_LAYERS,
-                                    index=(VALID_LAYERS.index(trow.get("layer","staging"))
-                                           if trow.get("layer","staging") in VALID_LAYERS else 0),
-                                    key=f"{_ek}_layer",
-                                )
-                            with ec2:
-                                e_tier = st.selectbox(
-                                    "Tier",
-                                    VALID_TIERS,
-                                    index=(VALID_TIERS.index(trow.get("tier","standard"))
-                                           if trow.get("tier","standard") in VALID_TIERS else 1),
-                                    key=f"{_ek}_tier",
-                                )
-                                e_stream = st.text_input(
-                                    "Stream ID",
-                                    value=str(trow.get("stream_id") or ""),
-                                    key=f"{_ek}_stream",
-                                    placeholder="STR-FIN-APS-0001",
-                                )
-                            with ec3:
-                                e_owner = st.text_input(
-                                    "Owner Email",
-                                    value=str(trow.get("owner_email") or ""),
-                                    key=f"{_ek}_owner",
-                                )
-                                e_ci = st.text_input(
-                                    "CI Number",
-                                    value=str(trow.get("ci_number") or ""),
-                                    key=f"{_ek}_ci",
-                                )
-
-                            ef1, ef2, ef3 = st.columns(3)
-                            with ef1:
-                                e_hk = st.checkbox(
-                                    "🔧 Housekeeping",
-                                    value=bool(trow.get("hk_enabled", False)),
-                                    key=f"{_ek}_hk",
-                                    help="Enable HK Engine (compaction + vacuum).",
-                                )
-                            with ef2:
-                                e_archive = st.checkbox(
-                                    "📦 Archival",
-                                    value=bool(trow.get("archive_enabled", False)),
-                                    key=f"{_ek}_archive",
-                                    help="Enable Archival Engine for cold partition export.",
-                                )
-                            with ef3:
-                                e_lifecycle = st.checkbox(
-                                    "♻️ Lifecycle",
-                                    value=bool(trow.get("lifecycle_enabled", False)),
-                                    key=f"{_ek}_lifecycle",
-                                    help="Enable Lifecycle Engine (non-prod state machine).",
-                                )
-                            e_cadence = st.selectbox(
-                                "Processing Cadence",
-                                ["daily", "weekly", "monthly", "hourly", "every_trigger"],
-                                index=(["daily","weekly","monthly","hourly","every_trigger"]
-                                       .index(trow.get("processing_cadence") or "daily")
-                                       if trow.get("processing_cadence") in
-                                       ["daily","weekly","monthly","hourly","every_trigger"]
-                                       else 0),
-                                key=f"{_ek}_cadence",
-                                help="How often this table is processed — "
-                                     "drives partition filter window.",
-                            )
-
-                            st.markdown("**🔗 Control-M Integration**")
-                            cm1, cm2, cm3 = st.columns(3)
-                            with cm1:
-                                e_pipeline_job = st.text_input(
-                                    "Pipeline Job (writes to table)",
-                                    value=str(trow.get("controlm_pipeline_job") or ""),
-                                    key=f"{_ek}_pipeline_job",
-                                    placeholder="ACE-DA-FIN-APS-INGEST-PRD",
-                                    help="The Control-M job that loads data into this table.",
-                                )
-                            with cm2:
-                                e_hk_job = st.text_input(
-                                    "HK Job (runs Zamboni)",
-                                    value=str(trow.get("controlm_hk_job") or ""),
-                                    key=f"{_ek}_hk_job",
-                                    placeholder="ACE-DA-FIN-APS-HK-PRD",
-                                    help="The Control-M job that triggers Zamboni HK.",
-                                )
-                            with cm3:
-                                e_upstream_job = st.text_input(
-                                    "Gate 1 — Upstream Job",
-                                    value=str(trow.get("dependent_on_controlm_job") or ""),
-                                    key=f"{_ek}_upstream_job",
-                                    placeholder="ACE-DA-FIN-APS-INGEST-PRD",
-                                    help="Must SUCCEED before HK starts (Gate 1 check).",
-                                )
-
-                            # Job run schedule (time picker)
-                            import datetime as _dt
-                            _raw_start = str(trow.get("controlm_job_start_time") or "02:00")
-                            try:
-                                _h, _m = [int(x) for x in _raw_start.split(":")]
-                            except Exception:
-                                _h, _m = 2, 0
-                            cm4, cm5, _cm6 = st.columns([1, 1, 2])
-                            with cm4:
-                                e_job_start = st.time_input(
-                                    "Job run start time",
-                                    value=_dt.time(_h, _m),
-                                    key=f"{_ek}_job_start",
-                                    step=_dt.timedelta(minutes=15),
-                                    help="Scheduled start time of the upstream pipeline job. "
-                                         "Zamboni uses this for Gate 1 timing calculations.",
-                                )
-                            with cm5:
-                                e_expected_dur = st.number_input(
-                                    "Expected job duration (min)",
-                                    value=int(trow.get("controlm_expected_duration_min") or 0),
-                                    min_value=0,
-                                    max_value=480,
-                                    key=f"{_ek}_expected_dur",
-                                    help="Expected pipeline run duration. "
-                                         "HK delay starts after start_time + duration.",
-                                )
-
-                            if is_dry_run():
-                                st.info("🔵 Dry Run — no writes.")
-
-                            if st.form_submit_button("💾 Save Changes", type="primary"):
-                                    try:
-                                        _now_edit = datetime.now(UTC).strftime(
-                                            "%Y-%m-%d %H:%M:%S"
-                                        )
-                                        def _esc_v(s): return str(s).replace("'","''")
-                                        upd_sql = f"""
-                                            UPDATE {STREAM_REGISTRY_TABLE}
-                                            SET domain                     = '{e_domain}',
-                                                layer                      = '{e_layer}',
-                                                tier                       = '{e_tier}',
-                                                stream_id                  = '{e_stream}',
-                                                owner_email                = '{e_owner}',
-                                                ci_number                  = '{e_ci}',
-                                                hk_enabled                 = {'1' if e_hk else '0'},
-                                                archive_enabled            = {'1' if e_archive else '0'},
-                                                lifecycle_enabled          = {'1' if e_lifecycle else '0'},
-                                                processing_cadence         = '{e_cadence}',
-                                                controlm_pipeline_job           = '{_esc_v(e_pipeline_job)}',
-                                                controlm_hk_job                 = '{_esc_v(e_hk_job)}',
-                                                dependent_on_controlm_job       = '{_esc_v(e_upstream_job)}',
-                                                controlm_job_start_time         = '{e_job_start.strftime("%H:%M")}',
-                                                controlm_expected_duration_min  = {int(e_expected_dur)},
-                                                updated_at                 = '{_now_edit}'
-                                            WHERE table_fqn = '{edit_fqn}'
-                                        """
-                                        execute_write(upd_sql, dry_run=is_dry_run())
-                                        audit(AuditEvent(
-                                            actor=current_user(),
-                                            action_type=AuditAction.TABLE_REGISTER,
-                                            page_source="2_Table_Registration",
-                                            target_type="table",
-                                            target_id=edit_fqn,
-                                            domain=e_domain,
-                                            environment="prod",
-                                            dry_run=is_dry_run(),
-                                            status="DRY_RUN" if is_dry_run() else "SUCCESS",
-                                        ))
-                                        cached_read_registry.clear()
-                                        st.success(
-                                            f"✅ `{edit_fqn}` updated."
-                                            + (" (dry run)" if is_dry_run() else "")
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Update failed: {e}")
-            except Exception as e:
-                st.error(f"Could not load table list for editing: {e}")
     except Exception as e:
         st.error(f"Could not load registered tables: {e}")
 
-    # ── Engine Flags: Enable / Disable per table or bulk ─────────────────────
-    st.divider()
+
+# ── Tab 3: Edit Table ────────────────────────────────────────────────────────
+with tab_edit_reg:
+    st.subheader("✏️ Edit Registered Table")
+    st.caption(
+        "Select a table from the list above to update its "
+        "domain, tier, layer, owner, or stream ID."
+    )
+    # Rebuild unformatted FQN list from raw query
+    try:
+        raw_df = cached_read_registry(
+            f"SELECT table_fqn, domain, layer, tier, "
+            f"owner_email, ci_number, stream_id, hk_enabled, "
+            f"archive_enabled, lifecycle_enabled, processing_cadence, "
+            f"dry_run_until, "
+            f"controlm_pipeline_job, controlm_hk_job, "
+            f"dependent_on_controlm_job, controlm_job_start_time, "
+            f"controlm_expected_duration_min "
+            f"FROM {STREAM_REGISTRY_TABLE} "
+            f"{('WHERE domain = ' + chr(39) + sel_domain + chr(39)) if sel_domain != 'All' else ''} "
+            f"ORDER BY domain, table_fqn LIMIT 5000"
+        )
+        if not raw_df.empty:
+            edit_fqn = st.selectbox(
+                "Select table to edit",
+                ["-- select --"] + raw_df["table_fqn"].tolist(),
+                key="edit_table_fqn_sel",
+                help="Pick a registered table to edit its metadata.",
+            )
+            if edit_fqn and edit_fqn != "-- select --":
+                trow = raw_df[raw_df["table_fqn"] == edit_fqn].iloc[0].to_dict()
+                _ek  = edit_fqn.replace(".", "_")  # key prefix
+
+                with st.form(f"edit_table_form_{_ek}"):
+                    st.markdown(f"**Editing:** `{edit_fqn}`")
+                    ec1, ec2, ec3 = st.columns(3)
+                    with ec1:
+                        e_domain = st.selectbox(
+                            "Domain",
+                            _get_domains(),
+                            index=(_get_domains().index(trow.get("domain",""))
+                                   if trow.get("domain","") in _get_domains() else 0),
+                            key=f"{_ek}_domain",
+                        )
+                        e_layer = st.selectbox(
+                            "Layer",
+                            VALID_LAYERS,
+                            index=(VALID_LAYERS.index(trow.get("layer","staging"))
+                                   if trow.get("layer","staging") in VALID_LAYERS else 0),
+                            key=f"{_ek}_layer",
+                        )
+                    with ec2:
+                        e_tier = st.selectbox(
+                            "Tier",
+                            VALID_TIERS,
+                            index=(VALID_TIERS.index(trow.get("tier","standard"))
+                                   if trow.get("tier","standard") in VALID_TIERS else 1),
+                            key=f"{_ek}_tier",
+                        )
+                        e_stream = st.text_input(
+                            "Stream ID",
+                            value=str(trow.get("stream_id") or ""),
+                            key=f"{_ek}_stream",
+                            placeholder="STR-FIN-APS-0001",
+                        )
+                    with ec3:
+                        e_owner = st.text_input(
+                            "Owner Email",
+                            value=str(trow.get("owner_email") or ""),
+                            key=f"{_ek}_owner",
+                        )
+                        e_ci = st.text_input(
+                            "CI Number",
+                            value=str(trow.get("ci_number") or ""),
+                            key=f"{_ek}_ci",
+                        )
+
+                    ef1, ef2, ef3 = st.columns(3)
+                    with ef1:
+                        e_hk = st.checkbox(
+                            "🔧 Housekeeping",
+                            value=bool(trow.get("hk_enabled", False)),
+                            key=f"{_ek}_hk",
+                            help="Enable HK Engine (compaction + vacuum).",
+                        )
+                    with ef2:
+                        e_archive = st.checkbox(
+                            "📦 Archival",
+                            value=bool(trow.get("archive_enabled", False)),
+                            key=f"{_ek}_archive",
+                            help="Enable Archival Engine for cold partition export.",
+                        )
+                    with ef3:
+                        e_lifecycle = st.checkbox(
+                            "♻️ Lifecycle",
+                            value=bool(trow.get("lifecycle_enabled", False)),
+                            key=f"{_ek}_lifecycle",
+                            help="Enable Lifecycle Engine (non-prod state machine).",
+                        )
+                    e_cadence = st.selectbox(
+                        "Processing Cadence",
+                        ["daily", "weekly", "monthly", "hourly", "every_trigger"],
+                        index=(["daily","weekly","monthly","hourly","every_trigger"]
+                               .index(trow.get("processing_cadence") or "daily")
+                               if trow.get("processing_cadence") in
+                               ["daily","weekly","monthly","hourly","every_trigger"]
+                               else 0),
+                        key=f"{_ek}_cadence",
+                        help="How often this table is processed — "
+                             "drives partition filter window.",
+                    )
+
+                    st.markdown("**🔗 Control-M Integration**")
+                    cm1, cm2, cm3 = st.columns(3)
+                    with cm1:
+                        e_pipeline_job = st.text_input(
+                            "Pipeline Job (writes to table)",
+                            value=str(trow.get("controlm_pipeline_job") or ""),
+                            key=f"{_ek}_pipeline_job",
+                            placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                            help="The Control-M job that loads data into this table.",
+                        )
+                    with cm2:
+                        e_hk_job = st.text_input(
+                            "HK Job (runs Zamboni)",
+                            value=str(trow.get("controlm_hk_job") or ""),
+                            key=f"{_ek}_hk_job",
+                            placeholder="ACE-DA-FIN-APS-HK-PRD",
+                            help="The Control-M job that triggers Zamboni HK.",
+                        )
+                    with cm3:
+                        e_upstream_job = st.text_input(
+                            "Gate 1 — Upstream Job",
+                            value=str(trow.get("dependent_on_controlm_job") or ""),
+                            key=f"{_ek}_upstream_job",
+                            placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                            help="Must SUCCEED before HK starts (Gate 1 check).",
+                        )
+
+                    # Job run schedule (time picker)
+                    import datetime as _dt
+                    _raw_start = str(trow.get("controlm_job_start_time") or "02:00")
+                    try:
+                        _h, _m = [int(x) for x in _raw_start.split(":")]
+                    except Exception:
+                        _h, _m = 2, 0
+                    cm4, cm5, _cm6 = st.columns([1, 1, 2])
+                    with cm4:
+                        e_job_start = st.time_input(
+                            "Job run start time",
+                            value=_dt.time(_h, _m),
+                            key=f"{_ek}_job_start",
+                            step=_dt.timedelta(minutes=15),
+                            help="Scheduled start time of the upstream pipeline job. "
+                                 "Zamboni uses this for Gate 1 timing calculations.",
+                        )
+                    with cm5:
+                        e_expected_dur = st.number_input(
+                            "Expected job duration (min)",
+                            value=int(trow.get("controlm_expected_duration_min") or 0),
+                            min_value=0,
+                            max_value=480,
+                            key=f"{_ek}_expected_dur",
+                            help="Expected pipeline run duration. "
+                                 "HK delay starts after start_time + duration.",
+                        )
+
+                    if is_dry_run():
+                        st.info("🔵 Dry Run — no writes.")
+
+                    if st.form_submit_button("💾 Save Changes", type="primary"):
+                            try:
+                                _now_edit = datetime.now(UTC).strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                )
+                                def _esc_v(s): return str(s).replace("'","''")
+                                upd_sql = f"""
+                                    UPDATE {STREAM_REGISTRY_TABLE}
+                                    SET domain                     = '{e_domain}',
+                                        layer                      = '{e_layer}',
+                                        tier                       = '{e_tier}',
+                                        stream_id                  = '{e_stream}',
+                                        owner_email                = '{e_owner}',
+                                        ci_number                  = '{e_ci}',
+                                        hk_enabled                 = {'1' if e_hk else '0'},
+                                        archive_enabled            = {'1' if e_archive else '0'},
+                                        lifecycle_enabled          = {'1' if e_lifecycle else '0'},
+                                        processing_cadence         = '{e_cadence}',
+                                        controlm_pipeline_job           = '{_esc_v(e_pipeline_job)}',
+                                        controlm_hk_job                 = '{_esc_v(e_hk_job)}',
+                                        dependent_on_controlm_job       = '{_esc_v(e_upstream_job)}',
+                                        controlm_job_start_time         = '{e_job_start.strftime("%H:%M")}',
+                                        controlm_expected_duration_min  = {int(e_expected_dur)},
+                                        updated_at                 = '{_now_edit}'
+                                    WHERE table_fqn = '{edit_fqn}'
+                                """
+                                execute_write(upd_sql, dry_run=is_dry_run())
+                                audit(AuditEvent(
+                                    actor=current_user(),
+                                    action_type=AuditAction.TABLE_REGISTER,
+                                    page_source="2_Table_Registration",
+                                    target_type="table",
+                                    target_id=edit_fqn,
+                                    domain=e_domain,
+                                    environment="prod",
+                                    dry_run=is_dry_run(),
+                                    status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                                ))
+                                cached_read_registry.clear()
+                                st.success(
+                                    f"✅ `{edit_fqn}` updated."
+                                    + (" (dry run)" if is_dry_run() else "")
+                                )
+                            except Exception as e:
+                                st.error(f"Update failed: {e}")
+    except Exception as e:
+        st.error(f"Could not load table list for editing: {e}")
+
+# ── Tab 4: Engine Flags ─────────────────────────────────────────────────────
+with tab_engine_flags:
     st.subheader("⚙️ Engine Flags")
     st.caption(
         "Enable or disable Archival and Lifecycle engines per table, "
@@ -900,3 +915,110 @@ with tab_registered:
                     )
             except Exception as e:
                 st.error(f"Bulk flag update failed: {e}")
+
+
+# ── Tab 5: Bulk Control-M ─────────────────────────────────────────────────────
+with tab_bulk_ctrlm:
+    st.subheader("🔗 Bulk Apply Control-M Job Names")
+    st.caption(
+        "One Control-M job typically loads multiple tables. "
+        "Apply the same job names, start time, and CI number to all matching tables."
+    )
+
+    _bc1, _bc2 = st.columns(2)
+    with _bc1:
+        _bulk_pipeline = st.text_input(
+            "Pipeline Job Name *",
+            placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+            key="bulk_ctrlm_pipeline",
+            help="Control-M ETL job that writes to these tables.",
+        )
+        _bulk_hk = st.text_input(
+            "HK Job Name",
+            placeholder="ACE-DA-FIN-HK-PRD",
+            key="bulk_ctrlm_hk",
+        )
+        _bulk_gate1 = st.text_input(
+            "Gate 1 — Upstream Job",
+            placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+            key="bulk_ctrlm_gate1",
+            help="Must complete before HK starts. Usually same as Pipeline Job.",
+        )
+    with _bc2:
+        import datetime as _dt_bc
+        _bulk_start = st.time_input(
+            "Job run start time",
+            value=_dt_bc.time(2, 0),
+            key="bulk_ctrlm_start",
+            step=_dt_bc.timedelta(minutes=15),
+        )
+        _bulk_dur = st.number_input(
+            "Expected job duration (min)",
+            value=0, min_value=0, max_value=480,
+            key="bulk_ctrlm_dur",
+        )
+        _bulk_ci = st.text_input(
+            "CI Number (optional — leave blank to keep existing)",
+            placeholder="CI-10300",
+            key="bulk_ctrlm_ci",
+        )
+
+    st.markdown("**Apply to tables matching:**")
+    _bm1, _bm2, _bm3 = st.columns(3)
+    with _bm1:
+        _bulk_domain = st.selectbox("Domain", ["All"] + _get_domains(), key="bulk_ctrlm_domain")
+    with _bm2:
+        _bulk_layer  = st.selectbox("Layer",  ["All"] + VALID_LAYERS,   key="bulk_ctrlm_layer")
+    with _bm3:
+        _bulk_db = st.text_input("Database (optional)", key="bulk_ctrlm_db",
+                                  placeholder="finance_staging_db")
+
+    if is_dry_run():
+        st.info("🔵 Dry Run — no writes.")
+
+    if st.button("🔗 Apply Job Names", type="primary",
+                 disabled=not _bulk_pipeline.strip(), key="bulk_ctrlm_apply"):
+        from datetime import UTC as _UTC_bc
+        from datetime import datetime as _ddt_bc
+        _where = ("WHERE " + " AND ".join(filter(None, [
+            f"domain = '{_bulk_domain}'" if _bulk_domain != "All" else "",
+            f"layer = '{_bulk_layer}'"   if _bulk_layer  != "All" else "",
+            f"database_name = '{_bulk_db.strip()}'" if _bulk_db.strip() else "",
+        ]))) if any([_bulk_domain != "All", _bulk_layer != "All", _bulk_db.strip()]) else ""
+        try:
+            _cnt = int(cached_read_registry(
+                f"SELECT COUNT(*) AS n FROM {STREAM_REGISTRY_TABLE} {_where}"
+            ).iloc[0]["n"])
+            st.info(f"{_cnt} table(s) will be updated.")
+            if _cnt > 0:
+                _now = _ddt_bc.now(_UTC_bc).strftime("%Y-%m-%d %H:%M:%S")
+                _sets = [
+                    f"controlm_pipeline_job = '{_bulk_pipeline.strip()}'",
+                    f"controlm_hk_job = '{_bulk_hk.strip()}'",
+                    f"dependent_on_controlm_job = '{_bulk_gate1.strip()}'",
+                    "controlm_job_start_time = '" + _bulk_start.strftime("%H:%M") + "'",
+                    f"controlm_expected_duration_min = {int(_bulk_dur)}",
+                    f"updated_at = '{_now}'",
+                ]
+                if _bulk_ci.strip():
+                    _sets.append(f"ci_number = '{_bulk_ci.strip()}'")
+                execute_write(
+                    f"UPDATE {STREAM_REGISTRY_TABLE} SET {', '.join(_sets)} {_where}",
+                    dry_run=is_dry_run(),
+                )
+                cached_read_registry.clear()
+                audit(AuditEvent(
+                    actor=current_user(),
+                    action_type=AuditAction.HK_ENABLE,
+                    page_source="2_Table_Registration",
+                    target_type="domain", target_id=_bulk_domain,
+                    dry_run=is_dry_run(),
+                    status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                    after_value=f"pipeline={_bulk_pipeline},count={_cnt}",
+                ))
+                st.success(
+                    f"✅ Applied to {_cnt} table(s)."
+                    + (" (dry run)" if is_dry_run() else "")
+                )
+        except Exception as e:
+            st.error(f"Bulk apply failed: {e}")
