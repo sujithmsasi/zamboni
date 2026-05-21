@@ -130,6 +130,9 @@ with tab_view:
             c.snapshot_min_to_keep,
             c.orphan_file_retention_days,
             c.run_frequency,
+            c.gate1_enabled,
+            c.gate2_enabled,
+            c.gate3_enabled,
             c.manually_overridden
         FROM {STREAM_REGISTRY_TABLE} r
         LEFT JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn
@@ -142,9 +145,15 @@ with tab_view:
         if df.empty:
             st.info("No tables match the selected filters.")
         else:
+            import pandas as _pd_pc
             df["manually_overridden"] = df["manually_overridden"].apply(
                 lambda x: "⚠️ Override" if x else "✅ Template"
             )
+            for _gc in ["gate1_enabled", "gate2_enabled", "gate3_enabled"]:
+                if _gc in df.columns:
+                    df[_gc] = df[_gc].apply(
+                        lambda x: "✅" if (not _pd_pc.isna(x) and int(x or 0)) else "❌"
+                    )
             # Friendly column names
             df.rename(columns={
                 "table_fqn":                   "Table",
@@ -156,6 +165,9 @@ with tab_view:
                 "orphan_file_retention_days":  "Orphan Days",
                 "run_frequency":               "Frequency",
                 "manually_overridden":         "Status",
+                "gate1_enabled":               "Gate 1",
+                "gate2_enabled":               "Gate 2",
+                "gate3_enabled":               "Gate 3",
             }, inplace=True, errors="ignore")
 
             from itables.streamlit import interactive_table as _it
@@ -259,6 +271,53 @@ with tab_edit:
 
                     # Unique key prefix per table
                     _fk = table_fqn.replace(".", "_").replace("/", "_")
+
+                    # ── Gate Flags (outside form — immediate toggle) ──────────────
+                    st.markdown("**🚦 Gate Enable / Disable**")
+                    st.caption(
+                        "Gates control what checks run before HK starts. "
+                        "Disable Gate 1 until Control-M API integration is ready."
+                    )
+                    _gc1, _gc2, _gc3, _gc4 = st.columns(4)
+                    with _gc1:
+                        _g1_val = bool(cfg.get("gate1_enabled", 0))
+                        gate1_en = st.toggle(
+                            "Gate 1 — Control-M upstream check",
+                            value=_g1_val,
+                            key=f"{_fk}_gate1",
+                            help=(
+                                "Checks that the upstream pipeline job completed successfully "
+                                "before starting HK. Requires Control-M API integration. "
+                                "**Disable until integration is available.**"
+                            ),
+                        )
+                    with _gc2:
+                        gate2_en = st.toggle(
+                            "Gate 2 — Blackout window",
+                            value=bool(cfg.get("gate2_enabled", 1)),
+                            key=f"{_fk}_gate2",
+                            help="Prevents HK from starting during configured blackout hours.",
+                        )
+                    with _gc3:
+                        gate3_en = st.toggle(
+                            "Gate 3 — Circuit breaker",
+                            value=bool(cfg.get("gate3_enabled", 1)),
+                            key=f"{_fk}_gate3",
+                            help="Blocks HK if recent failure count exceeds threshold.",
+                        )
+                    with _gc4:
+                        _gate_status = []
+                        if not gate1_en:
+                            _gate_status.append("⚠️ Gate 1 disabled (no ControlM check)")
+                        if not gate2_en:
+                            _gate_status.append("⚠️ Gate 2 disabled (no blackout)")
+                        if not gate3_en:
+                            _gate_status.append("⚠️ Gate 3 disabled (no circuit breaker)")
+                        if _gate_status:
+                            st.warning("  \n".join(_gate_status))
+                        else:
+                            st.success("All gates active")
+                    st.divider()
 
                     # ── Window & Blackout (OUTSIDE form — reacts immediately) ─────
                     import json as _wjson
@@ -565,7 +624,10 @@ with tab_edit:
                                 now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                                 upd_sql = f"""
                                     UPDATE {HK_CONFIG_TABLE}
-                                    SET snapshot_retention_days        = {int(snap_days)},
+                                    SET gate1_enabled                  = {1 if gate1_en else 0},
+                                        gate2_enabled                  = {1 if gate2_en else 0},
+                                        gate3_enabled                  = {1 if gate3_en else 0},
+                                        snapshot_retention_days        = {int(snap_days)},
                                         snapshot_min_to_keep           = {int(snap_min)},
                                         orphan_file_retention_days     = {int(orphan)},
                                         orphan_cleanup_cadence_days    = {int(orphan_cadence)},

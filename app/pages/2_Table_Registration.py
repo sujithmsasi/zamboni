@@ -292,10 +292,11 @@ with tab_browse:
                                 )
                             with _rc3:
                                 reg_gate1_job = st.text_input(
-                                    "Gate 1 — Upstream Job",
-                                    placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                                    "Gate 1 — Upstream Job (optional)",
+                                    placeholder="Leave blank to use Pipeline Job",
                                     key="reg_ctrlm_gate1",
-                                    help="Must complete before HK starts.",
+                                    help="Defaults to Pipeline ControlM Job if blank. "
+                                         "Override only when Gate 1 differs from the pipeline job.",
                                 )
                             import datetime as _dt_reg
                             _rt1, _rt2, _rt3 = st.columns(3)
@@ -351,7 +352,7 @@ with tab_browse:
                                             stream_id=stream_id.strip() or None,
                                             controlm_pipeline_job=reg_pipeline_job.strip() or None,
                                             controlm_hk_job=reg_hk_job.strip() or None,
-                                            dependent_on_controlm_job=reg_gate1_job.strip() or None,
+                                            dependent_on_controlm_job=reg_gate1_job.strip() or reg_pipeline_job.strip() or None,
                                             controlm_job_start_time=reg_job_start.strftime("%H:%M"),
                                             controlm_expected_duration_min=int(reg_job_dur),
                                             registered_by=f"streamlit:{current_user()}",
