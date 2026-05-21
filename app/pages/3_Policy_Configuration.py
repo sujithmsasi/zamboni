@@ -159,11 +159,26 @@ with tab_view:
             }, inplace=True, errors="ignore")
 
             from itables.streamlit import interactive_table as _it
+
+            # Strip glue_catalog. prefix from Table FQN for readability
+            if "Table" in df.columns:
+                df["Table"] = df["Table"].str.replace(
+                    r"^glue_catalog\.", "", regex=True
+                )
+            elif "table_fqn" in df.columns:
+                df["table_fqn"] = df["table_fqn"].str.replace(
+                    r"^glue_catalog\.", "", regex=True
+                )
+
+            # Add serial number column
+            df.insert(0, "#", range(1, len(df) + 1))
+
             _it(
                 df,
                 key="pc_view_it",
                 style="width:100%;font-size:12px;",
-                classes="display compact stripe hover nowrap",
+                # "cell-border" adds column lines, "stripe" = alternating rows
+                classes="display compact cell-border stripe hover nowrap",
                 maxBytes=0,
                 downsampling_warning=False,
                 lengthMenu=[[25, 50, 100, 250, -1],
@@ -171,12 +186,13 @@ with tab_view:
                 pageLength=100,
                 scrollX=True,
                 columnDefs=[
-                    {"width": "260px", "targets": 0},
-                    {"width": "80px",  "targets": [1, 2, 3]},
-                    {"width": "85px",  "targets": [4, 5]},
-                    {"width": "65px",  "targets": "_all"},
+                    {"width": "30px",  "targets": 0},          # #
+                    {"width": "220px", "targets": 1},          # Table
+                    {"width": "75px",  "targets": [2,3,4]},   # domain/layer/tier
+                    {"width": "85px",  "targets": [5,6]},     # template/strategy
+                    {"width": "60px",  "targets": "_all"},
                     {"className": "dt-center", "targets": "_all"},
-                    {"className": "dt-left",   "targets": [0, 1]},
+                    {"className": "dt-left",   "targets": [0, 1, 2]},
                 ],
                 caption=f"{len(df):,} table(s)",
             )
@@ -316,14 +332,24 @@ with tab_edit:
                             "None (always allowed)":  [],
                             "Always blocked":          list(range(24)),
                         }
+                        _prev_preset_key = f"{_fk}_bh_preset_prev"
                         _preset_sel = st.selectbox(
                             "Quick preset",
                             list(_BH_PRESETS.keys()),
                             key=f"{_fk}_bh_preset",
-                            help="Select a preset to pre-fill the checkboxes below, "
-                                 "or tick/untick hours manually.",
+                            help="Select a preset to immediately update the "
+                                 "checkboxes below, or tick/untick manually.",
                         )
+                        # When preset changes, flush all checkbox session_state keys
+                        # so the new value= takes effect on next render
                         _preset_hours = _BH_PRESETS[_preset_sel]
+                        if st.session_state.get(_prev_preset_key) != _preset_sel:
+                            st.session_state[_prev_preset_key] = _preset_sel
+                            if _preset_hours is not None:
+                                for _h in range(24):
+                                    st.session_state[f"{_fk}_bh_{_h}"] = (_h in _preset_hours)
+                                st.rerun()
+
                         _cur_bh = (
                             _preset_hours if _preset_hours is not None
                             else _wd.get("blackout_hours", [6, 7, 8, 9, 18, 19, 20, 21])
@@ -836,6 +862,13 @@ with tab_templates:
                     key=f"{_k}_te_bh_preset",
                 )
                 _te_preset_hours = _BH_PRESETS_T[_te_preset]
+                _te_prev_key = f"{_k}_te_bh_preset_prev"
+                if st.session_state.get(_te_prev_key) != _te_preset:
+                    st.session_state[_te_prev_key] = _te_preset
+                    if _te_preset_hours is not None:
+                        for _h in range(24):
+                            st.session_state[f"{_k}_te_bh_{_h}"] = (_h in _te_preset_hours)
+                        st.rerun()
                 _te_cur_bh = (
                     _te_preset_hours if _te_preset_hours is not None
                     else _twc.get("blackout_hours", [6,7,8,9,18,19,20,21])

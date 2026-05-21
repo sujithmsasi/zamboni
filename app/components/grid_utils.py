@@ -65,7 +65,7 @@ def render_grid(
             df,
             key=key,
             style="width:100%;font-size:12px;",
-            classes="display compact stripe hover nowrap",
+            classes="display compact cell-border stripe hover nowrap",
             lengthMenu=[[25, 50, 100, 250, -1], ["25", "50", "100", "250", "All"]],
             pageLength=page_length,
             maxBytes=0,
