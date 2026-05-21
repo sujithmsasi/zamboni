@@ -86,6 +86,12 @@ def render(
     st.markdown(
         f"""
         <style>
+          /* ── Hide itables downsampling link ──────────────────────────── */
+          caption a[href*="downsampling"],
+          caption a[href*="itables"] {{
+            display: none !important;
+          }}
+
           /* ── Google Fonts: Inter ──────────────────────────────────── */
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 

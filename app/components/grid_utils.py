@@ -68,6 +68,8 @@ def render_grid(
             classes="display compact stripe hover nowrap",
             lengthMenu=[[25, 50, 100, 250, -1], ["25", "50", "100", "250", "All"]],
             pageLength=page_length,
+            maxBytes=0,
+            downsampling_warning=False,
             scrollX=True,
             columnDefs=[
                 {"className": "dt-center", "targets": "_all"},

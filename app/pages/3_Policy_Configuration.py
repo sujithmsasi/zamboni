@@ -46,11 +46,12 @@ st.caption(
 )
 
 # Track navigation using a shared "current_page" key set by every page.
-# When this page loads and sees a different current_page, user just arrived.
 _MY_PAGE = "policy_config"
 if st.session_state.get("_current_page") != _MY_PAGE:
     st.session_state.pop("pc_edit_table_label", None)
     st.session_state.pop("pc_edit_table_sel",   None)
+    # Reset view filters to sane defaults on fresh arrival
+    st.session_state["pc_show_all"] = True   # show all tables by default
 st.session_state["_current_page"] = _MY_PAGE
 
 tab_view, tab_edit, tab_bulk, tab_templates = st.tabs([
@@ -163,15 +164,17 @@ with tab_view:
                 key="pc_view_it",
                 style="width:100%;font-size:12px;",
                 classes="display compact stripe hover nowrap",
+                maxBytes=0,
+                downsampling_warning=False,
                 lengthMenu=[[25, 50, 100, 250, -1],
                             ["25", "50", "100", "250", "All"]],
                 pageLength=100,
                 scrollX=True,
                 columnDefs=[
-                    {"width": "280px", "targets": 0},    # Table FQN
-                    {"width": "90px",  "targets": [1,2,3]},  # domain/layer/tier
-                    {"width": "90px",  "targets": [4,5]},    # template/strategy
-                    {"width": "70px",  "targets": "_all"},   # rest
+                    {"width": "260px", "targets": 0},
+                    {"width": "80px",  "targets": [1, 2, 3]},
+                    {"width": "85px",  "targets": [4, 5]},
+                    {"width": "65px",  "targets": "_all"},
                     {"className": "dt-center", "targets": "_all"},
                     {"className": "dt-left",   "targets": [0, 1]},
                 ],
