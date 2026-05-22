@@ -264,16 +264,28 @@ class HKEngine(BaseEngine):
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_NO_CONFIG")
             return "skipped"
 
-        # ── Gate 1 — Upstream batch completion ────────────────────────────────
-        # Skipped if gate1_enabled=0 in hk_config (default until ControlM API ready)
+        # ── Gate 1 — Upstream batch completion (Control-M) ────────────────────
+        # gate1_enabled=0 by default until Control-M API integration is ready.
+        # Uses controlm_pipeline_job (or dependent_on_controlm_job override).
+        # No job_type check needed — all Control-M jobs are treated the same way.
         if hk_config.get("gate1_enabled", 0):
-            upstream_job = table_row.get("dependent_job_name")
-            if upstream_job and table_row.get("dependent_job_type") == "glue":
+            upstream_job = (
+                table_row.get("dependent_on_controlm_job")
+                or table_row.get("controlm_pipeline_job")
+                or table_row.get("dependent_job_name")  # legacy fallback
+            )
+            if upstream_job:
                 if not is_upstream_job_complete(upstream_job):
                     self._log_table_skip(fqn, "SKIP_UPSTREAM_PENDING")
                     self._write_log(table_row, "hk_run", "SKIPPED",
                                     skip_reason="SKIP_UPSTREAM_PENDING")
                     return "skipped"
+            else:
+                log.warning(
+                    "gate1_enabled_but_no_job_configured",
+                    table_fqn=fqn,
+                    hint="Set Pipeline ControlM Job in Table Registration.",
+                )
         else:
             log.debug("gate1_disabled", table_fqn=fqn)
 

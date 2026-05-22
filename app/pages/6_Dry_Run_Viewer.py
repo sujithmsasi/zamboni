@@ -165,7 +165,11 @@ with tab1:
 
         # Gate status — reflects actual gate_enabled flags from hk_config
         st.markdown("#### 🚦 Gate Summary")
-        upstream = reg.get("dependent_job_name") or reg.get("controlm_pipeline_job")
+        upstream = (
+            reg.get("dependent_on_controlm_job")
+            or reg.get("controlm_pipeline_job")
+            or reg.get("dependent_job_name")  # legacy fallback
+        )
         g1_on = bool(cfg.get("gate1_enabled", 0))
         g2_on = bool(cfg.get("gate2_enabled", 1))
         g3_on = bool(cfg.get("gate3_enabled", 1))
