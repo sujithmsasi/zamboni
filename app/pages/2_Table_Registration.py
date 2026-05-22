@@ -187,7 +187,7 @@ with tab_browse:
                 df_tables = pd.DataFrame(tables)
 
                 # ── Pattern search filter ─────────────────────────────────────
-                _br_col1, _br_col2 = st.columns([4, 1])
+                _br_col1, _br_col2 = st.columns([3, 1])
                 with _br_col1:
                     _br_pattern = st.text_input(
                         "Filter by name pattern",
@@ -197,14 +197,24 @@ with tab_browse:
                              "Or plain substring (no wildcards needed).",
                     )
                 with _br_col2:
+                    st.markdown("<div style='padding-top:28px'>", unsafe_allow_html=True)
                     _br_select_all = st.button(
                         "✅ Select All Visible",
                         key=f"browse_selall_{selected_db}",
+                        use_container_width=True,
                     )
+                    st.markdown("</div>", unsafe_allow_html=True)
 
-                # Apply filter — always show unregistered only (clearest default)
+                _br_unreg_only = st.checkbox(
+                    "Show only unregistered tables",
+                    value=False,
+                    key=f"browse_unreg_{selected_db}",
+                    help="Uncheck to show all tables — useful for moving tables between domains.",
+                )
+
+                # Apply filter
                 _df_filtered = df_tables.copy()
-                if "Registered" in _df_filtered.columns:
+                if _br_unreg_only and "Registered" in _df_filtered.columns:
                     _df_filtered = _df_filtered[_df_filtered["Registered"] == "—"]
                 if _br_pattern.strip():
                     _raw = _br_pattern.strip()
