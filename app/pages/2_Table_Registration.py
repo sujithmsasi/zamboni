@@ -185,23 +185,72 @@ with tab_browse:
                 c3.metric("Already Registered", reg_count)
 
                 df_tables = pd.DataFrame(tables)
-                df_tables.insert(0, "Select", False)
+
+                # ── Pattern search filter ─────────────────────────────────────
+                _br_col1, _br_col2, _br_col3 = st.columns([3, 1, 1])
+                with _br_col1:
+                    _br_pattern = st.text_input(
+                        "Filter by name pattern",
+                        key=f"browse_pattern_{selected_db}",
+                        placeholder="aps_%  or  %_staging  or  fin_aps",
+                        help="Supports SQL-style wildcards (%) or plain substring match.",
+                    )
+                with _br_col2:
+                    _br_unreg_only = st.checkbox(
+                        "Unregistered only",
+                        value=True,
+                        key=f"browse_unreg_{selected_db}",
+                    )
+                with _br_col3:
+                    _br_select_all = st.button(
+                        "✅ Select All Visible",
+                        key=f"browse_selall_{selected_db}",
+                    )
+
+                # Apply filters
+                _df_filtered = df_tables.copy()
+                if _br_pattern.strip():
+                    _pat = _br_pattern.strip().replace("%", ".*").replace("_", ".")
+                    _df_filtered = _df_filtered[
+                        _df_filtered["Name"].str.contains(
+                            _pat if ".*" in _pat else _br_pattern.strip(),
+                            case=False, regex=(".*" in _pat),
+                        )
+                    ]
+                if _br_unreg_only and "Registered" in _df_filtered.columns:
+                    _df_filtered = _df_filtered[_df_filtered["Registered"] == "—"]
+
+                _df_filtered = _df_filtered.copy()
+                _df_filtered.insert(0, "Select", False)
+
+                # Select All button sets all visible rows
+                _sel_key = f"browse_{selected_db}_sel"
+                if _br_select_all:
+                    st.session_state[_sel_key] = True
 
                 edited = st.data_editor(
-                    df_tables,
+                    _df_filtered,
                     column_config={
                         "Select":     st.column_config.CheckboxColumn(
-                            "Select", default=False,
-                            help="Select tables to register with Zamboni",
+                            "✓", default=False,
+                            help="Check to include in registration",
                         ),
                         "Registered": st.column_config.TextColumn("Registered"),
                         "Domain":     st.column_config.TextColumn("Current Domain"),
+                        "Name":       st.column_config.TextColumn("Table Name"),
                     },
                     use_container_width=True,
                     hide_index=True,
                     disabled=["Name","Format","Registered","Domain",
                               "Tier","Layer","CreateTime","Location"],
                     key=f"browse_{selected_db}",
+                    height=min(400, max(200, len(_df_filtered) * 35 + 40)),
+                )
+
+                st.caption(
+                    f"Showing **{len(_df_filtered)}** of **{len(df_tables)}** tables"
+                    + (f" (filtered by `{_br_pattern.strip()}`)" if _br_pattern.strip() else "")
+                    + (" · unregistered only" if _br_unreg_only else "")
                 )
 
                 selected_rows = edited[edited["Select"]]
@@ -1050,50 +1099,71 @@ with tab_bulk_ctrlm:
         )
 
         _bc1, _bc2 = st.columns(2)
-        with _bc1:
+        import datetime as _dt_bc
+        # Row 1: Control-M Job Name + start time + duration
+        _brow1a, _brow1b, _brow1c = st.columns([3, 1, 1])
+        with _brow1a:
             _bulk_pipeline = st.text_input(
                 "Control-M Job Name *",
                 placeholder="ACE-DA-FIN-APS-INGEST-PRD",
                 key="bulk_ctrlm_pipeline",
                 help="Control-M job that loads data into the matched tables.",
             )
-            _bulk_hk = st.text_input(
-                "HK Control-M Job",
-                placeholder="ACE-DA-FIN-HK-PRD",
-                key="bulk_ctrlm_hk",
-                help="Control-M job that triggers Zamboni HK (optional).",
-            )
-            _bulk_gate1 = st.text_input(
-                "AWS Job Name — Gate 1 (optional)",
-                placeholder="Leave blank to use Control-M Job Name",
-                key="bulk_ctrlm_gate1",
-                help="AWS job (Glue/Lambda/Step Function) for Gate 1 check. "
-                     "Leave blank to use Control-M Job Name.",
-            )
-            _bulk_jtype = st.selectbox(
-                "Job Type",
-                ["controlm", "glue", "lambda", "step_functions", "airflow", "other"],
-                key="bulk_ctrlm_jtype",
-                help="AWS service type. Used by Gate 1 engine to call the right API.",
-            )
-        with _bc2:
-            import datetime as _dt_bc
+        with _brow1b:
             _bulk_start = st.time_input(
                 "Job run start time",
                 value=_dt_bc.time(2, 0),
                 key="bulk_ctrlm_start",
                 step=_dt_bc.timedelta(minutes=15),
             )
+        with _brow1c:
             _bulk_dur = st.number_input(
                 "Expected job duration (min)",
                 value=0, min_value=0, max_value=480,
                 key="bulk_ctrlm_dur",
             )
+
+        # Row 2: HK Job + Gate 1 + Job Type
+        _brow2a, _brow2b, _brow2c = st.columns(3)
+        with _brow2a:
+            _bulk_hk = st.text_input(
+                "HK Control-M Job",
+                placeholder="ACE-DA-FIN-HK-PRD",
+                key="bulk_ctrlm_hk",
+                help="Control-M job that triggers Zamboni HK (optional).",
+            )
+        with _brow2b:
+            _bulk_gate1 = st.text_input(
+                "AWS Job Name — Gate 1 (optional)",
+                placeholder="Leave blank to use Control-M Job Name",
+                key="bulk_ctrlm_gate1",
+                help="AWS Glue/Lambda/Step Function job for Gate 1 check.",
+            )
+        with _brow2c:
+            _bulk_jtype = st.selectbox(
+                "Job Type",
+                ["controlm", "glue", "lambda", "step_functions", "airflow", "other"],
+                key="bulk_ctrlm_jtype",
+                help="AWS service type used by Gate 1 engine.",
+            )
+
+        # Row 3: CI Number + Stream ID
+        _brow3a, _brow3b, _brow3c = st.columns(3)
+        with _brow3a:
             _bulk_ci = st.text_input(
                 "CI Number (optional — leave blank to keep existing)",
                 placeholder="CI-10300",
                 key="bulk_ctrlm_ci",
             )
+        with _brow3b:
+            _bulk_stream = st.text_input(
+                "Stream ID (optional — leave blank to keep existing)",
+                placeholder="STR-FIN-APS-0001",
+                key="bulk_ctrlm_stream",
+                help="Groups tables into a pipeline stream.",
+            )
+        with _brow3c:
+            st.empty()
 
         st.markdown("**Apply to tables matching:**")
         _bm1, _bm2, _bm3 = st.columns(3)
@@ -1222,7 +1292,7 @@ with tab_bulk_ctrlm:
                     _sets = [
                         f"controlm_pipeline_job = '{_bulk_pipeline.strip()}'",
                         f"controlm_hk_job = '{_bulk_hk.strip()}'",
-                        f"dependent_on_controlm_job = '{_bulk_gate1.strip()}'",
+                        f"dependent_on_controlm_job = '{_bulk_gate1.strip() or _bulk_pipeline.strip()}'",
                         f"dependent_job_type = '{_bulk_jtype}'",
                     "controlm_job_start_time = '" + _bulk_start.strftime("%H:%M") + "'",
                         f"controlm_expected_duration_min = {int(_bulk_dur)}",
@@ -1230,6 +1300,8 @@ with tab_bulk_ctrlm:
                     ]
                     if _bulk_ci.strip():
                         _sets.append(f"ci_number = '{_bulk_ci.strip()}'")
+                    if _bulk_stream.strip():
+                        _sets.append(f"stream_id = '{_bulk_stream.strip()}'")
 
                     _applied = 0
                     for _tfqn in _to_apply:
@@ -1299,9 +1371,9 @@ with tab_bulk_ctrlm:
                 _map_df = _pd_imp.read_csv(_io_imp.BytesIO(uploaded.read()))
                 _map_df.columns = [c.strip().lower() for c in _map_df.columns]
 
-                _missing = [c for c in ["domain", "pipeline_job"] if c not in _map_df.columns]
+                _missing = [c for c in ["domain", "controlm_job_name"] if c not in _map_df.columns]
                 if _missing:
-                    st.error(f"CSV missing required columns: {_missing}")
+                    st.error(f"CSV missing required columns: {_missing}. Required: domain, controlm_job_name. Download the template from Export tab for correct headers.")
                 else:
                     # Fill optional columns with defaults
                     # Support both old and new column names for backward compat
@@ -1358,7 +1430,7 @@ with tab_bulk_ctrlm:
                         except Exception:
                             _n = -1
                         _prev_rows.append({
-                            "Job": str(_mr.get("pipeline_job","")),
+                            "Job": str(_mr.get("controlm_job_name","")),
                             "Type": str(_mr.get("job_type","controlm")),
                             "Domain": str(_mr.get("domain","")),
                             "Layer": str(_mr.get("layer","")),

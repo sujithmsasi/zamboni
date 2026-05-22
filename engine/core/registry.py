@@ -267,6 +267,7 @@ def register_table(
     dependent_on_controlm_job: str | None = None,
     controlm_job_start_time: str = "02:00",
     controlm_expected_duration_min: int = 0,
+    dependent_job_type: str = "controlm",
     dry_run: bool = False,
 ) -> bool:
     """
@@ -330,7 +331,7 @@ def register_table(
             NULL,
             0,
             NULL,
-            'none',
+            '{dependent_job_type}',
             {f"'{_esc(controlm_pipeline_job)}'" if controlm_pipeline_job else "NULL"},
             {f"'{_esc(controlm_hk_job)}'"       if controlm_hk_job       else "NULL"},
             {f"'{_esc(dependent_on_controlm_job or controlm_pipeline_job or '')}'" },
