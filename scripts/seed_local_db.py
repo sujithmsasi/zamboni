@@ -96,6 +96,20 @@ CREATE TABLE IF NOT EXISTS stream_registry (
     notes                   TEXT DEFAULT ''
 )""",
 
+"controlm_jobs": """
+CREATE TABLE IF NOT EXISTS controlm_jobs (
+    job_name              TEXT PRIMARY KEY,
+    job_type              TEXT DEFAULT 'controlm',
+    description           TEXT DEFAULT '',
+    domain                TEXT DEFAULT '',
+    environment           TEXT DEFAULT 'prod',
+    expected_start_time   TEXT DEFAULT '',
+    expected_duration_min INTEGER DEFAULT 0,
+    active                INTEGER DEFAULT 1,
+    registered_by         TEXT DEFAULT 'system',
+    created_at            TEXT,
+    updated_at            TEXT
+)""",
 "hk_config": """
 CREATE TABLE IF NOT EXISTS hk_config (
     table_fqn                       TEXT PRIMARY KEY,

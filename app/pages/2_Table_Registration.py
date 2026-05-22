@@ -197,12 +197,23 @@ with tab_browse:
                              "Or plain substring (no wildcards needed).",
                     )
                 with _br_col2:
-                    st.markdown("<div style='padding-top:28px'>", unsafe_allow_html=True)
-                    _br_select_all = st.button(
-                        "✅ Select All Visible",
-                        key=f"browse_selall_{selected_db}",
-                        use_container_width=True,
-                    )
+                    st.markdown("<div style='padding-top:28px;display:flex;gap:6px'>",
+                                unsafe_allow_html=True)
+                    _br_sel_col, _br_des_col = st.columns(2)
+                    with _br_sel_col:
+                        _br_select_all = st.button(
+                            "✅ Select All",
+                            key=f"browse_selall_{selected_db}",
+                            use_container_width=True,
+                            help="Select all visible (filtered) rows",
+                        )
+                    with _br_des_col:
+                        _br_deselect_all = st.button(
+                            "⬜ Clear All",
+                            key=f"browse_desall_{selected_db}",
+                            use_container_width=True,
+                            help="Clear all selections",
+                        )
                     st.markdown("</div>", unsafe_allow_html=True)
 
                 _br_unreg_only = st.checkbox(
@@ -237,15 +248,19 @@ with tab_browse:
                 _filter_sig = f"{selected_db}_{_br_pattern.strip()}"
                 _editor_key = f"browse_editor_{hash(_filter_sig) % 999999}"
 
-                # Select All: set all rows to True in the editor's session_state
+                # Select All / Clear All
                 if _br_select_all:
                     _sa_df = _df_filtered.copy()
                     _sa_df.insert(0, "Select", True)
-                    # Store pre-selected state keyed by filter
+                    st.session_state[f"browse_selall_data_{_filter_sig}"] = _sa_df
+                    st.rerun()
+                if _br_deselect_all:
+                    _sa_df = _df_filtered.copy()
+                    _sa_df.insert(0, "Select", False)
                     st.session_state[f"browse_selall_data_{_filter_sig}"] = _sa_df
                     st.rerun()
 
-                # Load pre-selected state if Select All was clicked
+                # Load state from Select/Clear All, or default to all unchecked
                 _sa_data = st.session_state.get(f"browse_selall_data_{_filter_sig}")
                 if _sa_data is not None:
                     _display_df = _sa_data
@@ -304,27 +319,23 @@ with tab_browse:
                             with col1:
                                 domain = st.selectbox(
                                     "Domain *",
-                                    domains,
-                                    help="Business domain this table belongs to. "
-                                         "Drives default retention and escalation routing.",
+                                    ["— select domain —"] + domains,
+                                    index=0,
+                                    help="Business domain this table belongs to.",
                                 )
                             with col2:
                                 layer = st.selectbox(
                                     "Layer *",
-                                    VALID_LAYERS,
-                                    help="Pipeline layer: staging (raw ingest), "
-                                         "datalake (deduped), base (SCD2/CDC), "
-                                         "master (aggregated).",
+                                    ["— select layer —"] + VALID_LAYERS,
+                                    index=0,
+                                    help="Pipeline layer: staging, datalake, base, master.",
                                 )
                             with col3:
                                 tier = st.selectbox(
                                     "Tier *",
-                                    VALID_TIERS,
-                                    index=1,
-                                    help="Criticality tier — controls Athena workgroup routing: "
-                                         "critical=zamboni-critical, "
-                                         "standard=zamboni-standard, "
-                                         "low=zamboni-low.",
+                                    ["— select tier —"] + VALID_TIERS,
+                                    index=0,
+                                    help="Criticality: critical / standard / low.",
                                 )
 
                             col4, col5 = st.columns(2)
@@ -1100,10 +1111,11 @@ with tab_engine_flags:
 with tab_bulk_ctrlm:
     st.subheader("🔗 Bulk Apply Control-M Job Names")
 
-    bc_tab_manual, bc_tab_import, bc_tab_export = st.tabs([
+    bc_tab_manual, bc_tab_import, bc_tab_export, bc_tab_jobs = st.tabs([
         "🖊️ Manual Bulk Apply",
         "📥 Import Job Mapping",
         "📤 Export Mapping Template",
+        "🗂️ Control-M Job Registry",
     ])
 
     # ── Sub-tab: Manual Bulk Apply ────────────────────────────────────────────
@@ -1603,3 +1615,204 @@ with tab_bulk_ctrlm:
 """)
         except Exception as _ee:
             st.error(f"Export failed: {_ee}")
+
+
+    # ── Sub-tab: Control-M Job Registry ──────────────────────────────────────
+    with bc_tab_jobs:
+        st.markdown(
+            "Maintain a registry of all active Control-M (and AWS) jobs. "
+            "Jobs added here appear as **search suggestions** in all Control-M "
+            "job name fields across the app — no need to remember exact names."
+        )
+
+        _CTRLM_JOBS_TABLE = "controlm_jobs"
+
+        # Helper to load jobs
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _load_ctrlm_jobs():
+            try:
+                return cached_read_registry(
+                    f"SELECT job_name, job_type, domain, description, "
+                    f"expected_start_time, expected_duration_min, active "
+                    f"FROM {_CTRLM_JOBS_TABLE} ORDER BY job_name"
+                )
+            except Exception:
+                import pandas as _pd_jobs
+                return _pd_jobs.DataFrame(columns=[
+                    "job_name","job_type","domain","description",
+                    "expected_start_time","expected_duration_min","active"
+                ])
+
+        _jobs_df = _load_ctrlm_jobs()
+
+        # ── View existing jobs ────────────────────────────────────────────────
+        if not _jobs_df.empty:
+            st.markdown(f"**{len(_jobs_df)} registered job(s)**")
+            from itables.streamlit import interactive_table as _it_jobs
+            _disp_jobs = _jobs_df.copy()
+            _disp_jobs.insert(0, "#", range(1, len(_disp_jobs)+1))
+            _it_jobs(
+                _disp_jobs, key="ctrlm_jobs_it",
+                style="width:100%;font-size:12px;",
+                classes="display compact cell-border stripe hover nowrap",
+                maxBytes=0, downsampling_warning=False,
+                lengthMenu=[[15,25,50,100,-1],["15","25","50","All"]],
+                pageLength=15, scrollX=True,
+            )
+
+        st.divider()
+
+        # ── Add / bulk upload ──────────────────────────────────────────────────
+        bj_tab_add, bj_tab_upload = st.tabs(["➕ Add Single Job", "📥 Bulk Upload CSV"])
+
+        with bj_tab_add:
+            _bj1, _bj2, _bj3 = st.columns(3)
+            with _bj1:
+                _new_job_name = st.text_input(
+                    "Job Name *",
+                    placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                    key="new_ctrlm_job_name",
+                )
+                _new_job_type = st.selectbox(
+                    "Job Type",
+                    ["controlm","glue","lambda","step_functions","airflow","other"],
+                    key="new_ctrlm_job_type",
+                )
+            with _bj2:
+                _new_job_domain = st.selectbox(
+                    "Domain (optional)",
+                    [""] + _get_domains(),
+                    key="new_ctrlm_job_domain",
+                )
+                _new_job_start = st.text_input(
+                    "Expected start time (HH:MM)",
+                    placeholder="02:00",
+                    key="new_ctrlm_job_start",
+                )
+            with _bj3:
+                _new_job_dur = st.number_input(
+                    "Expected duration (min)",
+                    value=0, min_value=0, max_value=480,
+                    key="new_ctrlm_job_dur",
+                )
+                _new_job_desc = st.text_input(
+                    "Description",
+                    placeholder="Finance APS ingest pipeline",
+                    key="new_ctrlm_job_desc",
+                )
+
+            if st.button("➕ Add Job", type="primary", key="add_ctrlm_job"):
+                if not _new_job_name.strip():
+                    st.error("Job Name is required.")
+                else:
+                    from datetime import UTC as _JUTC
+                    from datetime import datetime as _jdt
+                    _jnow = _jdt.now(_JUTC).strftime("%Y-%m-%d %H:%M:%S")
+                    try:
+                        execute_write(
+                            f"INSERT OR REPLACE INTO {_CTRLM_JOBS_TABLE} "
+                            f"(job_name, job_type, domain, description, "
+                            f"expected_start_time, expected_duration_min, "
+                            f"active, registered_by, created_at, updated_at) "
+                            f"VALUES ('{_new_job_name.strip()}', "
+                            f"'{_new_job_type}', '{_new_job_domain}', "
+                            f"'{_new_job_desc.strip()}', "
+                            f"'{_new_job_start.strip()}', {int(_new_job_dur)}, "
+                            f"1, '{current_user()}', '{_jnow}', '{_jnow}')",
+                            dry_run=False,
+                        )
+                        _load_ctrlm_jobs.clear()
+                        st.success(f"✅ `{_new_job_name.strip()}` added to registry.")
+                        st.rerun()
+                    except Exception as _je:
+                        st.error(f"Failed: {_je}")
+
+        with bj_tab_upload:
+            st.markdown(
+                "Upload a CSV with your full Control-M job list. "
+                "Existing jobs are updated (upsert). "
+                "Required column: `job_name`. Optional: `job_type`, `domain`, "
+                "`description`, `expected_start_time`, `expected_duration_min`."
+            )
+            _jobs_upload = st.file_uploader(
+                "Upload Control-M Jobs CSV",
+                type=["csv"],
+                key="ctrlm_jobs_upload",
+            )
+            if _jobs_upload:
+                import io as _jio
+
+                import pandas as _pd_jobs
+                try:
+                    _jdf = _pd_jobs.read_csv(_jio.BytesIO(_jobs_upload.read()),
+                                             skip_blank_lines=True)
+                    _jdf.dropna(how="all", inplace=True)
+                    _jdf.columns = [c.strip().lower() for c in _jdf.columns]
+                    for _jsc in _jdf.select_dtypes(include="object").columns:
+                        _jdf[_jsc] = _jdf[_jsc].astype(str).str.strip().replace(
+                            {"nan":"","None":""}
+                        )
+                    _jdf = _jdf[_jdf.get("job_name", _pd_jobs.Series()).ne("")]
+
+                    if "job_name" not in _jdf.columns:
+                        st.error("CSV must have a `job_name` column.")
+                    else:
+                        # Set defaults
+                        for _jc, _jd in [
+                            ("job_type","controlm"),("domain",""),
+                            ("description",""),("expected_start_time",""),
+                            ("expected_duration_min",0),
+                        ]:
+                            if _jc not in _jdf.columns:
+                                _jdf[_jc] = _jd
+                        _jdf["expected_duration_min"] = (
+                            _pd_jobs.to_numeric(
+                                _jdf["expected_duration_min"], errors="coerce"
+                            ).fillna(0).astype(int)
+                        )
+
+                        st.info(f"**{len(_jdf)} job(s)** in CSV. Preview:")
+                        from itables.streamlit import interactive_table as _it_jup
+                        _it_jup(_jdf, key="jobs_upload_preview",
+                                style="width:100%;font-size:12px;",
+                                classes="display compact cell-border stripe hover nowrap",
+                                maxBytes=0, downsampling_warning=False,
+                                pageLength=15, scrollX=True)
+
+                        if st.button(
+                            f"📥 Import {len(_jdf)} Job(s)",
+                            type="primary",
+                            key="import_ctrlm_jobs",
+                        ):
+                            from datetime import UTC as _JUTC2
+                            from datetime import datetime as _jdt2
+                            _jnow2 = _jdt2.now(_JUTC2).strftime("%Y-%m-%d %H:%M:%S")
+                            _j_ok = _j_fail = 0
+                            for _, _jr in _jdf.iterrows():
+                                try:
+                                    execute_write(
+                                        f"INSERT OR REPLACE INTO {_CTRLM_JOBS_TABLE} "
+                                        f"(job_name, job_type, domain, description, "
+                                        f"expected_start_time, expected_duration_min, "
+                                        f"active, registered_by, created_at, updated_at) "
+                                        f"VALUES ('{str(_jr['job_name'])}', "
+                                        f"'{str(_jr.get('job_type','controlm'))}', "
+                                        f"'{str(_jr.get('domain',''))}', "
+                                        f"'{str(_jr.get('description',''))}', "
+                                        f"'{str(_jr.get('expected_start_time',''))}', "
+                                        f"{int(_jr.get('expected_duration_min',0))}, "
+                                        f"1, '{current_user()}', '{_jnow2}', '{_jnow2}')",
+                                        dry_run=False,
+                                    )
+                                    _j_ok += 1
+                                except Exception as _jbe:
+                                    _j_fail += 1
+                                    st.error(f"`{_jr['job_name']}` failed: {_jbe}")
+                            _load_ctrlm_jobs.clear()
+                            st.success(
+                                f"✅ Imported {_j_ok} job(s)"
+                                + (f", {_j_fail} failed" if _j_fail else "")
+                            )
+                            st.rerun()
+                except Exception as _jpe:
+                    st.error(f"CSV parse failed: {_jpe}")

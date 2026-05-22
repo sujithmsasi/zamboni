@@ -284,18 +284,25 @@ def register_table(
 
     if table_exists(table_fqn):
         # Table already registered — do an UPDATE instead of failing
+        _gate1_job = dependent_on_controlm_job or controlm_pipeline_job or ""
         upd_sql = f"""
             UPDATE {STREAM_REGISTRY_TABLE}
-            SET domain             = '{domain}',
-                layer              = '{layer}',
-                tier               = '{tier}',
-                table_format       = '{table_format}',
-                environment        = '{environment}',
-                owner_email        = '{_esc(owner_email)}',
-                ci_number          = '{_esc(ci_number)}',
-                stream_id          = '{sid}',
-                registered_by      = '{registered_by}',
-                updated_at         = '{now}'
+            SET domain                         = '{domain}',
+                layer                          = '{layer}',
+                tier                           = '{tier}',
+                table_format                   = '{table_format}',
+                environment                    = '{environment}',
+                owner_email                    = '{_esc(owner_email)}',
+                ci_number                      = '{_esc(ci_number)}',
+                stream_id                      = '{sid}',
+                controlm_pipeline_job          = '{_esc(controlm_pipeline_job or "")}',
+                controlm_hk_job                = '{_esc(controlm_hk_job or "")}',
+                dependent_on_controlm_job      = '{_esc(_gate1_job)}',
+                dependent_job_type             = '{dependent_job_type}',
+                controlm_job_start_time        = '{controlm_job_start_time}',
+                controlm_expected_duration_min = {int(controlm_expected_duration_min)},
+                registered_by                  = '{registered_by}',
+                updated_at                     = '{now}'
             WHERE table_fqn = '{table_fqn}'
         """
         log.info("registry.update_table", table_fqn=table_fqn, domain=domain, dry_run=dry_run)
