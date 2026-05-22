@@ -275,28 +275,38 @@ with tab_browse:
                             )
 
                             st.markdown("**🔗 Control-M Integration (optional)**")
-                            _rc1, _rc2, _rc3 = st.columns(3)
+                            _rc1, _rc2, _rc3, _rc4 = st.columns(4)
                             with _rc1:
                                 reg_pipeline_job = st.text_input(
-                                    "Pipeline Job",
+                                    "Control-M Job Name *",
                                     placeholder="ACE-DA-FIN-APS-INGEST-PRD",
                                     key="reg_ctrlm_pipeline",
-                                    help="Control-M ETL job that writes to these tables.",
+                                    help="The Control-M job that writes data to these tables.",
                                 )
                             with _rc2:
                                 reg_hk_job = st.text_input(
-                                    "HK Job",
+                                    "HK Control-M Job",
                                     placeholder="ACE-DA-FIN-HK-PRD",
                                     key="reg_ctrlm_hk",
                                     help="Control-M job that triggers Zamboni HK.",
                                 )
                             with _rc3:
                                 reg_gate1_job = st.text_input(
-                                    "Gate 1 — Upstream Job (optional)",
-                                    placeholder="Leave blank to use Pipeline Job",
+                                    "AWS Job Name — Gate 1 (optional)",
+                                    placeholder="Leave blank to use Control-M Job Name",
                                     key="reg_ctrlm_gate1",
-                                    help="Defaults to Pipeline ControlM Job if blank. "
-                                         "Override only when Gate 1 differs from the pipeline job.",
+                                    help="AWS job that must complete before HK starts. "
+                                         "Can be a Glue job, Lambda, Step Function etc. "
+                                         "Leave blank to use the Control-M Job Name.",
+                                )
+                            with _rc4:
+                                reg_job_type = st.selectbox(
+                                    "Job Type",
+                                    ["controlm", "glue", "lambda",
+                                     "step_functions", "airflow", "other"],
+                                    key="reg_ctrlm_jtype",
+                                    help="AWS service type. Used by Gate 1 to call "
+                                         "the correct completion-check API.",
                                 )
                             import datetime as _dt_reg
                             _rt1, _rt2, _rt3 = st.columns(3)
@@ -355,6 +365,7 @@ with tab_browse:
                                             dependent_on_controlm_job=reg_gate1_job.strip() or reg_pipeline_job.strip() or None,
                                             controlm_job_start_time=reg_job_start.strftime("%H:%M"),
                                             controlm_expected_duration_min=int(reg_job_dur),
+                                            dependent_job_type=reg_job_type,
                                             registered_by=f"streamlit:{current_user()}",
                                             notes=notes or "",
                                             dry_run=is_dry_run(),
@@ -493,9 +504,9 @@ with tab_registered:
                 "ci_number":                    "CI",
                 "stream_id":                    "Stream",
                 "owner_email":                  "Owner",
-                "controlm_pipeline_job":        "Pipeline ControlM Job",
-                "controlm_hk_job":              "HK Job",
-                "dependent_on_controlm_job":    "Gate 1 Job",
+                "controlm_pipeline_job":        "Control-M Job",
+                "controlm_hk_job":              "HK ControlM Job",
+                "dependent_on_controlm_job":    "AWS Gate 1 Job",
                 "controlm_job_start_time":      "Job Start",
                 "controlm_expected_duration_min": "Job Dur (min)",
                 "hk_enabled":                   "HK",
@@ -643,30 +654,42 @@ with tab_edit_reg:
                     )
 
                     st.markdown("**🔗 Control-M Integration**")
-                    cm1, cm2, cm3 = st.columns(3)
+                    cm1, cm2, cm3, cm4 = st.columns(4)
                     with cm1:
                         e_pipeline_job = st.text_input(
-                            "Pipeline Job (writes to table)",
+                            "Control-M Job Name *",
                             value=str(trow.get("controlm_pipeline_job") or ""),
                             key=f"{_ek}_pipeline_job",
                             placeholder="ACE-DA-FIN-APS-INGEST-PRD",
-                            help="The Control-M job that loads data into this table.",
+                            help="Control-M job that loads data into this table.",
                         )
                     with cm2:
                         e_hk_job = st.text_input(
-                            "HK Job (runs Zamboni)",
+                            "HK Control-M Job",
                             value=str(trow.get("controlm_hk_job") or ""),
                             key=f"{_ek}_hk_job",
-                            placeholder="ACE-DA-FIN-APS-HK-PRD",
-                            help="The Control-M job that triggers Zamboni HK.",
+                            placeholder="ACE-DA-FIN-HK-PRD",
+                            help="Control-M job that triggers Zamboni HK.",
                         )
                     with cm3:
                         e_upstream_job = st.text_input(
-                            "Gate 1 — Upstream Job",
+                            "AWS Job Name — Gate 1 (optional)",
                             value=str(trow.get("dependent_on_controlm_job") or ""),
                             key=f"{_ek}_upstream_job",
-                            placeholder="ACE-DA-FIN-APS-INGEST-PRD",
-                            help="Must SUCCEED before HK starts (Gate 1 check).",
+                            placeholder="Leave blank to use Control-M Job Name",
+                            help="AWS job (Glue/Lambda/Step Function) that must "
+                                 "complete before HK starts. Blank = use Control-M Job Name.",
+                        )
+                    with cm4:
+                        _jtype_opts = ["controlm","glue","lambda","step_functions","airflow","other"]
+                        _cur_jtype  = str(trow.get("dependent_job_type") or "controlm")
+                        _jtype_idx  = _jtype_opts.index(_cur_jtype) if _cur_jtype in _jtype_opts else 0
+                        e_job_type = st.selectbox(
+                            "Job Type",
+                            _jtype_opts,
+                            index=_jtype_idx,
+                            key=f"{_ek}_job_type",
+                            help="AWS service type for Gate 1 API check.",
                         )
 
                     # Job run schedule (time picker)
@@ -721,6 +744,7 @@ with tab_edit_reg:
                                         controlm_pipeline_job           = '{_esc_v(e_pipeline_job)}',
                                         controlm_hk_job                 = '{_esc_v(e_hk_job)}',
                                         dependent_on_controlm_job       = '{_esc_v(e_upstream_job)}',
+                                        dependent_job_type              = '{e_job_type}',
                                         controlm_job_start_time         = '{e_job_start.strftime("%H:%M")}',
                                         controlm_expected_duration_min  = {int(e_expected_dur)},
                                         updated_at                 = '{_now_edit}'
@@ -1028,21 +1052,29 @@ with tab_bulk_ctrlm:
         _bc1, _bc2 = st.columns(2)
         with _bc1:
             _bulk_pipeline = st.text_input(
-                "Pipeline Job Name *",
+                "Control-M Job Name *",
                 placeholder="ACE-DA-FIN-APS-INGEST-PRD",
                 key="bulk_ctrlm_pipeline",
-                help="Control-M ETL job that writes to these tables.",
+                help="Control-M job that loads data into the matched tables.",
             )
             _bulk_hk = st.text_input(
-                "HK Job Name",
+                "HK Control-M Job",
                 placeholder="ACE-DA-FIN-HK-PRD",
                 key="bulk_ctrlm_hk",
+                help="Control-M job that triggers Zamboni HK (optional).",
             )
             _bulk_gate1 = st.text_input(
-                "Gate 1 — Upstream Job",
-                placeholder="ACE-DA-FIN-APS-INGEST-PRD",
+                "AWS Job Name — Gate 1 (optional)",
+                placeholder="Leave blank to use Control-M Job Name",
                 key="bulk_ctrlm_gate1",
-                help="Must complete before HK starts. Usually same as Pipeline Job.",
+                help="AWS job (Glue/Lambda/Step Function) for Gate 1 check. "
+                     "Leave blank to use Control-M Job Name.",
+            )
+            _bulk_jtype = st.selectbox(
+                "Job Type",
+                ["controlm", "glue", "lambda", "step_functions", "airflow", "other"],
+                key="bulk_ctrlm_jtype",
+                help="AWS service type. Used by Gate 1 engine to call the right API.",
             )
         with _bc2:
             import datetime as _dt_bc
@@ -1191,7 +1223,8 @@ with tab_bulk_ctrlm:
                         f"controlm_pipeline_job = '{_bulk_pipeline.strip()}'",
                         f"controlm_hk_job = '{_bulk_hk.strip()}'",
                         f"dependent_on_controlm_job = '{_bulk_gate1.strip()}'",
-                        "controlm_job_start_time = '" + _bulk_start.strftime("%H:%M") + "'",
+                        f"dependent_job_type = '{_bulk_jtype}'",
+                    "controlm_job_start_time = '" + _bulk_start.strftime("%H:%M") + "'",
                         f"controlm_expected_duration_min = {int(_bulk_dur)}",
                         f"updated_at = '{_now}'",
                     ]
@@ -1246,15 +1279,15 @@ with tab_bulk_ctrlm:
 
         _EXPECTED_COLS = [
             "domain", "layer", "database_name", "table_pattern",
-            "pipeline_job", "job_type", "hk_job", "gate1_upstream_job",
-            "job_start_time", "expected_duration_min",
+            "controlm_job_name", "job_type", "hk_controlm_job",
+            "aws_gate1_job", "job_start_time", "expected_duration_min",
         ]
 
         uploaded = st.file_uploader(
             "Upload Job Mapping CSV",
             type=["csv"],
             key="bulk_ctrlm_upload",
-            help="CSV columns: " + ", ".join(_EXPECTED_COLS),
+            help="CSV columns: domain, layer, database_name, table_pattern, controlm_job_name, job_type, hk_controlm_job, aws_gate1_job, job_start_time, expected_duration_min",
         )
 
         if uploaded:
@@ -1271,10 +1304,18 @@ with tab_bulk_ctrlm:
                     st.error(f"CSV missing required columns: {_missing}")
                 else:
                     # Fill optional columns with defaults
+                    # Support both old and new column names for backward compat
+                    _rename_map = {
+                        "pipeline_job": "controlm_job_name",
+                        "hk_job": "hk_controlm_job",
+                        "gate1_upstream_job": "aws_gate1_job",
+                    }
+                    _map_df.rename(columns=_rename_map, inplace=True, errors="ignore")
+
                     for _col, _def in [
                         ("layer", ""), ("database_name", ""), ("table_pattern", ""),
-                        ("job_type", "controlm"), ("hk_job", ""),
-                        ("gate1_upstream_job", ""), ("job_start_time", "02:00"),
+                        ("job_type", "controlm"), ("hk_controlm_job", ""),
+                        ("aws_gate1_job", ""), ("job_start_time", "02:00"),
                         ("expected_duration_min", 0),
                     ]:
                         if _col not in _map_df.columns:
@@ -1363,9 +1404,9 @@ with tab_bulk_ctrlm:
                             _mw = ("WHERE " + " AND ".join(_mc)) if _mc else ""
                             if not _mw:
                                 continue
-                            _pj  = str(_mr.get("pipeline_job","")).strip()
-                            _g1  = str(_mr.get("gate1_upstream_job","")).strip() or _pj
-                            _hj  = str(_mr.get("hk_job","")).strip()
+                            _pj  = str(_mr.get("controlm_job_name","")).strip()
+                            _g1  = str(_mr.get("aws_gate1_job","")).strip() or _pj
+                            _hj  = str(_mr.get("hk_controlm_job","")).strip()
                             _jt  = str(_mr.get("job_type","controlm")).strip()
                             _js  = str(_mr.get("job_start_time","02:00")).strip()
                             _jd  = int(_mr.get("expected_duration_min", 0) or 0)
@@ -1407,10 +1448,10 @@ with tab_bulk_ctrlm:
                 SELECT DISTINCT
                     domain, layer, database_name,
                     '' AS table_pattern,
-                    COALESCE(controlm_pipeline_job, '')         AS pipeline_job,
+                    COALESCE(controlm_pipeline_job, '')         AS controlm_job_name,
                     COALESCE(dependent_job_type, 'controlm')   AS job_type,
-                    COALESCE(controlm_hk_job, '')               AS hk_job,
-                    COALESCE(dependent_on_controlm_job, '')    AS gate1_upstream_job,
+                    COALESCE(controlm_hk_job, '')               AS hk_controlm_job,
+                    COALESCE(dependent_on_controlm_job, '')    AS aws_gate1_job,
                     COALESCE(controlm_job_start_time, '02:00') AS job_start_time,
                     COALESCE(controlm_expected_duration_min, 0)  AS expected_duration_min
                 FROM {STREAM_REGISTRY_TABLE}
@@ -1448,10 +1489,10 @@ with tab_bulk_ctrlm:
 | `layer` | optional | staging | Leave blank = all layers |
 | `database_name` | optional | finance_staging_db | Leave blank = all databases |
 | `table_pattern` | optional | `aps_%` | SQL LIKE wildcard |
-| `pipeline_job` | ✅ | ACE-DA-FIN-APS-INGEST-PRD | Job that loads data |
-| `job_type` | optional | `controlm` / `glue` / `lambda` / `step_functions` | Defaults to `controlm` |
-| `hk_job` | optional | ACE-DA-FIN-HK-PRD | Zamboni HK trigger job |
-| `gate1_upstream_job` | optional | — | Blank = use pipeline_job |
+| `controlm_job_name` | ✅ | ACE-DA-FIN-APS-INGEST-PRD | Control-M job that loads data |
+| `job_type` | optional | `controlm` / `glue` / `lambda` / `step_functions` / `airflow` | Defaults to `controlm` |
+| `hk_controlm_job` | optional | ACE-DA-FIN-HK-PRD | Control-M job that runs Zamboni HK |
+| `aws_gate1_job` | optional | — | AWS job for Gate 1 check. Blank = use `controlm_job_name` |
 | `job_start_time` | optional | `02:00` | 24h HH:MM |
 | `expected_duration_min` | optional | `45` | Typical job run time |
 """)
