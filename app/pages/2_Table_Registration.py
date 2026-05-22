@@ -187,49 +187,64 @@ with tab_browse:
                 df_tables = pd.DataFrame(tables)
 
                 # ── Pattern search filter ─────────────────────────────────────
-                _br_col1, _br_col2, _br_col3 = st.columns([3, 1, 1])
+                _br_col1, _br_col2 = st.columns([4, 1])
                 with _br_col1:
                     _br_pattern = st.text_input(
                         "Filter by name pattern",
                         key=f"browse_pattern_{selected_db}",
                         placeholder="aps_%  or  %_staging  or  fin_aps",
-                        help="Supports SQL-style wildcards (%) or plain substring match.",
+                        help="Wildcards: % = any chars, _ = single char. "
+                             "Or plain substring (no wildcards needed).",
                     )
                 with _br_col2:
-                    _br_unreg_only = st.checkbox(
-                        "Unregistered only",
-                        value=True,
-                        key=f"browse_unreg_{selected_db}",
-                    )
-                with _br_col3:
                     _br_select_all = st.button(
                         "✅ Select All Visible",
                         key=f"browse_selall_{selected_db}",
                     )
 
-                # Apply filters
+                # Apply filter — always show unregistered only (clearest default)
                 _df_filtered = df_tables.copy()
-                if _br_pattern.strip():
-                    _pat = _br_pattern.strip().replace("%", ".*").replace("_", ".")
-                    _df_filtered = _df_filtered[
-                        _df_filtered["Name"].str.contains(
-                            _pat if ".*" in _pat else _br_pattern.strip(),
-                            case=False, regex=(".*" in _pat),
-                        )
-                    ]
-                if _br_unreg_only and "Registered" in _df_filtered.columns:
+                if "Registered" in _df_filtered.columns:
                     _df_filtered = _df_filtered[_df_filtered["Registered"] == "—"]
+                if _br_pattern.strip():
+                    _raw = _br_pattern.strip()
+                    # Convert SQL % wildcard to regex, otherwise substring match
+                    if "%" in _raw or _raw.startswith("_"):
+                        _re_pat = _raw.replace("%", ".*").replace("_", ".")
+                        _df_filtered = _df_filtered[
+                            _df_filtered["Name"].str.contains(
+                                _re_pat, case=False, regex=True, na=False
+                            )
+                        ]
+                    else:
+                        _df_filtered = _df_filtered[
+                            _df_filtered["Name"].str.contains(
+                                _raw, case=False, regex=False, na=False
+                            )
+                        ]
 
-                _df_filtered = _df_filtered.copy()
-                _df_filtered.insert(0, "Select", False)
+                # Use a filter-dependent key so state resets when filter changes
+                _filter_sig = f"{selected_db}_{_br_pattern.strip()}"
+                _editor_key = f"browse_editor_{hash(_filter_sig) % 999999}"
 
-                # Select All button sets all visible rows
-                _sel_key = f"browse_{selected_db}_sel"
+                # Select All: set all rows to True in the editor's session_state
                 if _br_select_all:
-                    st.session_state[_sel_key] = True
+                    _sa_df = _df_filtered.copy()
+                    _sa_df.insert(0, "Select", True)
+                    # Store pre-selected state keyed by filter
+                    st.session_state[f"browse_selall_data_{_filter_sig}"] = _sa_df
+                    st.rerun()
+
+                # Load pre-selected state if Select All was clicked
+                _sa_data = st.session_state.get(f"browse_selall_data_{_filter_sig}")
+                if _sa_data is not None:
+                    _display_df = _sa_data
+                else:
+                    _display_df = _df_filtered.copy()
+                    _display_df.insert(0, "Select", False)
 
                 edited = st.data_editor(
-                    _df_filtered,
+                    _display_df,
                     column_config={
                         "Select":     st.column_config.CheckboxColumn(
                             "✓", default=False,
@@ -243,14 +258,14 @@ with tab_browse:
                     hide_index=True,
                     disabled=["Name","Format","Registered","Domain",
                               "Tier","Layer","CreateTime","Location"],
-                    key=f"browse_{selected_db}",
-                    height=min(400, max(200, len(_df_filtered) * 35 + 40)),
+                    key=_editor_key,
+                    height=min(420, max(200, len(_display_df) * 35 + 40)),
                 )
 
                 st.caption(
                     f"Showing **{len(_df_filtered)}** of **{len(df_tables)}** tables"
                     + (f" (filtered by `{_br_pattern.strip()}`)" if _br_pattern.strip() else "")
-                    + (" · unregistered only" if _br_unreg_only else "")
+
                 )
 
                 selected_rows = edited[edited["Select"]]
@@ -1368,8 +1383,16 @@ with tab_bulk_ctrlm:
             import pandas as _pd_imp
 
             try:
-                _map_df = _pd_imp.read_csv(_io_imp.BytesIO(uploaded.read()))
+                _map_df = _pd_imp.read_csv(_io_imp.BytesIO(uploaded.read()), skip_blank_lines=True)
+                # Drop fully blank rows and clean strings
+                _map_df.dropna(how="all", inplace=True)
+                _map_df.reset_index(drop=True, inplace=True)
                 _map_df.columns = [c.strip().lower() for c in _map_df.columns]
+                for _sc in _map_df.select_dtypes(include="object").columns:
+                    _map_df[_sc] = _map_df[_sc].astype(str).str.strip().replace({"nan":"","None":""})
+                # Drop rows with empty domain
+                if "domain" in _map_df.columns:
+                    _map_df = _map_df[_map_df["domain"].ne("")].reset_index(drop=True)
 
                 _missing = [c for c in ["domain", "controlm_job_name"] if c not in _map_df.columns]
                 if _missing:
@@ -1409,7 +1432,7 @@ with tab_bulk_ctrlm:
                     )
 
                     # Preview match count per row
-                    st.markdown("**Tables matched per row:**")
+                    st.markdown("**Match preview — tables that will be updated per mapping row:**")
                     _prev_rows = []
                     for _, _mr in _map_df.iterrows():
                         _mc = list(filter(None, [
@@ -1436,7 +1459,7 @@ with tab_bulk_ctrlm:
                             "Layer": str(_mr.get("layer","")),
                             "DB": str(_mr.get("database_name","")),
                             "Pattern": str(_mr.get("table_pattern","")),
-                            "Matched": _n,
+                            "Tables Matched": _n,
                         })
                     _prev_df2 = _pd_imp.DataFrame(_prev_rows)
                     _it_imp(
@@ -1446,7 +1469,7 @@ with tab_bulk_ctrlm:
                         maxBytes=0, downsampling_warning=False,
                         pageLength=15, scrollX=True,
                     )
-                    _total = sum(r for r in _prev_df2["Matched"] if r >= 0)
+                    _total = sum(r for r in _prev_df2["Tables Matched"] if r >= 0)
                     st.info(f"**{_total} table(s)** will be updated across all rows.")
 
                     if is_dry_run():
