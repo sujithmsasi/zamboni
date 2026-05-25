@@ -25,12 +25,12 @@ def _get_domains() -> list[str]:
         from app.components.athena_runner import cached_read_registry
         from config.settings import DOMAIN_REGISTRY_TABLE
         df = cached_read_registry(
-            f"SELECT DISTINCT domain FROM {DOMAIN_REGISTRY_TABLE} "
-            "WHERE environment = 'prod' ORDER BY domain"
+            f"SELECT DISTINCT domain_name FROM {DOMAIN_REGISTRY_TABLE} "
+            "WHERE is_active = 1 ORDER BY domain_name"
         )
         if df.empty:
             return []
-        return df["domain"].tolist()
+        return df["domain_name"].tolist()
     except Exception as e:
         log.warning("table_selector.get_domains_failed", error=str(e))
         return []
@@ -156,3 +156,64 @@ def render(
     table_fqn = f"glue_catalog.{database}.{table}"
     st.caption(f"FQN: `{table_fqn}`")
     return domain, database, table_fqn
+
+
+def render_flat(
+    key_prefix:      str  = "flat_sel",
+    label:           str  = "Select Table",
+    placeholder:     str  = "Type table name or database to search…",
+    registry_filter: str  = "",
+    help_text:       str  = "Type any part of the table name or database name to filter.",
+    include_blank:   bool = True,
+) -> str | None:
+    """
+    Single searchable dropdown across all registered tables.
+    Simpler than the cascading selector — best for forms where
+    the user just wants to find a table quickly.
+
+    Returns full table_fqn or None if nothing selected.
+    """
+    try:
+        from app.components.athena_runner import cached_read_registry
+        from config.settings import STREAM_REGISTRY_TABLE
+
+        _where = f"WHERE {registry_filter}" if registry_filter else ""
+        df = cached_read_registry(
+            f"SELECT table_fqn, domain, layer FROM {STREAM_REGISTRY_TABLE} "
+            f"{_where} ORDER BY table_fqn"
+        )
+        if df.empty:
+            st.info("No tables registered.")
+            return None
+
+        # Build labels: "fin_payment  (finance_staging_db)" → fqn
+        def _label(fqn: str) -> str:
+            parts = fqn.split(".")
+            return f"{parts[2]}  ({parts[1]})" if len(parts) == 3 else fqn
+
+        label_to_fqn = {_label(row["table_fqn"]): row["table_fqn"]
+                        for _, row in df.iterrows()}
+        blank = ["-- select a table --"] if include_blank else []
+        options = blank + list(label_to_fqn.keys())
+
+        selected = st.selectbox(
+            label,
+            options,
+            key=f"{key_prefix}_flat",
+            help=help_text,
+        )
+        fqn = label_to_fqn.get(selected)
+        if fqn:
+            st.caption(f"FQN: `{fqn}`")
+        return fqn
+
+    except Exception as e:
+        log.warning("table_selector.render_flat_failed", error=str(e))
+        # Fallback to text input
+        fqn = st.text_input(
+            label,
+            placeholder="glue_catalog.database.table_name",
+            key=f"{key_prefix}_flat_fallback",
+            help=help_text,
+        ).strip()
+        return fqn if fqn and fqn.count(".") == 2 else None

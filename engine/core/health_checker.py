@@ -49,6 +49,13 @@ class HealthResult:
     needs_vacuum:           bool       = False
     needs_orphan_cleanup:   bool       = False
 
+    # Snapshot details (Gap 6)
+    expired_snapshots:      int        = 0      # snapshots beyond retention window
+    commits_per_day:        float      = 0.0    # calculated from $snapshots lookback
+    commit_tier:            str        = "LOW"  # HIGH / MEDIUM / LOW
+    anomalous_commit_rate:  bool       = False  # G10: > ANOMALOUS_COMMITS_WARN
+    pipeline_anomaly:       bool       = False  # G10: > ANOMALOUS_COMMITS_BLOCK
+
     # Reasons (for execution_log and debugging)
     compaction_reason:      str        = ""
     vacuum_reason:          str        = ""
@@ -111,15 +118,23 @@ def _check_snapshots(
     """Query $snapshots metadata table and assess vacuum need."""
     _, database, table = parse_table_fqn(table_fqn)
 
+    retention_days = int(config.get("snapshot_retention_days") or 7)
+
     sql = f"""
         SELECT
-            COUNT(*)                                                AS snapshot_count,
-            MAX(made_current_at)                                    AS latest_snapshot_ts,
+            COUNT(*)                                                   AS snapshot_count,
+            MAX(made_current_at)                                       AS latest_snapshot_ts,
             DATE_DIFF(
                 'day',
                 MIN(made_current_at),
                 NOW()
-            )                                                       AS oldest_snapshot_days
+            )                                                          AS oldest_snapshot_days,
+            COUNT(CASE WHEN made_current_at < NOW()
+                            - INTERVAL '{retention_days}' DAY
+                       THEN 1 END)                                     AS expired_snapshots,
+            COUNT(CASE WHEN made_current_at >= NOW()
+                            - INTERVAL '7' DAY
+                       THEN 1 END)                                     AS commits_7d
         FROM "glue_catalog"."{database}"."{table}$snapshots"
     """
 
@@ -132,19 +147,39 @@ def _check_snapshots(
     result.snapshot_count       = int(row["snapshot_count"])
     result.oldest_snapshot_days = int(row.get("oldest_snapshot_days") or 0)
     result.latest_snapshot_ts   = str(row.get("latest_snapshot_ts") or "")
+    result.expired_snapshots    = int(row.get("expired_snapshots") or 0)
 
-    retention_days = int(config.get("snapshot_retention_days") or 7)
+    # Gap 5: commits/day + G10 anomaly flags
+    commits_7d               = int(row.get("commits_7d") or 0)
+    result.commits_per_day   = round(commits_7d / 7, 2)
+    from config.settings import ANOMALOUS_COMMITS_BLOCK, ANOMALOUS_COMMITS_WARN
+    from engine.core.commit_frequency import _classify_tier
+    result.commit_tier           = _classify_tier(result.commits_per_day)
+    result.anomalous_commit_rate = result.commits_per_day > ANOMALOUS_COMMITS_WARN
+    result.pipeline_anomaly      = result.commits_per_day > ANOMALOUS_COMMITS_BLOCK
+
+    if result.pipeline_anomaly:
+        log.error(
+            "health_checker.pipeline_anomaly",
+            table_fqn=table_fqn,
+            commits_per_day=result.commits_per_day,
+        )
+
     min_to_keep    = int(config.get("snapshot_min_to_keep")    or 30)
 
-    if (
-        result.snapshot_count > min_to_keep
-        and result.oldest_snapshot_days > retention_days
+    # Needs vacuum if: total > floor AND (oldest > retention OR too many expired)
+    if result.snapshot_count > min_to_keep and (
+        result.oldest_snapshot_days > retention_days
+        or result.expired_snapshots > 10
+        or result.snapshot_count > 100
     ):
         result.needs_vacuum  = True
         result.vacuum_reason = (
-            f"{result.snapshot_count} snapshots, "
+            f"{result.snapshot_count} snapshots "
+            f"({result.expired_snapshots} expired), "
             f"oldest is {result.oldest_snapshot_days}d "
-            f"(retention: {retention_days}d, floor: {min_to_keep})"
+            f"(retention: {retention_days}d, floor: {min_to_keep}, "
+            f"tier: {result.commit_tier})"
         )
 
 

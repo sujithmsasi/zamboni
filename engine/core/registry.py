@@ -76,25 +76,38 @@ def register_domain(
         raise ValueError(f"Domain '{domain_name}' is already registered.")
 
     now = _now()
+    archive_int = 1 if archive_enabled else 0
     sql = f"""
-        INSERT INTO {DOMAIN_REGISTRY_TABLE} VALUES (
+        INSERT INTO {DOMAIN_REGISTRY_TABLE} (
+            domain_name, display_name, description,
+            owner_name, owner_email, team_name,
+            archive_enabled, hot_retention_days, archive_duration_days,
+            stale_threshold_days, auto_delete_after_days,
+            is_active, environment,
+            created_at, registered_by, updated_at, notes,
+            digest_enabled, digest_email,
+            registered_at
+        ) VALUES (
             '{domain_name}',
             '{display_name}',
             '{_esc(description)}',
             '{_esc(owner_name)}',
             '{_esc(owner_email)}',
             '{_esc(team_name)}',
-            {str(archive_enabled).lower()},
+            {archive_int},
             {hot_retention_days},
             {archive_duration_days},
             {stale_threshold_days},
             {auto_delete_after_days},
-            true,
+            1,
             '{environment}',
-            TIMESTAMP '{now}',
+            '{now}',
             '{registered_by}',
-            TIMESTAMP '{now}',
-            '{_esc(notes)}'
+            '{now}',
+            '{_esc(notes)}',
+            0,
+            '',
+            '{now}'
         )
     """
     log.info("registry.register_domain", domain=domain_name, dry_run=dry_run)
@@ -248,6 +261,13 @@ def register_table(
     archive_retention_days: int | None = None,
     registered_by: str = "streamlit",
     notes: str = "",
+    # Control-M integration fields
+    controlm_pipeline_job: str | None = None,
+    controlm_hk_job: str | None = None,
+    dependent_on_controlm_job: str | None = None,
+    controlm_job_start_time: str = "02:00",
+    controlm_expected_duration_min: int = 0,
+    dependent_job_type: str = "controlm",
     dry_run: bool = False,
 ) -> bool:
     """
@@ -258,15 +278,53 @@ def register_table(
     _validate_tier(tier)
     _validate_environment(environment)
 
-    if table_exists(table_fqn):
-        raise ValueError(f"Table '{table_fqn}' is already registered.")
-
     sid  = stream_id or _generate_stream_id(domain, layer)
     now  = _now()
     arch = archive_retention_days if archive_retention_days else "NULL"
 
+    if table_exists(table_fqn):
+        # Table already registered — do an UPDATE instead of failing
+        _gate1_job = dependent_on_controlm_job or controlm_pipeline_job or ""
+        upd_sql = f"""
+            UPDATE {STREAM_REGISTRY_TABLE}
+            SET domain                         = '{domain}',
+                layer                          = '{layer}',
+                tier                           = '{tier}',
+                table_format                   = '{table_format}',
+                environment                    = '{environment}',
+                owner_email                    = '{_esc(owner_email)}',
+                ci_number                      = '{_esc(ci_number)}',
+                stream_id                      = '{sid}',
+                controlm_pipeline_job          = '{_esc(controlm_pipeline_job or "")}',
+                controlm_hk_job                = '{_esc(controlm_hk_job or "")}',
+                dependent_on_controlm_job      = '{_esc(_gate1_job)}',
+                dependent_job_type             = '{dependent_job_type}',
+                controlm_job_start_time        = '{controlm_job_start_time}',
+                controlm_expected_duration_min = {int(controlm_expected_duration_min)},
+                registered_by                  = '{registered_by}',
+                updated_at                     = '{now}'
+            WHERE table_fqn = '{table_fqn}'
+        """
+        log.info("registry.update_table", table_fqn=table_fqn, domain=domain, dry_run=dry_run)
+        run_query(upd_sql, workgroup="app", dry_run=dry_run)
+        return True
+
+    hk_int      = 1 if hk_enabled else 0
+    archive_int = 1 if archive_enabled else 0
     sql = f"""
-        INSERT INTO {STREAM_REGISTRY_TABLE} VALUES (
+        INSERT INTO {STREAM_REGISTRY_TABLE} (
+            table_fqn, stream_id, domain, layer, tier,
+            table_format, environment, owner_email, ci_number,
+            hk_enabled, dry_run_until, force_run,
+            dependent_job_name, dependent_job_type,
+            controlm_pipeline_job, controlm_hk_job, dependent_on_controlm_job,
+            controlm_job_start_time, controlm_expected_duration_min,
+            archive_enabled, archive_retention_days, archive_bucket,
+            lifecycle_enabled, processing_cadence,
+            properties_synced, last_execution_id,
+            registered_by, registered_at, updated_at,
+            database_name, owner_name, notes
+        ) VALUES (
             '{table_fqn}',
             '{sid}',
             '{domain}',
@@ -276,20 +334,28 @@ def register_table(
             '{environment}',
             '{_esc(owner_email)}',
             '{_esc(ci_number)}',
-            {str(hk_enabled).lower()},
+            {hk_int},
             NULL,
-            false,
+            0,
             NULL,
-            'none',
-            NULL,
-            NULL,
-            {str(archive_enabled).lower()},
+            '{dependent_job_type}',
+            {f"'{_esc(controlm_pipeline_job)}'" if controlm_pipeline_job else "NULL"},
+            {f"'{_esc(controlm_hk_job)}'"       if controlm_hk_job       else "NULL"},
+            {f"'{_esc(dependent_on_controlm_job or controlm_pipeline_job or '')}'" },
+            '{controlm_job_start_time}',
+            {int(controlm_expected_duration_min)},
+            {archive_int},
             {arch},
             NULL,
-            false,
-            TIMESTAMP '{now}',
+            0,
+            NULL,
+            0,
+            NULL,
             '{registered_by}',
-            TIMESTAMP '{now}',
+            '{now}',
+            '{now}',
+            '{table_fqn.split(".")[1] if "." in table_fqn else ""}',
+            '',
             '{_esc(notes)}'
         )
     """

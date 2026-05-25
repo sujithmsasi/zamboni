@@ -28,7 +28,8 @@ from engine.core.cost_explorer import is_enabled as ce_enabled
 st.set_page_config(page_title="Zamboni — Cost Report", page_icon="💰", layout="wide")
 check_login()
 render_sidebar()
-render_header()
+st.session_state["_current_page"] = "cost"
+render_header(page_title="Cost Report", page_icon="💰")
 
 # ── Live billing banner ──────────────────────────────────────────────────────
 if ce_enabled():

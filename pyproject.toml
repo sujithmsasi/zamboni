@@ -7,7 +7,3 @@ name = "zamboni"
 version = "1.0.0"
 requires-python = ">=3.11"
 
-[tool.pytest.ini_options]
-# Override addopts so tests run without -p no:cacheprovider etc.
-# Forces UTF-8 file encoding on Windows via PYTHONIOENCODING
-filterwarnings = ["ignore::DeprecationWarning"]

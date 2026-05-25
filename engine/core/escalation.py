@@ -163,6 +163,40 @@ def upsert_entry(
         return False
 
 
+def delete_entry(
+    key:     str,
+    actor:   str,
+    dry_run: bool = True,
+) -> bool:
+    """
+    Delete an escalation matrix entry by key.
+    Writes to zamboni_settings.json. Audits the change.
+    """
+    if dry_run:
+        log.info("escalation.delete.dry_run", key=key)
+        return True
+    try:
+        from config.platform_settings import get_settings, save_settings
+        from engine.core.audit import AuditAction, audit_action
+        settings = get_settings()
+        matrix   = settings.get("escalation_matrix", {})
+        before   = dict(matrix.get(key, {}))
+        if key in matrix:
+            del matrix[key]
+            settings["escalation_matrix"] = matrix
+            save_settings(settings)
+        audit_action(
+            actor=actor, action_type=AuditAction.ESCALATION_CHANGE,
+            page_source="11_Settings", target_type="escalation",
+            target_id=key, dry_run=False, status="SUCCESS",
+            before_value=str(before), after_value="DELETED",
+        )
+        return True
+    except Exception as e:
+        log.error("escalation.delete_failed", key=key, error=str(e))
+        return False
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_key(

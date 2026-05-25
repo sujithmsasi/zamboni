@@ -413,8 +413,12 @@ class TestSafetyValidators:
             workgroup="zamboni-standard",
             dry_run=True,
         )
-        assert result["vacuum_max_age"] == 1 * 86400
-        assert result["vacuum_min_keep"] == 30
+        # retention_days=1 → HIGH tier → 7-day retention (604800s)
+        # Commit-tier system prevents unsafe sub-day retentions by design.
+        # The minimum tier (HIGH) guarantees at least 7 days retention.
+        assert result["vacuum_max_age"] >= 86400  # at least 1 day (G4 guardrail)
+        assert result["vacuum_max_age"] == 604800  # HIGH tier = 7 days
+        assert result["vacuum_min_keep"] == 30     # Zamboni floor enforced
 
 
 class TestDangerousOperationGuards:

@@ -24,10 +24,8 @@ from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
 st.set_page_config(page_title="Zamboni — Execution Log", page_icon="📜", layout="wide")
 check_login()
 render_sidebar()
-render_header()
-
-st.title("📜 Execution Log")
-st.caption("Unified audit log for all three engines. Every operation is recorded here.")
+st.session_state["_current_page"] = "exec_log"
+render_header(page_title="Execution Log", page_icon="📜")
 
 # ── Filters ───────────────────────────────────────────────────────────────────
 with st.expander("🔍 Filters", expanded=True):
@@ -64,6 +62,9 @@ elif hide_dry_run:
 
 where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+# Page size — read from session_state (set by selector widget after first render)
+_el_limit = st.session_state.get("el_main_page_size", 100)
+
 sql = f"""
     SELECT
         execution_date, started_at, engine, operation,
@@ -75,7 +76,7 @@ sql = f"""
     FROM {EXECUTION_LOG_TABLE}
     {where}
     ORDER BY started_at DESC
-    LIMIT 500
+    LIMIT {_el_limit}
 """
 
 with st.spinner("Loading execution log..."):

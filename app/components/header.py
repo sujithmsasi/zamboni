@@ -1,99 +1,246 @@
 """
 Zamboni — Page Header Component
-Shows D&A logo + Zamboni branding at the top of every page.
-Call render() at the top of each page after check_login().
 
-Logo placement:
-  - Top of page: full D&A logo + Zamboni title (prominent)
-  - Sidebar: small D&A logo (subtle)
+Compact sticky topbar: 48px tall, pinned to top, uses Zamboni logo.
+Logo also injected into the Streamlit sidebar above the nav menu.
 
-To use your real logo:
-  Place file at: app/assets/da_logo.png
-  Recommended:   400x80px PNG, transparent background
+Usage (all pages):
+    from app.components.header import render as render_header
+    render_header(page_title="Table Registration", page_icon="➕")
+
+The logo is loaded once as base64 and cached so it doesn't re-read
+from disk on every Streamlit rerun.
 """
+from __future__ import annotations
+
+import base64
+from functools import lru_cache
 from pathlib import Path
 
 import streamlit as st
 
-LOGO_PATH       = Path("app/assets/da_logo.png")
-LOGO_SMALL_PATH = Path("app/assets/da_logo_small.png")  # optional small version
+LOGO_PATH = Path(__file__).parent.parent / "assets" / "zamboni_logo.png"
 
 
-def render(show_divider: bool = True) -> None:
-    """
-    Render the D&A + Zamboni header at the top of a page.
+@lru_cache(maxsize=1)
+def _logo_b64() -> str:
+    """Load logo once and cache as base64 string."""
+    if LOGO_PATH.exists():
+        return base64.b64encode(LOGO_PATH.read_bytes()).decode()
+    return ""
 
-    Args:
-        show_divider: Whether to show a divider line below the header
-    """
-    col_logo, col_title, col_spacer = st.columns([1.2, 4, 2])
 
-    with col_logo:
-        _render_logo(height=52)
-
-    with col_title:
-        st.markdown(
-            "<h2 style='margin:0;padding:8px 0 0 0;color:#e2e8f0;'>🧊 Zamboni</h2>",
-            unsafe_allow_html=True,
+def _logo_img_html(size: int = 32) -> str:
+    """Return <img> tag for the Zamboni logo, or fallback badge."""
+    b64 = _logo_b64()
+    if b64:
+        return (
+            f"<img src='data:image/png;base64,{b64}' "
+            f"style='height:{size}px;width:{size}px;"
+            f"object-fit:contain;border-radius:4px;display:block;' />"
         )
-        st.caption("Iceberg Table Governance Framework — D&A Platform")
+    # Fallback badge if logo file missing
+    return (
+        "<div style='background:linear-gradient(135deg,#1e40af,#0ea5e9);"
+        "border-radius:6px;padding:4px 8px;'>"
+        "<span style='color:white;font-size:11px;font-weight:800;"
+        "letter-spacing:1.5px;'>Z</span></div>"
+    )
 
-    with col_spacer:
-        # Environment badge top-right
-        env = _get_env()
-        color = {
-            "prod":    "#ef4444",
-            "preprod": "#f59e0b",
-            "dev":     "#22c55e",
-            "test":    "#6366f1",
-        }.get(env, "#64748b")
 
-        st.markdown(
-            f"<div style='text-align:right;padding-top:12px;'>"
-            f"<span style='background:{color};color:white;padding:3px 10px;"
-            f"border-radius:12px;font-size:12px;font-weight:600;'>"
-            f"{env.upper()}</span></div>",
-            unsafe_allow_html=True,
-        )
+def render(
+    page_title:   str  = "",
+    page_icon:    str  = "",
+    show_divider: bool = False,
+) -> None:
+    """
+    Render compact sticky topbar + sidebar logo injection.
 
+    Layout:
+      [ Logo | page_icon page_title ]       [ ENV badge ]
+      ──────────────────────────────────────────────────── (1px border)
+
+    Also injects the Zamboni logo into the Streamlit sidebar above
+    the nav menu via CSS/HTML.
+    """
+    env   = _get_env()
+    color = {
+        "prod":    "#ef4444",
+        "preprod": "#f59e0b",
+        "dev":     "#22c55e",
+        "test":    "#6366f1",
+    }.get(env, "#64748b")
+
+    logo_html = _logo_img_html(size=34)
+    b64       = _logo_b64()
+    sidebar_logo = (
+        f"url('data:image/png;base64,{b64}')"
+        if b64 else "none"
+    )
+
+    title_text = (
+        f"{page_icon}&nbsp;{page_title}"
+        if page_title else "Zamboni"
+    )
+
+    st.markdown(
+        f"""
+        <style>
+          /* ── Hide itables downsampling link ──────────────────────────── */
+          caption a[href*="downsampling"],
+          caption a[href*="itables"] {{
+            display: none !important;
+          }}
+
+          /* ── itables header: filled color + column borders ────────── */
+          table.dataTable thead th,
+          table.dataTable thead td {{
+            background: #1e3a5f !important;
+            color: #93c5fd !important;
+            font-weight: 700 !important;
+            font-size: 11px !important;
+            letter-spacing: .4px !important;
+            text-transform: uppercase !important;
+            border-right: 1px solid #2d5a8e !important;
+            border-bottom: 2px solid #3b82f6 !important;
+            padding: 6px 8px !important;
+          }}
+          table.dataTable thead th:last-child,
+          table.dataTable thead td:last-child {{
+            border-right: none !important;
+          }}
+          /* Row hover */
+          table.dataTable tbody tr:hover > * {{
+            background: #1e293b !important;
+            color: #e2e8f0 !important;
+          }}
+          /* Stripe rows */
+          table.dataTable.stripe tbody tr.even > * {{
+            background: #111827 !important;
+          }}
+          table.dataTable.stripe tbody tr.odd > * {{
+            background: #0f172a !important;
+          }}
+          /* Cell borders */
+          table.dataTable.cell-border tbody td {{
+            border-right: 1px solid #1e293b !important;
+          }}
+          /* DataTables control bar */
+          .dataTables_wrapper .dataTables_length,
+          .dataTables_wrapper .dataTables_filter,
+          .dataTables_wrapper .dataTables_info,
+          .dataTables_wrapper .dataTables_paginate {{
+            font-size: 12px !important;
+            color: #94a3b8 !important;
+          }}
+          .dataTables_wrapper .dataTables_paginate .paginate_button.current {{
+            background: #1e3a5f !important;
+            color: #93c5fd !important;
+            border: 1px solid #3b82f6 !important;
+            border-radius: 4px !important;
+          }}
+          .dataTables_wrapper .dataTables_paginate .paginate_button:hover {{
+            background: #1e293b !important;
+            color: #e2e8f0 !important;
+            border: 1px solid #334155 !important;
+          }}
+
+          /* ── Google Fonts: Inter ──────────────────────────────────── */
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+          html, body, [class*="css"] {{
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont,
+                         'Segoe UI', sans-serif !important;
+          }}
+
+          /* Monospace for FQNs, SQL, code */
+          code, pre, .stCode, [data-testid="stCodeBlock"] {{
+            font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+          }}
+
+          /* ── Fixed topbar (sticky across Streamlit scroll container) ── */
+          .zamboni-topbar {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 999999;
+            background: #0f172a;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px 0 calc(var(--sidebar-width, 240px) + 20px);
+            height: 48px;
+          }}
+
+          /* Push page content below the fixed topbar */
+          .main .block-container {{
+            padding-top: 64px !important;
+            max-width: 100% !important;
+          }}
+
+          /* Sidebar: push nav down so logo shows above it */
+          section[data-testid="stSidebar"] > div:first-child {{
+            padding-top: 0 !important;
+          }}
+          .ztb-left  {{ display:flex;align-items:center;gap:10px; }}
+          .ztb-right {{ display:flex;align-items:center;gap:8px;  }}
+          .ztb-sep   {{ color:#334155;font-size:18px;margin:0 2px; }}
+          .ztb-title {{
+            font-size: 15px;
+            font-weight: 600;
+            color: #e2e8f0;
+            letter-spacing: .2px;
+          }}
+
+
+
+          /* ── Sidebar logo above nav ──────────────────────────────── */
+          [data-testid="stSidebarNav"]::before {{
+            content: '';
+            display: block;
+            background-image: {sidebar_logo};
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: left center;
+            width: 100%;
+            height: 80px;
+            margin: 8px 0 4px 4px;
+          }}
+
+          /* Tighten sidebar nav spacing */
+          [data-testid="stSidebarNav"] {{
+            padding-top: 0 !important;
+          }}
+          [data-testid="stSidebarNavItems"] {{
+            padding-top: 4px !important;
+          }}
+        </style>
+
+        <div class="zamboni-topbar">
+          <div class="ztb-left">
+            {logo_html}
+            <span class="ztb-sep">|</span>
+            <span class="ztb-title">{title_text}</span>
+          </div>
+          <div class="ztb-right">
+            <span style="background:{color};color:white;padding:2px 10px;
+                         border-radius:10px;font-size:11px;font-weight:700;
+                         letter-spacing:.6px;text-transform:uppercase;"
+                  >{env}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if show_divider:
         st.divider()
 
 
 def render_inline(page_title: str, page_icon: str = "") -> None:
-    """
-    Lightweight header for individual pages — just icon + title.
-    Use instead of st.title() for consistent styling.
-    """
-    st.markdown(
-        f"<h1 style='color:#e2e8f0;margin-bottom:4px;'>{page_icon} {page_title}</h1>",
-        unsafe_allow_html=True,
-    )
-
-
-def _render_logo(height: int = 52) -> None:
-    """Render D&A logo or gradient placeholder."""
-    if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), width=int(height * 3))
-    else:
-        # Gradient placeholder — replace with real logo at app/assets/da_logo.png
-        st.markdown(
-            """
-            <div style="
-                background: linear-gradient(135deg, #1e40af 0%, #0ea5e9 100%);
-                border-radius: 8px;
-                padding: 10px 16px;
-                display: inline-block;
-                margin-top: 4px;
-            ">
-                <span style="color:white;font-size:14px;font-weight:800;
-                             letter-spacing:2px;">D&A</span>
-                <span style="color:#bfdbfe;font-size:10px;
-                             display:block;letter-spacing:1px;">PLATFORM</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    """Back-compat stub — no longer needed but kept so old calls don't break."""
+    pass
 
 
 def _get_env() -> str:

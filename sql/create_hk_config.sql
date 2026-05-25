@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.hk_config (
 
     -- ── Partition Filtering ───────────────────────────────────────────────────
     partition_column                STRING  COMMENT 'Primary partition column e.g. partition_date',
+    partition_type                  STRING  COMMENT 'date | timestamp | int_yyyymmdd | string | identity | none. Auto-discovered at registration.',
     partition_filter_days           INT     COMMENT 'Process only partitions from last N days. Null = all.',
 
     -- ── Sort / Z-Order ────────────────────────────────────────────────────────

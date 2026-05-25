@@ -1,34 +1,37 @@
-# =============================================================================
-# Zamboni — Git Attributes
-# Ensures consistent line endings across Windows and Linux.
-# All source files stored with LF in git.
-# Windows users get CRLF on checkout (handled automatically by Git).
-# =============================================================================
+# Zamboni -- Git line ending policy
+# Ensures consistent line endings across Windows/Mac/Linux developers.
 
-# Default — auto-detect text files
-* text=auto
+# Default: normalize all text files to LF in repo, checkout as-is on all platforms
+* text=auto eol=lf
 
-# Source code — always LF
+# Windows-specific scripts -- keep CRLF on Windows checkout
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+
+# Explicitly text files -- always LF
 *.py    text eol=lf
-*.sh    text eol=lf
-*.yml   text eol=lf
-*.yaml  text eol=lf
-*.json  text eol=lf
 *.sql   text eol=lf
 *.md    text eol=lf
 *.toml  text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.html  text eol=lf
 *.txt   text eol=lf
-*.cfg   text eol=lf
+*.sh    text eol=lf
 *.ini   text eol=lf
+*.cfg   text eol=lf
 *.env   text eol=lf
 
-# Binary files — no line ending conversion
-*.png   binary
-*.jpg   binary
-*.gif   binary
-*.ico   binary
-*.zip   binary
-*.gz    binary
-*.tar   binary
-*.whl   binary
-*.pyc   binary
+# Binary files -- never touch line endings
+*.db     binary
+*.pyc    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.zip    binary
+*.gz     binary
+*.whl    binary

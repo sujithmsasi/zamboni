@@ -22,8 +22,30 @@ def check_login() -> bool:
 
 
 def _render_login_form() -> None:
-    st.markdown("# 🧊 Zamboni")
-    st.markdown("**Iceberg Table Governance Framework**")
+    # Centered logo + branding
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        import base64 as _b64
+        from pathlib import Path as _P
+        _logo = _P(__file__).parent.parent / "assets" / "zamboni_logo.png"
+        if _logo.exists():
+            _b = _b64.b64encode(_logo.read_bytes()).decode()
+            st.markdown(
+                f"<div style='text-align:center;margin-bottom:8px;'>"
+                f"<img src='data:image/png;base64,{_b}' "
+                f"style='width:180px;height:auto;' /></div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<h1 style='text-align:center;'>🧊 Zamboni</h1>",
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            "<p style='text-align:center;color:#94a3b8;margin-top:-4px;'>"
+            "Iceberg Table Governance · AAA Data Analytics</p>",
+            unsafe_allow_html=True,
+        )
     st.markdown("---")
 
     col1, col2, col3 = st.columns([1, 2, 1])

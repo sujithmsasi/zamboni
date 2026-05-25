@@ -26,9 +26,7 @@ st.set_page_config(
 )
 check_login()
 render_sidebar()
-render_header()
-
-st.title("🔍 Audit Log")
+render_header(page_title="Audit Log", page_icon="🔍")
 st.caption(
     "Complete audit trail of all user and system actions. "
     "Every domain change, table registration, policy edit, HK enable/disable, "
@@ -129,8 +127,8 @@ display_cols = [
 ]
 
 try:
-    styled = df[display_cols].style.applymap(_style_status, subset=["status"])
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=450)
+    styled = df[display_cols].style.map(_style_status, subset=["status"])
+    st.dataframe(styled, width='stretch', hide_index=True, height=450)
 except Exception:
     st.dataframe(df[display_cols], use_container_width=True,
                  hide_index=True, height=450)

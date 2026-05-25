@@ -145,22 +145,106 @@ def reset_db() -> None:
 
 # ── SQL translation ───────────────────────────────────────────────────────────
 
+def _translate_date_diff(sql: str) -> str:
+    """
+    Replace DATE_DIFF('unit', a, b) with SQLite-compatible CAST/julianday.
+    Uses char-by-char scan to handle nested parens correctly.
+    """
+    result = []
+    i = 0
+    upper = sql.upper()
+    while i < len(sql):
+        # Look for DATE_DIFF (case-insensitive)
+        if upper[i:i+9] == "DATE_DIFF" and (i == 0 or not sql[i-1].isalnum()):
+            j = i + 9
+            # Skip whitespace to opening paren
+            while j < len(sql) and sql[j] in " \t":
+                    j += 1
+            if j < len(sql) and sql[j] == "(":
+                j += 1  # skip (
+                # Parse unit 'day' or 'hour'
+                while j < len(sql) and sql[j] in " \t":
+                    j += 1
+                if sql[j] == "'":
+                    j += 1
+                    unit_start = j
+                    while j < len(sql) and sql[j] != "'":
+                        j += 1
+                    unit = sql[unit_start:j].lower()
+                    j += 1  # skip closing '
+                else:
+                    unit = ""
+                # Skip comma
+                while j < len(sql) and sql[j] in " \t,":
+                    j += 1
+                # Parse arg_a — scan until comma at depth 0
+                depth = 0
+                arg_start = j
+                while j < len(sql):
+                    if sql[j] == "(":
+                        depth += 1
+                    elif sql[j] == ")":
+                        if depth == 0:
+                            break
+                        depth -= 1
+                    elif sql[j] == "," and depth == 0:
+                        break
+                    j += 1
+                arg_a = sql[arg_start:j].strip()
+                # Skip comma
+                while j < len(sql) and sql[j] in " \t,":
+                    j += 1
+                # Parse arg_b — scan until ) at depth 0
+                depth = 0
+                arg_start = j
+                while j < len(sql):
+                    if sql[j] == "(":
+                        depth += 1
+                    elif sql[j] == ")":
+                        if depth == 0:
+                            break
+                        depth -= 1
+                    j += 1
+                arg_b = sql[arg_start:j].strip()
+                j += 1  # skip closing )
+
+                if unit == "day":
+                    result.append(
+                        f"CAST((julianday({arg_b}) - julianday({arg_a})) AS INTEGER)"
+                    )
+                elif unit == "hour":
+                    result.append(
+                        f"CAST(((julianday({arg_b}) - julianday({arg_a})) * 24) AS INTEGER)"
+                    )
+                else:
+                    result.append(sql[i:j])  # unknown unit, pass through
+                i = j
+                continue
+        result.append(sql[i])
+        i += 1
+    return "".join(result)
+
+
 def _translate(sql: str) -> str:
     """
     Translate Athena SQL to SQLite-compatible SQL.
     Handles the most common patterns used in Zamboni UI queries.
     """
-    # Strip Athena catalog prefix: "glue_catalog"."db"."table" -> table
-    # SQLite has flat namespace -- table names only
+    # Strip Athena catalog prefix ONLY in SQL structural positions
+    # (FROM, JOIN, UPDATE table, INSERT INTO table) — never inside string literals.
+    #
+    # Strategy: strip quoted form "glue_catalog"."db"."table" (always structural)
     sql = re.sub(
-        r'"?glue_catalog"?\."?[\w]+"?\."?([\w]+)"?',
+        r'"glue_catalog"\."[\w]+"\."([\w]+)"',
         r'\1',
         sql,
     )
-    # Also handle unquoted: glue_catalog.db.table -> table
+    # Strip unquoted form only when NOT preceded by a single quote
+    # (i.e. not inside a VALUES string literal)
+    # Negative lookbehind for apostrophe covers: WHERE x = 'glue_catalog.db.t'
     sql = re.sub(
-        r'glue_catalog\.[\w]+\.([\w]+)',
-        r'\1',
+        r"(?<!')glue_catalog\.([\w]+)\.([\w]+)(?!')",
+        r'\2',
         sql,
     )
     # INTERVAL syntax: INTERVAL '7' DAY -> 7 (SQLite uses numeric offsets)
@@ -169,18 +253,25 @@ def _translate(sql: str) -> str:
         r"\1",
         sql, flags=re.IGNORECASE,
     )
-    # DATE_DIFF('day', a, b) -> (julianday(b) - julianday(a))
+    # DATE_DIFF translation — scan-based to handle nested parens in args
+    sql = _translate_date_diff(sql)
+    # DATE_TRUNC('month'/'week'/'day', col) -> SQLite strftime equivalent
+    def _replace_date_trunc(m: re.Match) -> str:
+        unit = m.group(1).lower()
+        col  = m.group(2).strip()
+        if unit == "month":
+            return f"strftime('%Y-%m-01', {col})"
+        if unit == "week":
+            return f"date({col}, 'weekday 0', '-6 days')"
+        if unit == "year":
+            return f"strftime('%Y-01-01', {col})"
+        return f"date({col})"  # day default
     sql = re.sub(
-        r"DATE_DIFF\s*\(\s*'day'\s*,\s*([^,]+),\s*([^)]+)\)",
-        r"CAST(julianday(\2) - julianday(\1) AS INTEGER)",
+        r"DATE_TRUNC\s*\(\s*'(\w+)'\s*,\s*([^)]+)\)",
+        _replace_date_trunc,
         sql, flags=re.IGNORECASE,
     )
-    # DATE_DIFF('hour', a, b)
-    sql = re.sub(
-        r"DATE_DIFF\s*\(\s*'hour'\s*,\s*([^,]+),\s*([^)]+)\)",
-        r"CAST((julianday(\2) - julianday(\1)) * 24 AS INTEGER)",
-        sql, flags=re.IGNORECASE,
-    )
+
     # NOW() -> datetime('now')
     sql = re.sub(r'\bNOW\(\)', "datetime('now')", sql, flags=re.IGNORECASE)
     # CURRENT_DATE -> date('now')

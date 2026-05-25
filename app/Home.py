@@ -15,6 +15,17 @@ if str(_PROJECT_ROOT) not in sys.path:
 import pandas as pd
 import streamlit as st
 
+# ── itables global defaults ───────────────────────────────────────────────────
+try:
+    import itables.options as _ito
+    _ito.lengthMenu = [[50, 100, 250, 500, -1], ["50", "100", "250", "500", "All"]]
+    _ito.pageLength  = 15
+    _ito.maxBytes    = 0
+    _ito.classes     = "display compact cell-border stripe hover nowrap"
+    _ito.style       = "width:100%;font-size:12px;"
+except ImportError:
+    pass
+
 from app.components.athena_runner import cached_read_sql
 from app.components.auth import check_login, current_user
 from app.components.header import render as render_header
@@ -29,7 +40,8 @@ st.set_page_config(page_title="Zamboni — Home", page_icon="🏠", layout="wide
 if not check_login():
     st.stop()
 render_sidebar()
-render_header()
+st.session_state["_current_page"] = "home"
+render_header(page_title="Home", page_icon="🏠")
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -47,7 +59,7 @@ snapshot, source = get_or_generate(force_refresh=refresh, generated_by=current_u
 with col_a:
     generated_at = snapshot.get("generated_at", "")
     if source == "cached":
-        st.info(f"📊 Snapshot from {generated_at[:19]} (cached) — click Refresh for latest data")
+        st.caption(f"📊 Snapshot: {generated_at[:10]} — click Refresh for today's data")
     else:
         st.success(f"✨ Snapshot generated just now ({generated_at[:19]})")
 

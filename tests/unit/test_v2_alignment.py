@@ -168,8 +168,10 @@ def test_apply_vacuum_properties_dry_run():
         dry_run=True,
     )
     assert result["status"] == "DRY_RUN"
-    assert result["vacuum_max_age"] == 7 * 86400
-    assert result["vacuum_min_keep"] == 30
+    # vacuum_max_age depends on commit tier (HIGH=604800, MEDIUM=1209600, LOW=2592000)
+    # snapshot_retention_days=7 → HIGH tier → 7 days = 604800 seconds
+    assert result["vacuum_max_age"] == 7 * 86400  # HIGH tier retention
+    assert result["vacuum_min_keep"] == 30         # Zamboni floor: max(tier_min=2, floor=30)
 
 
 def test_mark_properties_synced_silent_on_missing_column():

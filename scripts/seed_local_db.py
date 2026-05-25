@@ -51,7 +51,15 @@ CREATE TABLE IF NOT EXISTS domain_registry (
     ci_number               TEXT,
     notes                   TEXT,
     created_at              TEXT,
-    updated_at              TEXT
+    updated_at              TEXT,
+    registered_at           TEXT DEFAULT (datetime('now')),
+    display_name            TEXT,
+    owner_name              TEXT,
+    team_name               TEXT,
+    description             TEXT,
+    archive_duration_days   INTEGER DEFAULT 365,
+    auto_delete_after_days  INTEGER DEFAULT 120,
+    registered_by           TEXT DEFAULT ''
 )""",
 
 "stream_registry": """
@@ -83,9 +91,25 @@ CREATE TABLE IF NOT EXISTS stream_registry (
     registered_by           TEXT,
     registered_at           TEXT,
     updated_at              TEXT,
-    database_name           TEXT
+    database_name           TEXT,
+    owner_name              TEXT DEFAULT '',
+    notes                   TEXT DEFAULT ''
 )""",
 
+"controlm_jobs": """
+CREATE TABLE IF NOT EXISTS controlm_jobs (
+    job_name              TEXT PRIMARY KEY,
+    job_type              TEXT DEFAULT 'controlm',
+    description           TEXT DEFAULT '',
+    domain                TEXT DEFAULT '',
+    environment           TEXT DEFAULT 'prod',
+    expected_start_time   TEXT DEFAULT '',
+    expected_duration_min INTEGER DEFAULT 0,
+    active                INTEGER DEFAULT 1,
+    registered_by         TEXT DEFAULT 'system',
+    created_at            TEXT,
+    updated_at            TEXT
+)""",
 "hk_config": """
 CREATE TABLE IF NOT EXISTS hk_config (
     table_fqn                       TEXT PRIMARY KEY,
@@ -105,7 +129,8 @@ CREATE TABLE IF NOT EXISTS hk_config (
     manually_overridden             INTEGER DEFAULT 0,
     override_notes                  TEXT,
     created_at                      TEXT,
-    updated_at                      TEXT
+    updated_at                      TEXT,
+    partition_type                  TEXT DEFAULT 'date'
 )""",
 
 "execution_log": """
@@ -148,29 +173,37 @@ CREATE TABLE IF NOT EXISTS nonprod_registry (
     lifecycle_state         TEXT DEFAULT 'ACTIVE',
     last_query_at           TEXT,
     last_write_at           TEXT,
-    days_since_activity     INTEGER,
+    days_since_activity     INTEGER DEFAULT 0,
+    stale_threshold_days    INTEGER DEFAULT 60,
     is_backup               INTEGER DEFAULT 0,
+    is_backup_pattern       INTEGER DEFAULT 0,
+    pattern_matched         TEXT DEFAULT '',
     owner_email             TEXT,
-    state_changed_at        TEXT,
-    scan_count              INTEGER DEFAULT 0,
+    owner_exempted          INTEGER DEFAULT 0,
     exemption_reason        TEXT,
-    created_at              TEXT
+    state_changed_at        TEXT,
+    greenzone_expires_at    TEXT,
+    pending_drop_expires_at TEXT,
+    first_seen_at           TEXT,
+    scan_count              INTEGER DEFAULT 0,
+    created_at              TEXT,
+    database_name           TEXT DEFAULT ''
 )""",
 
 "home_snapshot": """
 CREATE TABLE IF NOT EXISTS home_snapshot (
     snapshot_date           TEXT PRIMARY KEY,
-    environment             TEXT DEFAULT 'prod',
+    generated_at            TEXT,
+    generated_by            TEXT DEFAULT 'system',
     total_tables            INTEGER DEFAULT 0,
     hk_enabled_count        INTEGER DEFAULT 0,
-    hk_coverage_pct         REAL DEFAULT 0,
-    dry_run_count           INTEGER DEFAULT 0,
-    tables_needing_hk       INTEGER DEFAULT 0,
-    gb_compacted_today      REAL DEFAULT 0,
-    snapshots_expired_today INTEGER DEFAULT 0,
-    failures_today          INTEGER DEFAULT 0,
-    circuit_breakers_open   INTEGER DEFAULT 0,
-    generated_at            TEXT
+    failures_7d             INTEGER DEFAULT 0,
+    bytes_reclaimed_30d     INTEGER DEFAULT 0,
+    fleet_coverage_json     TEXT DEFAULT '[]',
+    compaction_needed_json  TEXT DEFAULT '[]',
+    recent_failures_json    TEXT DEFAULT '[]',
+    domain_stats_json       TEXT DEFAULT '[]',
+    cost_summary_json       TEXT DEFAULT '[]'
 )""",
 
 "audit_log": """
@@ -242,6 +275,13 @@ def seed_domains() -> list[dict]:
             "notes":                "ERS domain - bookings, inventory",
             "created_at":           _now(110),
             "updated_at":           _now(10),
+            "registered_at":        _now(110),
+            "display_name":         "ERS",
+            "owner_name":           "D&A ERS Lead",
+            "team_name":            "Data & Analytics - ERS",
+            "description":          "ERS domain covering bookings and inventory pipelines",
+            "archive_duration_days": 365,
+            "auto_delete_after_days": 120,
         },
         {
             "domain_name":          "membership",
@@ -612,6 +652,50 @@ def main():
 
     print("Creating tables...")
     create_tables(TABLES)
+
+    # Schema migrations: add missing columns to existing tables
+    # Safe to run repeatedly — ALTER TABLE is skipped if column exists
+    _migrations = [
+        ("execution_log",    "rows_archived",      "INTEGER DEFAULT 0"),
+        ("execution_log",    "vacuum_iterations",  "INTEGER DEFAULT 1"),
+        ("execution_log",    "oldest_snapshot_id", "TEXT"),
+        ("execution_log",    "newest_snapshot_id", "TEXT"),
+        ("nonprod_registry", "dropped_at",         "TEXT"),
+        ("nonprod_registry", "bytes_reclaimed",    "INTEGER DEFAULT 0"),
+        ("nonprod_registry", "s3_cleaned",         "INTEGER DEFAULT 0"),
+        ("nonprod_registry", "catalog_dropped",    "INTEGER DEFAULT 0"),
+        ("nonprod_registry", "previous_state",     "TEXT"),
+        ("nonprod_registry", "is_backup_pattern",  "INTEGER DEFAULT 0"),
+        ("stream_registry",  "owner_name",                       "TEXT DEFAULT ''"),
+        ("stream_registry",  "notes",                             "TEXT DEFAULT ''"),
+        ("stream_registry",  "partition_type",                   "TEXT DEFAULT 'date'"),
+        ("stream_registry",  "controlm_job_start_time",          "TEXT DEFAULT '02:00'"),
+        ("stream_registry",  "controlm_expected_duration_min",   "INTEGER DEFAULT 0"),
+        ("hk_config",        "gate1_enabled",                    "INTEGER DEFAULT 0"),
+        ("hk_config",        "gate2_enabled",                    "INTEGER DEFAULT 1"),
+        ("hk_config",        "gate3_enabled",                    "INTEGER DEFAULT 1"),
+        ("hk_config",        "partition_type",     "TEXT DEFAULT 'date'"),
+        ("domain_registry",  "display_name",       "TEXT"),
+        ("domain_registry",  "registered_at",      "TEXT DEFAULT (datetime('now'))"),
+        ("domain_registry",  "owner_name",         "TEXT DEFAULT ''"),
+        ("domain_registry",  "team_name",          "TEXT DEFAULT ''"),
+        ("domain_registry",  "description",        "TEXT DEFAULT ''"),
+        ("domain_registry",  "archive_duration_days",  "INTEGER DEFAULT 365"),
+        ("domain_registry",  "auto_delete_after_days", "INTEGER DEFAULT 120"),
+        ("domain_registry",  "registered_by",      "TEXT DEFAULT ''"),
+    ]
+    from engine.utils.local_db import get_connection as _gc
+    _conn = _gc()
+    _migrated = 0
+    for _tbl, _col, _typ in _migrations:
+        try:
+            _conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_typ}")
+            _conn.commit()
+            _migrated += 1
+        except Exception:
+            pass  # column already exists
+    if _migrated:
+        print(f"  {_migrated} schema migration(s) applied")
 
     print("Seeding domain_registry...")
     domains = seed_domains()

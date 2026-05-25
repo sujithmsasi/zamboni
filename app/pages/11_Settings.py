@@ -29,6 +29,7 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
+from app.components.athena_runner import cached_read_registry
 from app.components.auth import check_login, current_user
 from app.components.header import render as render_header
 from app.components.sidebar import is_dry_run
@@ -45,9 +46,7 @@ st.set_page_config(
 )
 check_login()
 render_sidebar()
-render_header()
-
-st.title("⚙️ Settings & Administration")
+render_header(page_title="Settings", page_icon="🔧")
 st.caption(
     "Platform-wide configuration for Zamboni. "
     "All changes are audited. Changes take effect immediately without restart."
@@ -241,52 +240,171 @@ with tab_escalation:
     st.markdown("#### Escalation Matrix")
     st.info(
         "Route alerts and notifications by domain, tier, and environment. "
-        "Lookup is most-specific-first: domain+tier+env → domain+env → domain → "
-        "tier+env → env → default."
+        "Lookup is most-specific-first: **domain+tier+env → domain+env → domain → "
+        "tier+env → env → default**."
     )
 
     matrix_entries = list_matrix()
+
+    # ── Session state for edit ────────────────────────────────────────────────
+    if "esc_editing_key" not in st.session_state:
+        st.session_state["esc_editing_key"] = None
+    if "esc_flash" not in st.session_state:
+        st.session_state["esc_flash"] = None
+
+    if st.session_state["esc_flash"]:
+        st.success(st.session_state.pop("esc_flash"))
+
+    # ── Current entries table ─────────────────────────────────────────────────
     if matrix_entries:
         import pandas as pd
-        df = pd.DataFrame(matrix_entries)
-        display_cols = [c for c in ["_key", "primary_owner_email",
-                                    "escalation_email", "zamboni_owner_email",
-                                    "notify_sns_topic"] if c in df.columns]
-        st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
+        df_esc = pd.DataFrame(matrix_entries)
+
+        # Rename for display
+        _col_map = {
+            "_key":                 "Lookup Key",
+            "primary_owner_email":  "Primary Owner",
+            "escalation_email":     "Escalation Email",
+            "zamboni_owner_email":  "Zamboni Owner",
+            "notify_sns_topic":     "SNS Topic Override",
+        }
+        _show_cols = [c for c in _col_map if c in df_esc.columns]
+        _display = df_esc[_show_cols].rename(columns=_col_map)
+        _display.insert(0, "#", range(1, len(_display)+1))
+
+        from itables.streamlit import interactive_table as _it_esc
+        _it_esc(
+            _display, key="esc_matrix_it",
+            style="width:100%;font-size:12px;",
+            classes="display compact cell-border stripe hover nowrap",
+            maxBytes=0, downsampling_warning=False,
+            pageLength=15, scrollX=True,
+            caption=f"{len(_display)} routing rule(s)",
+        )
+
+        # Per-row edit / delete buttons
+        st.markdown("**Edit or delete an entry:**")
+        _esc_col1, _esc_col2 = st.columns([3, 1])
+        with _esc_col1:
+            _all_keys = [e.get("_key","") for e in matrix_entries]
+            _sel_key = st.selectbox(
+                "Select entry",
+                ["— select —"] + _all_keys,
+                key="esc_sel_key",
+            )
+        with _esc_col2:
+            st.markdown("<div style='padding-top:28px'>", unsafe_allow_html=True)
+            _del_btn = st.button(
+                "🗑️ Delete", key="esc_del_btn",
+                disabled=(_sel_key == "— select —"),
+                use_container_width=True,
+                type="secondary",
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        if _del_btn and _sel_key != "— select —":
+            try:
+                from engine.core.escalation import delete_entry
+                delete_entry(_sel_key, actor=actor, dry_run=is_dry_run())
+                cached_read_registry.clear()
+                st.session_state["esc_flash"] = (
+                    f"✅ Entry '{_sel_key}' deleted"
+                    + (" (dry run)" if is_dry_run() else "")
+                )
+                st.rerun()
+            except AttributeError:
+                # delete_entry not yet implemented — do it inline
+                from engine.utils.athena_client import run_query as _rq_del
+                _del_sql = f"""
+                    DELETE FROM glue_catalog.zamboni_catalog.alert_routing
+                    WHERE _key = '{_sel_key}'
+                """
+                try:
+                    _rq_del(_del_sql, workgroup="app", dry_run=is_dry_run())
+                    cached_read_registry.clear()
+                    st.session_state["esc_flash"] = (
+                        f"✅ Entry '{_sel_key}' deleted"
+                        + (" (dry run)" if is_dry_run() else "")
+                    )
+                    st.rerun()
+                except Exception as _de:
+                    st.error(f"Delete failed: {_de}")
+
+        # Load selected entry for editing
+        if _sel_key != "— select —":
+            _editing = next((e for e in matrix_entries if e.get("_key") == _sel_key), None)
+        else:
+            _editing = None
+
     else:
-        st.caption("No entries configured yet. Add entries below.")
+        st.caption("No entries configured yet. Add an entry below.")
+        _editing = None
 
     st.divider()
-    st.markdown("#### Add / Update Entry")
+    _form_title = f"✏️ Editing: `{_editing['_key']}`" if _editing else "➕ Add New Entry"
+    st.markdown(f"#### {_form_title}")
+
     with st.form("escalation_form"):
         key_help = (
-            "Lookup key format — examples:\n"
+            "Lookup key — examples:\n"
             "  domain:finance|tier:critical|env:prod\n"
             "  domain:finance|env:prod\n"
             "  domain:finance\n"
             "  tier:critical|env:prod\n"
             "  default"
         )
-        esc_key     = st.text_input("Lookup Key *", help=key_help)
-        esc_primary = st.text_input("Primary Owner Email")
-        esc_esc     = st.text_input("Escalation Email")
-        esc_zamboni = st.text_input("Zamboni Owner Email")
-        esc_sns     = st.text_input("SNS Topic ARN Override (blank = use default)")
-
-        submitted = st.form_submit_button("Save Entry", type="primary")
-
-    if submitted and esc_key:
-        entry = {
-            "primary_owner_email":  esc_primary,
-            "escalation_email":     esc_esc,
-            "zamboni_owner_email":  esc_zamboni,
-            "notify_sns_topic":     esc_sns,
-        }
-        ok = upsert_entry(esc_key, entry, actor=actor, dry_run=is_dry_run())
-        st.success(
-            f"✅ Escalation entry '{esc_key}' saved"
-            + (" (dry run)" if is_dry_run() else "")
+        esc_key     = st.text_input(
+            "Lookup Key *",
+            value=_editing.get("_key", "") if _editing else "",
+            disabled=bool(_editing),       # key is PK — can't change on edit
+            help=key_help,
         )
+        _ec1, _ec2 = st.columns(2)
+        with _ec1:
+            esc_primary = st.text_input(
+                "Primary Owner Email",
+                value=_editing.get("primary_owner_email","") if _editing else "",
+                placeholder="team-dl@company.com",
+            )
+            esc_zamboni = st.text_input(
+                "Zamboni Owner Email",
+                value=_editing.get("zamboni_owner_email","") if _editing else "",
+                placeholder="da-platform@company.com",
+            )
+        with _ec2:
+            esc_esc = st.text_input(
+                "Escalation Email",
+                value=_editing.get("escalation_email","") if _editing else "",
+                placeholder="manager-dl@company.com",
+            )
+            esc_sns = st.text_input(
+                "SNS Topic ARN Override",
+                value=_editing.get("notify_sns_topic","") if _editing else "",
+                placeholder="arn:aws:sns:us-west-2:123:my-topic (blank = default)",
+            )
+        submitted = st.form_submit_button(
+            "💾 Update Entry" if _editing else "➕ Add Entry",
+            type="primary",
+        )
+
+    if submitted:
+        _save_key = _editing.get("_key") if _editing else esc_key.strip()
+        if not _save_key:
+            st.error("Lookup Key is required.")
+        else:
+            entry = {
+                "primary_owner_email": esc_primary.strip(),
+                "escalation_email":    esc_esc.strip(),
+                "zamboni_owner_email": esc_zamboni.strip(),
+                "notify_sns_topic":    esc_sns.strip(),
+            }
+            upsert_entry(_save_key, entry, actor=actor, dry_run=is_dry_run())
+            cached_read_registry.clear()
+            st.session_state["esc_flash"] = (
+                f"✅ Entry '{_save_key}' saved"
+                + (" (dry run)" if is_dry_run() else "")
+            )
+            st.rerun()
 
 
 # ── Tab 4: Advanced ───────────────────────────────────────────────────────────

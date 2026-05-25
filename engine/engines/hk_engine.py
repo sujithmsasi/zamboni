@@ -264,24 +264,44 @@ class HKEngine(BaseEngine):
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_NO_CONFIG")
             return "skipped"
 
-        # ── Gate 1 — Upstream batch completion ────────────────────────────────
-        upstream_job = table_row.get("dependent_job_name")
-        if upstream_job and table_row.get("dependent_job_type") == "glue":
-            if not is_upstream_job_complete(upstream_job):
-                self._log_table_skip(fqn, "SKIP_UPSTREAM_PENDING")
-                self._write_log(table_row, "hk_run", "SKIPPED",
-                                skip_reason="SKIP_UPSTREAM_PENDING")
-                return "skipped"
+        # ── Gate 1 — Upstream batch completion (Control-M) ────────────────────
+        # gate1_enabled=0 by default until Control-M API integration is ready.
+        # Uses controlm_pipeline_job (or dependent_on_controlm_job override).
+        # No job_type check needed — all Control-M jobs are treated the same way.
+        if hk_config.get("gate1_enabled", 0):
+            upstream_job = (
+                table_row.get("dependent_on_controlm_job")
+                or table_row.get("controlm_pipeline_job")
+                or table_row.get("dependent_job_name")  # legacy fallback
+            )
+            if upstream_job:
+                if not is_upstream_job_complete(upstream_job):
+                    self._log_table_skip(fqn, "SKIP_UPSTREAM_PENDING")
+                    self._write_log(table_row, "hk_run", "SKIPPED",
+                                    skip_reason="SKIP_UPSTREAM_PENDING")
+                    return "skipped"
+            else:
+                log.warning(
+                    "gate1_enabled_but_no_job_configured",
+                    table_fqn=fqn,
+                    hint="Set Pipeline ControlM Job in Table Registration.",
+                )
+        else:
+            log.debug("gate1_disabled", table_fqn=fqn)
 
         # ── Gate 2 — Safe window ──────────────────────────────────────────────
-        decision = evaluate(
-            hk_config.get("window_config", ""),
-            force=table_row.get("force_run", False),
-        )
-        if decision != EXECUTE:
-            self._log_table_skip(fqn, decision)
-            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason=decision)
-            return "skipped"
+        # Skipped if gate2_enabled=0 in hk_config (bypasses blackout window check)
+        if hk_config.get("gate2_enabled", 1):
+            decision = evaluate(
+                hk_config.get("window_config", ""),
+                force=table_row.get("force_run", False),
+            )
+            if decision != EXECUTE:
+                self._log_table_skip(fqn, decision)
+                self._write_log(table_row, "hk_run", "SKIPPED", skip_reason=decision)
+                return "skipped"
+        else:
+            log.debug("gate2_disabled_window_bypassed", table_fqn=fqn)
 
         # ── B.5 — Idempotency check (v2) ─────────────────────────────────────
         # Build execution_id from run_id+table_fqn+operation+window_id.
@@ -305,11 +325,15 @@ class HKEngine(BaseEngine):
             return "skipped"
 
         # ── Gate 4 — Circuit breaker ──────────────────────────────────────────
-        if circuit_breaker.check(fqn) == circuit_breaker.OPEN:
-            self._log_table_skip(fqn, "SKIP_CIRCUIT_OPEN")
-            self._write_log(table_row, "hk_run", "SKIPPED",
-                            skip_reason="SKIP_CIRCUIT_OPEN")
-            return "skipped"
+        # Skipped if gate3_enabled=0 in hk_config (bypasses circuit breaker)
+        if hk_config.get("gate3_enabled", 1):
+            if circuit_breaker.check(fqn) == circuit_breaker.OPEN:
+                self._log_table_skip(fqn, "SKIP_CIRCUIT_OPEN")
+                self._write_log(table_row, "hk_run", "SKIPPED",
+                                skip_reason="SKIP_CIRCUIT_OPEN")
+                return "skipped"
+        else:
+            log.debug("gate3_disabled_circuit_breaker_bypassed", table_fqn=fqn)
 
         # ── B.6 — Property sync (v2) ─────────────────────────────────────────
         # If table hasn't had vacuum properties applied, ALTER TABLE once.
@@ -418,7 +442,30 @@ class HKEngine(BaseEngine):
                 total_bytes_scanned += compaction_result.get("bytes_scanned", 0)
 
         # ── Snapshot expiry ───────────────────────────────────────────────────
-        if health.needs_vacuum:
+        # Gap 10: Explicit OPTIMIZE → VACUUM ordering guard
+        # If compaction was needed but did not succeed, defer VACUUM so we
+        # never expire a snapshot that OPTIMIZE just created.
+        _compaction_ok = (
+            not health.needs_compaction
+            or op_status in ("SUCCESS", "DRY_RUN", "SKIPPED")
+        )
+        if health.needs_vacuum and not _compaction_ok:
+            log.warning(
+                "hk_engine.vacuum_deferred_compaction_failed",
+                table_fqn=fqn, compaction_status=op_status,
+                reason="Deferring VACUUM to next run",
+            )
+            _now_ts = datetime.now(UTC)
+            self._write_log(
+                table_row, "vacuum", "SKIPPED",
+                skip_reason="SKIP_COMPACTION_PREREQUISITE",
+                started_at=_now_ts,
+                completed_at=_now_ts,
+                effective_dry_run=table_dry_run,
+            )
+            vacuum_result = {}
+
+        elif health.needs_vacuum:
             op_start = datetime.now(UTC)
             if not wait_for_capacity(workgroup, max_wait_seconds=30):
                 reason = f"SKIP_BACKPRESSURE_TIMEOUT (workgroup={workgroup})"

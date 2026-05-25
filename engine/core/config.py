@@ -19,14 +19,28 @@ _TEMPLATES_PATH = Path(__file__).parent.parent.parent / "config" / "policy_templ
 _TEMPLATES: dict = {}
 
 
-def _load_templates() -> dict:
+def _load_templates(force_reload: bool = False) -> dict:
+    """Load policy templates from JSON. Cache-busted on writes."""
     global _TEMPLATES
-    if not _TEMPLATES:
+    if not _TEMPLATES or force_reload:
         with open(_TEMPLATES_PATH) as f:
             data = json.load(f)
-        # Strip comment keys
-        _TEMPLATES = {k: v for k, v in data.items() if not k.startswith("_")}
+        # Strip comment keys — only keep dict entries
+        _TEMPLATES = {
+            k: v for k, v in data.items()
+            if not k.startswith("_") and isinstance(v, dict)
+        }
     return _TEMPLATES
+
+
+def reload_templates() -> dict:
+    """Force reload templates from disk — call after any write to policy_templates.json."""
+    return _load_templates(force_reload=True)
+
+
+def get_policy_templates() -> dict:
+    """Return all available policy templates (dict of name -> config)."""
+    return _load_templates()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,9 +72,7 @@ def get_hk_config(table_fqn: str) -> dict | None:
     return config
 
 
-def get_policy_templates() -> dict:
-    """Return all available policy templates."""
-    return _load_templates()
+
 
 
 def get_template(template_name: str) -> dict | None:
@@ -130,25 +142,42 @@ def apply_template(
     # Delete existing config first (Iceberg doesn't support true UPSERT easily)
     _delete_hk_config(table_fqn, dry_run=dry_run)
 
+    orphan_cadence = t.get("orphan_cleanup_cadence_days", 7)
+    # Gate flags from template (with safe defaults)
+    gate1 = int(t.get("gate1_enabled", 0))  # Default OFF — ControlM not ready
+    gate2 = int(t.get("gate2_enabled", 1))  # Default ON  — blackout window
+    gate3 = int(t.get("gate3_enabled", 1))  # Default ON  — circuit breaker
+
     sql = f"""
-        INSERT INTO {HK_CONFIG_TABLE} VALUES (
+        INSERT INTO {HK_CONFIG_TABLE} (
+            table_fqn, policy_template, compaction_strategy,
+            compaction_target_file_size_mb, compaction_engine,
+            sort_order_cols, snapshot_retention_days, snapshot_min_to_keep,
+            orphan_file_retention_days, orphan_cleanup_cadence_days,
+            run_frequency, partition_column, partition_filter_days,
+            window_config, gate1_enabled, gate2_enabled, gate3_enabled,
+            manually_overridden, override_notes,
+            created_at, updated_at
+        ) VALUES (
             '{table_fqn}',
             '{template_name}',
             '{t["compaction_strategy"]}',
             {t["compaction_target_file_size_mb"]},
             '{t["compaction_engine"]}',
+            {sort_arr},
             {t["snapshot_retention_days"]},
             {snap_min},
             {t["orphan_file_retention_days"]},
+            {orphan_cadence},
             '{t["run_frequency"]}',
-            '{window_json}',
             {f"'{partition_column}'" if partition_column else "NULL"},
             {partition_filter_days if partition_filter_days else "NULL"},
-            {sort_arr},
-            {f"'{glue_job_name}'" if glue_job_name else "NULL"},
-            TIMESTAMP '{now}',
-            false,
-            NULL
+            '{window_json}',
+            {gate1}, {gate2}, {gate3},
+            0,
+            NULL,
+            '{now}',
+            '{now}'
         )
     """
 
@@ -179,10 +208,10 @@ def update_config_field(
 
     sql = f"""
         UPDATE {HK_CONFIG_TABLE}
-        SET {field}              = {value_sql},
-            manually_overridden  = true,
-            override_notes       = {notes_sql},
-            template_applied_at  = TIMESTAMP '{now}'
+        SET {field}             = {value_sql},
+            manually_overridden = 1,
+            override_notes      = {notes_sql},
+            updated_at          = '{now}'
         WHERE table_fqn = '{table_fqn}'
     """
     log.info("config.update_field", table_fqn=table_fqn, field=field, dry_run=dry_run)

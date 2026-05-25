@@ -13,15 +13,13 @@ from datetime import UTC, date, datetime
 
 from config.settings import (
     EXECUTION_LOG_TABLE,
+    HOME_SNAPSHOT_TABLE,
     STREAM_REGISTRY_TABLE,
 )
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
-
-HOME_SNAPSHOT_TABLE = "glue_catalog.zamboni_catalog.home_snapshot"
-
 
 def get_or_generate(force_refresh: bool = False, generated_by: str = "unknown") -> tuple[dict, str]:
     """
@@ -224,15 +222,22 @@ def _load_snapshot(snapshot_date: date) -> dict | None:
         if df.empty:
             return None
         row = df.iloc[0]
+        def _si(v, default=0):
+            """Safe int — returns default if v is non-numeric string."""
+            try:
+                return int(v or default)
+            except (ValueError, TypeError):
+                return default
+
         return {
             "snapshot_date":     str(row.get("snapshot_date", "")),
             "generated_at":      str(row.get("generated_at", "")),
-            "generated_by":      row.get("generated_by", ""),
+            "generated_by":      str(row.get("generated_by", "") or ""),
             "kpi": {
-                "total_tables":        int(row.get("total_tables") or 0),
-                "hk_enabled":          int(row.get("hk_enabled_count") or 0),
-                "failures_7d":         int(row.get("failures_7d") or 0),
-                "bytes_reclaimed_30d": int(row.get("bytes_reclaimed_30d") or 0),
+                "total_tables":        _si(row.get("total_tables")),
+                "hk_enabled":          _si(row.get("hk_enabled_count")),
+                "failures_7d":         _si(row.get("failures_today") or row.get("failures_7d")),
+                "bytes_reclaimed_30d": _si(row.get("bytes_reclaimed_30d")),
             },
             "fleet_coverage":    _safe_json(row.get("fleet_coverage_json")),
             "compaction_needed": _safe_json(row.get("compaction_needed_json")),
@@ -257,10 +262,18 @@ def _save_snapshot(snapshot_date: date, snapshot: dict, generated_by: str) -> No
         pass  # Probably no row yet
 
     kpi = snapshot.get("kpi", {})
+    _now_str = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
     insert_sql = f"""
-        INSERT INTO {HOME_SNAPSHOT_TABLE} VALUES (
-            DATE '{snapshot_date.isoformat()}',
-            TIMESTAMP '{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}',
+        INSERT INTO {HOME_SNAPSHOT_TABLE} (
+            snapshot_date, generated_at, generated_by,
+            total_tables, hk_enabled_count,
+            failures_7d, bytes_reclaimed_30d,
+            fleet_coverage_json, compaction_needed_json,
+            recent_failures_json, domain_stats_json,
+            cost_summary_json
+        ) VALUES (
+            '{snapshot_date.isoformat()}',
+            '{_now_str}',
             '{_esc(generated_by)}',
             {kpi.get('total_tables', 0)},
             {kpi.get('hk_enabled', 0)},
