@@ -30,7 +30,12 @@ render_header(page_title="Non-Prod Lifecycle", page_icon="♻️")
 # ── Environment selector ───────────────────────────────────────────────────────
 env = st.selectbox("Environment", ["preprod", "dev", "test"], key="np_env")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 State Overview", "🛡️ Submit Exemption", "🙋 Claim Table", "⚫ Deletion History"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 State Overview",
+    "🛡️ Bulk Exemption / Claim",
+    "🙋 Single Table Action",
+    "⚫ Deletion History",
+])
 
 # ── Tab 1: State Overview ──────────────────────────────────────────────────────
 with tab1:
@@ -130,111 +135,192 @@ Backup-pattern tables (`_bkp`, `_backup`, `_copy`) are auto-flagged and skip str
 
 # ── Tab 2: Submit Exemption ────────────────────────────────────────────────────
 with tab2:
-    st.markdown("#### Submit an Exemption")
-    st.info("Submitting an exemption moves the table back to ACTIVE and prevents deletion for one more cycle. Provide a clear business reason.")
-
-    from app.components.table_selector import render_flat as _flat
-    exempt_fqn = _flat(
-        key_prefix="exempt",
-        label="Table",
-        registry_filter="environment IN ('preprod','dev','test')",
-        help_text="Search by table name or database.",
+    st.markdown("#### 🛡️ Bulk Exemption / Claim")
+    st.caption(
+        "Select tables from the list below. "
+        "Exemption resets to ACTIVE for one more cycle. "
+        "Claim assigns you as owner and resets to ACTIVE. "
+        "Both require a business reason."
     )
-    if not exempt_fqn:
-        exempt_fqn = st.text_input(
-            "Or enter FQN manually",
-            placeholder="glue_catalog.preprod_db.my_table",
-            key="exempt_fqn_manual",
+
+    # Load actionable tables (not ACTIVE/DROPPED)
+    _bulk_sql = f"""
+        SELECT table_fqn, domain, environment, lifecycle_state,
+               days_since_activity, greenzone_expires_at,
+               pending_drop_expires_at, owner_email
+        FROM {NONPROD_REGISTRY_TABLE}
+        WHERE environment = '{env}'
+          AND lifecycle_state NOT IN ('ACTIVE','DROPPED')
+        ORDER BY
+            CASE lifecycle_state
+                WHEN 'PENDING_DROP'    THEN 1
+                WHEN 'GREENZONE'       THEN 2
+                WHEN 'STALE_CANDIDATE' THEN 3
+                ELSE 4
+            END,
+            days_since_activity DESC
+        LIMIT 500
+    """
+    try:
+        _bulk_df = cached_read_sql(_bulk_sql)
+    except Exception as _be:
+        _bulk_df = None
+        st.error(f"Load failed: {_be}")
+
+    if _bulk_df is not None and not _bulk_df.empty:
+        st.markdown(f"**{len(_bulk_df)} table(s) requiring action:**")
+
+        # Badge the state column
+        _disp_bulk = _bulk_df.copy()
+        _disp_bulk["lifecycle_state"] = _disp_bulk["lifecycle_state"].apply(lifecycle_badge)
+        _disp_bulk["table_fqn"] = _disp_bulk["table_fqn"].str.replace(
+            r"^glue_catalog[.]", "", regex=True
+        )
+        _disp_bulk.insert(0, "Select", False)
+
+        _edited_bulk = st.data_editor(
+            _disp_bulk,
+            column_config={
+                "Select":          st.column_config.CheckboxColumn("✓", default=False),
+                "lifecycle_state": st.column_config.TextColumn("State"),
+                "table_fqn":       st.column_config.TextColumn("Table"),
+                "days_since_activity": st.column_config.NumberColumn("Days Inactive"),
+                "greenzone_expires_at": st.column_config.TextColumn("GZ Expires"),
+                "pending_drop_expires_at": st.column_config.TextColumn("Drop At"),
+            },
+            use_container_width=True,
+            hide_index=True,
+            disabled=["table_fqn","domain","environment","lifecycle_state",
+                      "days_since_activity","greenzone_expires_at",
+                      "pending_drop_expires_at","owner_email"],
+            key=f"bulk_action_editor_{env}",
+            height=min(400, max(150, len(_bulk_df) * 35 + 40)),
         )
 
-    if exempt_fqn:
-        check_sql = f"""
-            SELECT table_fqn, lifecycle_state, domain, days_since_activity,
-                   greenzone_expires_at, pending_drop_expires_at
-            FROM {NONPROD_REGISTRY_TABLE}
-            WHERE table_fqn = '{exempt_fqn}' LIMIT 1
-        """
-        try:
-            check_df = cached_read_sql(check_sql)
-            if check_df.empty:
-                st.warning("Table not found in non-prod registry.")
+        _selected_bulk = _edited_bulk[_edited_bulk["Select"]]
+        if not _selected_bulk.empty:
+            st.markdown(f"**{len(_selected_bulk)} table(s) selected**")
+
+        _action_reason = st.text_area(
+            "Business Reason (required for all selected tables)",
+            placeholder="Used by Q2 reporting sprint — will be cleaned up by 2026-06-30",
+            key="bulk_action_reason",
+        )
+
+        _ba_col1, _ba_col2 = st.columns(2)
+        with _ba_col1:
+            _do_exempt = st.button(
+                f"🛡️ Exempt {len(_selected_bulk)} Table(s)",
+                type="primary",
+                disabled=(_selected_bulk.empty),
+                key="bulk_exempt_btn",
+            )
+        with _ba_col2:
+            _do_claim = st.button(
+                f"🙋 Claim {len(_selected_bulk)} Table(s)",
+                disabled=(_selected_bulk.empty),
+                key="bulk_claim_btn",
+            )
+
+        if (_do_exempt or _do_claim) and not _selected_bulk.empty:
+            if not _action_reason.strip():
+                st.error("Business reason is required.")
             else:
-                row = check_df.iloc[0]
-                state = row.get("lifecycle_state", "")
-                st.markdown(f"""
-                **Current State:** {lifecycle_badge(state)}
-                **Days Inactive:** {row.get('days_since_activity', '—')}
-                **GREENZONE Expires:** {row.get('greenzone_expires_at', '—')}
-                **Pending Drop At:** {row.get('pending_drop_expires_at', '—')}
-                """)
+                from datetime import datetime as _dt_bulk
 
-                if state not in ("GREENZONE", "PENDING_DROP", "STALE_CANDIDATE"):
-                    st.info(f"This table is in `{state}` — no exemption needed.")
-                else:
-                    reason = st.text_area(
-                        "Business Reason (required)",
-                        placeholder="This table is used by the Q2 reporting sprint, will be cleaned up by 2026-06-30",
-                        key="np_exempt_reason",
-                    )
-                    dry_note = "⚠️ Dry Run ON — no changes will be written." if is_dry_run() else ""
-                    if dry_note:
-                        st.warning(dry_note)
+                from app.components.auth import current_user as _cu_bulk
+                _now_b = _dt_bulk.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+                _action_label = "Exempt" if _do_exempt else "Claim"
+                _ok_b = _fail_b = 0
 
-                    if st.button("🛡️ Submit Exemption", type="primary"):
-                        if not reason:
-                            st.error("Please provide a business reason.")
-                        else:
-                            from datetime import datetime
-                            now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
-                            update_sql = f"""
-                                UPDATE {NONPROD_REGISTRY_TABLE}
-                                SET lifecycle_state      = 'ACTIVE',
-                                    previous_state       = '{state}',
-                                    owner_exempted       = true,
-                                    owner_response_at    = TIMESTAMP '{now}',
-                                    owner_response_note  = '{reason.replace("'","''")}',
-                                    state_changed_at     = TIMESTAMP '{now}'
-                                WHERE table_fqn = '{exempt_fqn}'
-                            """
-                            execute_write(update_sql, workgroup="app", dry_run=is_dry_run())
-                            from app.components.auth import current_user as _cu
-                            audit(AuditEvent(
-                                actor=_cu(),
-                                action_type=AuditAction.LIFECYCLE_EXEMPTION,
-                                page_source="9_NonProd_Lifecycle",
-                                target_type="table",
-                                target_id=exempt_fqn,
-                                environment=env,
-                                dry_run=is_dry_run(),
-                                status="DRY_RUN" if is_dry_run() else "SUCCESS",
-                                reason=reason,
-                            ))
-                            st.success(
-                                f"✅ Exemption submitted for `{exempt_fqn}`"
-                                + (" (dry run)" if is_dry_run() else "")
-                            )
-        except Exception as e:
-            st.error(f"Error: {e}")
+                for _, _br in _selected_bulk.iterrows():
+                    # Restore full FQN
+                    _fqn_b = _bulk_df[_bulk_df["table_fqn"].str.endswith(
+                        str(_br["table_fqn"]).split(".")[-1]
+                    )]["table_fqn"].iloc[0] if "glue_catalog" not in str(_br["table_fqn"]) else str(_br["table_fqn"])
 
-# ── Tab 3: Claim Table ────────────────────────────────────────────────────────
+                    _state_b = str(_br.get("lifecycle_state","")).replace("✅","").replace("🟡","").replace("🟠","").replace("🔴","").strip()
+                    try:
+                        execute_write(
+                            f"UPDATE {NONPROD_REGISTRY_TABLE} "
+                            f"SET lifecycle_state = 'ACTIVE', "
+                            f"previous_state = '{_state_b}', "
+                            f"owner_exempted = 1, "
+                            f"exemption_reason = '{_action_reason.strip().replace(chr(39), chr(39)*2)}', "
+                            f"state_changed_at = '{_now_b}' "
+                            + (f", owner_email = '{_cu_bulk()}' " if _do_claim else "")
+                            + f"WHERE table_fqn LIKE '%{str(_br['table_fqn']).split('.')[-1]}'",
+                            workgroup="app", dry_run=is_dry_run(),
+                        )
+                        audit(AuditEvent(
+                            actor=_cu_bulk(),
+                            action_type=AuditAction.LIFECYCLE_EXEMPTION,
+                            page_source="9_NonProd_Lifecycle",
+                            target_type="table",
+                            target_id=str(_br["table_fqn"]),
+                            environment=env, dry_run=is_dry_run(),
+                            status="DRY_RUN" if is_dry_run() else "SUCCESS",
+                            reason=f"{_action_label}: {_action_reason.strip()}",
+                        ))
+                        _ok_b += 1
+                    except Exception as _be2:
+                        _fail_b += 1
+                        st.error(f"{_br['table_fqn']}: {_be2}")
+
+                st.success(
+                    f"✅ {_action_label}d {_ok_b} table(s)"
+                    + (f", {_fail_b} failed" if _fail_b else "")
+                    + (" (dry run)" if is_dry_run() else "")
+                )
+                cached_read_sql.clear()
+                st.rerun()
+    elif _bulk_df is not None:
+        st.success("✅ No tables currently require exemption or claiming in this environment.")
+
+# ── Tab 3: Single Table Action (edge cases) ───────────────────────────────────
 with tab3:
-    st.markdown("#### 🙋 Claim This Table")
+    st.markdown("#### 🙋 Single Table Action")
     st.caption(
-        "Assign yourself as owner and reset the table to ACTIVE. "
-        "Requires a reason. Audited."
+        "For individual tables — search by name, review its current state, "
+        "then exempt or claim. Use the Bulk tab for multiple tables."
     )
     from app.components.auth import current_user as _cu_claim
-    from app.components.table_selector import render_flat as _flat_claim
-    claim_fqn = _flat_claim(
-        key_prefix="claim",
-        label="Table to Claim",
-        registry_filter="environment IN ('preprod','dev','test')",
-        help_text="Search by table name. Only non-prod tables shown.",
-    ) or st.text_input(
-        "Or enter FQN manually",
-        placeholder="glue_catalog.preprod_db.my_table",
-        key="claim_fqn_manual",
+    # Searchable selectbox from live nonprod_registry
+    try:
+        _sa_fqns = cached_read_sql(
+            f"SELECT table_fqn, lifecycle_state, days_since_activity "
+            f"FROM {NONPROD_REGISTRY_TABLE} "
+            f"WHERE environment = '{env}' AND lifecycle_state != 'DROPPED' "
+            f"ORDER BY table_fqn"
+        )
+        _sa_opts = ["— search or type below —"] + _sa_fqns["table_fqn"].tolist()
+    except Exception:
+        _sa_fqns = None
+        _sa_opts = ["— search or type below —"]
+
+    _sa_sel = st.selectbox(
+        "Search table (type to filter)",
+        [f.replace("glue_catalog.", "") for f in _sa_opts],
+        key="claim_table_sel",
+        help="Type to search. All non-prod tables in the registry.",
     )
+    if _sa_sel and not _sa_sel.startswith("—"):
+        claim_fqn = "glue_catalog." + _sa_sel if not _sa_sel.startswith("glue_catalog") else _sa_sel
+        # Show current state
+        if _sa_fqns is not None:
+            _sel_row = _sa_fqns[_sa_fqns["table_fqn"].str.endswith(_sa_sel.split(".")[-1])]
+            if not _sel_row.empty:
+                _sr = _sel_row.iloc[0]
+                st.caption(
+                    f"State: **{lifecycle_badge(_sr.get('lifecycle_state',''))}** · "
+                    f"Days inactive: **{_sr.get('days_since_activity','—')}**"
+                )
+    else:
+        claim_fqn = st.text_input(
+            "Or enter FQN manually",
+            placeholder="glue_catalog.preprod_db.my_table",
+            key="claim_fqn_manual",
+        )
     claim_reason = st.text_area("Reason for claiming *", key="claim_reason",
                                  placeholder="Why are you claiming ownership of this table?")
     if st.button("🙋 Claim This Table", type="primary", key="claim_btn"):
