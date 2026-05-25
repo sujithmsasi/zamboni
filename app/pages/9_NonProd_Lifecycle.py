@@ -34,6 +34,41 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 State Overview", "🛡️ Submit Exempti
 
 # ── Tab 1: State Overview ──────────────────────────────────────────────────────
 with tab1:
+
+    # ── How identification works ──────────────────────────────────────────────
+    with st.expander("ℹ️ How are stale tables identified? What happens?", expanded=False):
+        from engine.engines.lifecycle_engine import (
+            DEFAULT_GREENZONE_DAYS,
+            DEFAULT_PENDING_DROP_DAYS,
+            DEFAULT_STALE_DAYS,
+        )
+        st.markdown(f"""
+**Identification:**
+The Lifecycle Engine scans all non-prod Glue databases on every run (`ZAMBONI-NONPROD-SCAN`).
+A table is tracked from the moment it is first discovered.
+Activity is measured from `last_query_at` and `last_write_at` timestamps (read from CloudTrail / Glue API).
+
+**Thresholds (defaults — overridden per domain in domain_registry):**
+
+| Stage | Default | Description |
+|---|---|---|
+| **ACTIVE → STALE_CANDIDATE** | `{DEFAULT_STALE_DAYS}` days inactive | No query or write in this many days |
+| **STALE_CANDIDATE → GREENZONE** | Immediate (next scan) | Owner is notified via email/SNS. Table has a grace window. |
+| **GREENZONE window** | `{DEFAULT_GREENZONE_DAYS}` days | Owner can claim or exempt the table during this period |
+| **GREENZONE → PENDING_DROP** | After {DEFAULT_GREENZONE_DAYS} days | Final 48-hour notice sent |
+| **PENDING_DROP → DROPPED** | `{DEFAULT_PENDING_DROP_DAYS}` days | Table is physically deleted from Glue + S3 |
+
+**What happens at each stage:**
+- 🟡 **STALE_CANDIDATE** — flagged as inactive, no action yet
+- 🟠 **GREENZONE** — owner notification sent, `greenzone_expires_at` set. Owner can claim or exempt.
+- 🔴 **PENDING_DROP** — final notification, countdown shown in UI. No more extensions.
+- ⚫ **DROPPED** — Glue table deleted, S3 data deleted. Logged in Deletion History tab.
+
+**Exemptions:**
+Any table can be exempted by checking the **Submit Exemption** tab. Exempt tables stay ACTIVE permanently.
+Backup-pattern tables (`_bkp`, `_backup`, `_copy`) are auto-flagged and skip straight to exemption review.
+""")
+
     state_filter = st.selectbox(
         "Lifecycle State",
         ["All", "ACTIVE", "STALE_CANDIDATE", "GREENZONE", "PENDING_DROP"],
