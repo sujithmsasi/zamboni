@@ -296,6 +296,51 @@ def get_table_optimizer(database: str, table_name: str, optimizer_type: str) -> 
         return False
 
 
+# ── Metadata Rollback (Workstream A / Phase 1c) ───────────────────────────────
+
+_READONLY_TABLE_KEYS = {
+    "DatabaseName", "CreateTime", "UpdateTime", "CreatedBy",
+    "IsRegisteredWithLakeFormation", "CatalogId", "VersionId",
+    "UpdateTableInputCombined",
+}
+
+
+def update_metadata_location(
+    database: str, table_name: str, metadata_location: str, dry_run: bool = False,
+) -> bool:
+    """
+    Set Parameters['metadata_location'] on a Glue table to a specific value,
+    preserving every other table parameter and the storage descriptor --
+    used by engine.core.recovery.rollback_metadata() to point a table's
+    catalog entry back at a prior (still-existing) Iceberg metadata.json.
+    """
+    if dry_run:
+        log.info(
+            "glue.update_metadata_location.dry_run",
+            database=database, table=table_name, metadata_location=metadata_location,
+        )
+        return True
+
+    table = get_table(database, table_name)
+    if not table:
+        log.error("glue.update_metadata_location.table_not_found", database=database, table=table_name)
+        return False
+
+    table_input = {k: v for k, v in table.items() if k not in _READONLY_TABLE_KEYS}
+    table_input["Parameters"] = {**table.get("Parameters", {}), "metadata_location": metadata_location}
+
+    try:
+        _get_client().update_table(DatabaseName=database, TableInput=table_input)
+        log.info(
+            "glue.update_metadata_location.done",
+            database=database, table=table_name, metadata_location=metadata_location,
+        )
+        return True
+    except Exception as e:
+        log.error("glue.update_metadata_location.failed", database=database, table=table_name, error=str(e))
+        return False
+
+
 # ── Gate 1 — Upstream Job Status ──────────────────────────────────────────────
 
 def get_last_job_run(job_name: str) -> dict | None:

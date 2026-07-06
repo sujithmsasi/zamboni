@@ -141,3 +141,58 @@ mock `read_sql`/`run_query` above this layer), so the drift was latent.
 Out of scope here — flagged for a follow-up fix (either realign the local
 DDL positionally, or move `execution_log.write()` to a named-column
 INSERT so schema order stops being load-bearing).
+
+## Phase 1c: 72h floor = guaranteed rollback window (showcase copy)
+`engine/core/recovery.py::ORPHAN_REFUSAL_REASON` cites
+`ORPHAN_MIN_AGE_HOURS_FLOOR` (72h) verbatim, not a generic "not found"
+message. This is intentional, exact showcase copy, not an implementation
+detail: the property clamp Phase 1b's `_clamp_vacuum_properties()` applies
+before every SAFE-VACUUM guarantees `vacuum_max_snapshot_age_seconds` is at
+least 72h worth of seconds, so Athena's combined VACUUM (contracts.md §5-A)
+cannot physically delete the files backing a snapshot younger than that —
+which means **the 72h floor IS the guaranteed rollback window**, not just a
+retention setting. `validate_rollback_target()`'s refusal message makes that
+guarantee legible to an operator at the exact moment it matters, and doubles
+as the VP-facing showcase line (contracts.md D2's rationale). See
+`docs/runbooks/metadata_recovery.md` for the full explanation.
+
+## Phase 1c: local-mode validate/rollback simulation (documented gap, same pattern as capture_state)
+`engine/core/recovery.py`'s `_validate_local()`/`_rollback_local()` do not
+call real S3/Glue — there is no live catalog or S3 bucket in
+`ZAMBONI_LOCAL_MODE` to check against, the same documented gap
+`integrity_checker.capture_state()` already carries for
+`metadata_location`. Simulation rules (deliberately simple, not a
+general-purpose fake AWS):
+  - `validate_rollback_target()`: a `metadata_location` containing the
+    literal substring `"_orphaned"` simulates a missing/orphan-deleted
+    target (exercises the refusal path without real AWS); anything else
+    simulates a present, valid metadata.json with a deterministic fake
+    `snapshot_id` (`hash((fqn, metadata_location))`).
+  - `rollback_metadata()`'s local write path targets a new
+    `stream_registry.metadata_location` column (`scripts/seed_local_db.py`
+    migration) that is **local-simulation-only** — it is NOT part of
+    contracts.md §3.2's locked Athena DDL. In real mode the current pointer
+    always comes from live Glue `Parameters.metadata_location`, never from
+    `stream_registry`, so there is no schema conflict between the two.
+  - The data-file spot-check (`_spot_check_data_files()`) lazily imports
+    `fastavro` (added to `requirements.txt`, matching the existing
+    optional-dependency pattern `itables` already uses in
+    `app/components/grid_utils.py`) and degrades to "skipped" rather than
+    failing validation if it isn't installed — both Iceberg manifest-lists
+    and manifest files are Avro, and reading them is genuinely best-effort
+    per the phase brief ("capped").
+
+## Phase 1c: fleet_conflict_summary staleness computed in Python, not SQL INTERVAL HOUR
+`engine/core/governance.py::fleet_conflict_summary()` fetches raw
+`aws_opt_checked_at`/`gate0_override_until` values and computes
+scanned/conflicted/stale_cache/overridden counts in Python (parsing
+timestamps, comparing `age_hours`), rather than a single SQL query with
+`NOW() - INTERVAL 'n' HOUR`. Reason: `engine/utils/local_db.py::_translate()`
+only rewrites DAY-unit `INTERVAL` literals (`INTERVAL 'n' DAY` ->
+bare `n`); an HOUR-unit clause reaches SQLite untranslated and is invalid
+syntax there, which would fail the *entire* query (including the
+conflicted/scanned counts that have nothing to do with staleness) in
+`ZAMBONI_LOCAL_MODE`. This mirrors the convention
+`conflict_detector.get_cached()` already established for the exact same
+staleness check (parse timestamp, compute `age_hours` in Python) rather than
+inventing a new one.

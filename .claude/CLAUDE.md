@@ -264,3 +264,89 @@ Gate 0. 518 tests passing (494 + 24 new), ruff clean.
   local table.
 - No changes to `vacuum.py` logic beyond what Phase 1a already made. No UI
   changes.
+
+2026-07-06 Phase 1c: Recovery Tooling & Governance Report shipped —
+Workstream A (Engine Hardening) is now complete. 562 tests passing
+(542 + 20 new: 13 in `test_recovery.py`, 7 in `test_governance.py`), ruff
+clean.
+- `engine/core/recovery.py` (new): `get_rollback_candidates()` (execution_log
+  rows with `metadata_location_before` set, newest first),
+  `validate_rollback_target()` (S3 `head_object` existence check -> parse ->
+  confirm valid Iceberg metadata -> best-effort capped data-file spot-check),
+  `rollback_metadata()` (Glue `update_table` preserving all other
+  parameters, writes an `execution_log` `ROLLBACK` row + `audit_log` entry +
+  SNS alert). Refuses (no Glue call, no log write) when validation reports
+  the target missing, citing `ORPHAN_MIN_AGE_HOURS_FLOOR` (72h) verbatim —
+  see `.claude/decisions.md`'s "72h floor = guaranteed rollback window" note.
+  Local mode simulates validate/rollback (documented gap, same pattern as
+  `integrity_checker.capture_state()`) — see decisions.md.
+- `engine/utils/glue_client.py`: added `update_metadata_location()` — sets
+  `Parameters['metadata_location']` via `update_table`, preserving every
+  other table field/parameter (filters out response-only keys like
+  `DatabaseName`/`CreateTime`/`VersionId` rather than hand-listing what to
+  keep).
+- `engine/utils/s3_client.py`: added `get_object_bytes()` (thin
+  `get_object(...)["Body"].read()` wrapper) so `recovery.py` never
+  constructs raw boto3 clients inline — keeps every AWS call mockable via
+  the same `monkeypatch.setattr(module, "name", ...)` convention already
+  used throughout `tests/unit/`.
+- `scripts/recover_metadata.py` (new): interactive CLI —
+  `--fqn` (+ optional `--to <s3://...>` to skip candidate selection),
+  lists/validates/confirms (types the table FQN back for a real rollback),
+  `--dry-run`/`--no-dry-run`. Routes the process's default boto3 session
+  through `get_mode()` (contracts.md §2) but is a no-op in
+  `ZAMBONI_LOCAL_MODE` — no AWS calls happen there, and
+  `boto3.Session().profile_name` always resolves to the literal string
+  `"default"` even with nothing configured, so forwarding it blindly into
+  `setup_default_session()` would force a profile lookup that fails on a
+  machine with no `~/.aws/config` at all.
+- `engine/core/governance.py` (new): `dual_optimizer_report()`
+  (`stream_registry` ⋈ `hk_config`, `hk_enabled=true AND any aws_opt_*
+  true`, paged or `export_all` for CSV) and `fleet_conflict_summary()`
+  (scanned/conflicted/stale-cache/overridden counts) — written as the
+  reusable engine functions `GET /api/conflicts` (contracts.md §6) will call
+  in Phase 2. Staleness/override computed in Python (parsed timestamp +
+  `age_hours`), not SQL `NOW() - INTERVAL 'n' HOUR` — see decisions.md for
+  why (local_db's SQL translator only rewrites DAY-unit intervals).
+- `app/pages/4_Health_Dashboard.py`: new "🛡️ Maintenance Governance" section
+  — KPI row from `fleet_conflict_summary()`, itables grid of
+  `dual_optimizer_report()` with CSV export, "🔄 Rescan conflicts" button
+  (`conflict_detector.scan_fleet()` + flash + rerun, following the existing
+  `st.session_state["*_flash"]` pattern from `3_Policy_Configuration.py`),
+  and a "Recent Integrity Failures — Last 7 Days" grid. Verified with
+  `streamlit.testing.v1.AppTest` (headless, no browser in this
+  environment) against the seeded local DB: renders with no exceptions, all
+  five governance KPIs show real values, the rescan button and grid render.
+- `engine/core/audit.py`: added `AuditAction.METADATA_ROLLBACK`.
+- `scripts/seed_local_db.py`: new migration
+  `stream_registry.metadata_location` (local-simulation-only, see
+  decisions.md); `fin_payment_master` seeded with `aws_opt_compaction=1` +
+  recent `aws_opt_checked_at` (the ≥1 dual-optimizer-conflict demo row the
+  Governance tab needs) plus a simulated `metadata_location`; new
+  `seed_rollback_demo_rows()` adds 2 realistic `execution_log` rows
+  (`vacuum` then `optimize`, chained `metadata_location_before/after`) so
+  `get_rollback_candidates()` has real data to show — inserted via its own
+  `insert_rows()` call, not concatenated onto `seed_execution_log()`'s list,
+  since `insert_rows()` derives its INSERT column set from `rows[0].keys()`
+  alone and would have silently dropped every Safety-Core column otherwise
+  (found and fixed during this phase's own dry-run verification).
+- `requirements.txt`: added `fastavro` (optional, lazily imported, same
+  graceful-degradation pattern as `itables`) for the data-file spot-check.
+- `docs/runbooks/metadata_recovery.md` and `docs/runbooks/lock_operations.md`
+  (both new): operator runbooks — symptoms, triage queries, CLI walkthrough,
+  the 72h window explanation, escalation path, prevent-recurrence pointers;
+  lock viewing/force-release (DynamoDB console + CLI, SQLite for local mode,
+  when force-release is safe, the upcoming `DELETE /api/locks/{fqn}`).
+- Verified end-to-end against the seeded local DB:
+  `python scripts/recover_metadata.py --fqn
+  glue_catalog.finance_master_db.fin_payment_master --dry-run` lists 2
+  candidates, validates the selected one (simulated, local mode), prompts
+  for a reason, writes a `DRY_RUN`/`SKIPPED`-integrity `execution_log` row
+  and an `audit_log` row with the reason and before/after locations, sends a
+  dry-run SNS log line. Also verified the refusal path directly against a
+  `--to ..._orphaned.metadata.json` target: prints the exact required 72h
+  message and exits non-zero with no writes.
+- No changes to `vacuum.py`/orchestrator/integrity-checker logic — this
+  phase is additive tooling only.
+- **Workstream A (Engine Hardening) is complete as of this phase** — tagged
+  `engine-hardening-v1`.
