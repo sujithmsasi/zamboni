@@ -37,3 +37,9 @@ itables>=2.0.0
 # Optional: engine/core/recovery.py's data-file spot-check lazily imports this
 # to parse Avro manifest-lists/manifests; degrades to "skipped" if absent.
 fastavro>=1.9.0
+
+# ── FastAPI layer (Workstream B, Phase 2) ─────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9
+httpx>=0.27.0  # FastAPI TestClient (tests/api only)

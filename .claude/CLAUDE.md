@@ -33,7 +33,17 @@ scripts/             seed_local_db.py (SQLite schema + migrations list),
                      seed_scale_test.py
 deploy/              CodeDeploy/CodeBuild pieces — NO CloudFormation template
                      exists yet (see contracts.md §8 REALITY note)
-tests/unit/          494 tests, all passing
+api/                 FastAPI app (Phase 2) — main.py, deps.py, models.py,
+                     routers/ (8, one per contracts §6 section), services/
+                     (8, lift SQL from the matching Streamlit page)
+ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3) — Home
+                     and Health Dashboard complete, 11 routes still
+                     PlaceholderPage; see ui/PATTERN.md for the canonical
+                     page structure Waves 1-2 replicate
+tests/unit/          562 tests, all passing
+tests/api/           61 tests — run as its own `pytest tests/api`
+                     invocation, not combined with tests/unit (see Phase 2
+                     entry below for why)
 ```
 
 ## Engine Architecture Facts (Phase 0 audit — cite before assuming)
@@ -108,10 +118,13 @@ tests/unit/          494 tests, all passing
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-05)
+## Test Baseline (2026-07-06, updated through Phase 3)
 ```
-python -m pytest tests/unit/ -q   → 494 passed in 33.78s
-ruff check .                      → All checks passed!
+python -m pytest tests/unit -q   → 562 passed
+python -m pytest tests/api -q    → 61 passed   (separate invocation — see Phase 2 entry)
+ruff check .                     → All checks passed!
+cd ui && npx tsc --noEmit        → clean
+cd ui && npm run build           → clean
 ```
 
 ## Migration Progress
@@ -350,3 +363,206 @@ clean.
   phase is additive tooling only.
 - **Workstream A (Engine Hardening) is complete as of this phase** — tagged
   `engine-hardening-v1`.
+
+2026-07-06 Phase 2: FastAPI Layer shipped — Workstream B begins. 623 tests
+passing (562 unit + 61 api), ruff clean. 44 endpoints across 8 routers, all
+paths/methods exactly matching contracts.md §6 (contract-smoke test guards
+this). Engine called in-process throughout; zero Streamlit files touched.
+- `api/main.py`: FastAPI app, CORS (dev origin `http://localhost:5173`),
+  three exception handlers (HTTPException/RequestValidationError/generic
+  Exception) all converting to the locked `{data,pagination,error}`
+  envelope, `ui/dist` static mount (guarded, routes registered first — no
+  `ui/` exists yet so this is currently a no-op). `/docs` on by default.
+- `api/deps.py`: `get_current_user()` env-var stub (`ZAMBONI_USER`, default
+  `"local-dev"` — the OIDC seam per contracts §10 D5), `get_dry_run_default()`,
+  `PageParams` (page/size, size≤250).
+- `api/models.py`: Pydantic v2 request models mirroring each engine
+  function's signature, `MutationResult`, and `envelope()` — the latter
+  runs every response through a recursive `_clean()` (NaN/NaT → null,
+  numpy scalars → native, Timestamp/date → ISO string) so services can
+  pass `DataFrame.to_dict(orient="records")` straight through; found this
+  the hard way — Starlette's `JSONResponse` sets `allow_nan=False`, so any
+  SQLite NULL surfacing as pandas `NaN` 500'd every list endpoint until
+  this was centralized in one place instead of patched per-service.
+- `api/services/*.py` (8 files: tables, policies, gates, lifecycle,
+  executions, controlm, settings, system): lift the query/mutation SQL
+  patterns from the corresponding Streamlit pages (2_Table_Registration.py
+  browse/register/bulk-Control-M/job-mapping CSV import-export,
+  3_Policy_Configuration.py view/edit/bulk-apply/templates,
+  6_Dry_Run_Viewer.py gate summary + SQL preview, 9_NonProd_Lifecycle.py
+  state overview/exempt/claim, 7/8/10 execution-log/cost/stale queries,
+  11_Settings.py + 12_Audit_Log.py) into standalone functions the routers
+  call — pages keep their own inline SQL this phase, nothing shared by
+  import, per the phase brief's "lift, never duplicate."
+- `api/routers/*.py` (8 files, one per contracts §6 section): thin HTTP
+  layer over the services — builds `AuditEvent`s inline (actor from
+  `get_current_user()`), returns `event.audit_id` as the mutation's
+  `audit_id` (contracts' "uuid recorded in the event" option, since
+  `engine.core.audit.audit()` doesn't return one and extending it wasn't
+  needed — `AuditEvent.audit_id` already auto-generates via
+  `default_factory=uuid4`). Escalation create/update/delete are the one
+  exception: `engine.core.escalation.upsert_entry`/`delete_entry` return
+  bare `bool`, so those three routes generate their own `uuid.uuid4()` for
+  the envelope's `audit_id` rather than threading a new return value
+  through the engine layer for three call sites.
+- **Route-registration-order bug found and fixed during this phase's own
+  testing**: `api/routers/tables.py` originally declared
+  `GET /api/tables/{fqn:path}` before `GET /api/tables/job-mapping/export`
+  — FastAPI matches GET routes in registration order and the `{fqn:path}`
+  catch-all greedily matched `job-mapping/export` as a table FQN, 404'ing
+  every request to the literal route behind it. Fixed by moving both
+  `{fqn:path}` routes (GET, PUT) to the end of the file with a comment
+  explaining why; this class of bug is exactly what the contract-smoke
+  test (route existence) does NOT catch, since the path returns *some*
+  response — only exercising the endpoint via TestClient caught it.
+- **Found, not fixed** (pre-existing engine behavior, out of scope):
+  `engine/utils/athena_client.py::run_query()` dispatches to
+  `local_db.run_query_local()` when `ZAMBONI_LOCAL_MODE` is true *before*
+  checking its own `dry_run` parameter — so in local mode, every SQL
+  mutation writes regardless of `dry_run`. This predates Phase 2 (every
+  Streamlit page's dry-run toggle has the same gap locally) and isn't
+  something a new API layer should silently paper over or fix as a
+  drive-by; documented here and in `tests/api/test_tables.py`'s
+  `test_register_table_dry_run` (which asserts the DRY_RUN audit trail
+  and envelope shape instead of data immutability, since the latter isn't
+  true in local mode). One place this phase *did* fix it properly:
+  `policies_svc.update_template()` writes straight to
+  `config/policy_templates.json` on disk (not through `run_query`), so
+  `dry_run` is genuinely honored and verified there — caught because the
+  first version of that test accidentally overwrote `STAGING_DEFAULT`'s
+  description in the real repo file (reverted via `git checkout`) before
+  the `dry_run` gate was added.
+- `engine/core/audit.py`: added `AuditAction.GATE0_OVERRIDE_SET` (contracts
+  §6 gates router requirement).
+- `engine/core/lock_service.py`: added `LockService.list_locks()` and
+  `LockService.release_force(table_fqn)` (local SQLite + DynamoDB backends)
+  for `GET /api/locks` / `DELETE /api/locks/{fqn}` — the latter is an
+  unconditional delete (no `lock_owner` ConditionExpression), audited by
+  the caller (`system_svc.release_lock`), not the lock service itself.
+- `requirements.txt`: added `fastapi`, `uvicorn[standard]`,
+  `python-multipart` (file uploads), `httpx` (FastAPI `TestClient`, tests
+  only).
+- `tests/api/` (new dir): `conftest.py` seeds a dedicated SQLite file
+  (`tests/api/_zamboni_api_test.db`, cleaned up after the session) by
+  calling `scripts/seed_local_db.py::main()` directly, with
+  `ZAMBONI_LOCAL_MODE`/`ZAMBONI_MODE`/`ZAMBONI_LOCAL_DB`/`ZAMBONI_USER` set
+  at conftest import time — this suite must run as its own `pytest
+  tests/api` invocation (fresh interpreter), not combined into the same
+  process as `tests/unit`, since `config/settings.py` reads
+  `ZAMBONI_LOCAL_MODE` once at first import and several modules
+  (`engine/utils/athena_client.py`, `glue_client.py`) bind it as a
+  module-level constant at that time — setting env vars later in the same
+  process wouldn't reach them. `tests/unit/` mocks AWS calls directly and
+  doesn't need this. `test_contract_smoke.py` fetches `/openapi.json` via
+  `TestClient` (robust to FastAPI's lazy `_IncludedRouter` internals in
+  this installed version, where `app.routes` doesn't eagerly flatten
+  included routers) and asserts all 44 contracts §6 (method, path) pairs
+  are present. Per-router files cover: happy/filtered GET with envelope+
+  pagination assertions, one dry-run mutation, one validation failure
+  (422), plus the Gate 0 override cap test (`gate0_override_until` far
+  beyond `GATE0_OVERRIDE_MAX_HOURS` is clamped, not rejected) and a 2-row
+  CSV job-mapping import round-trip (one match, one blank line stripped).
+- Verified end-to-end: `python -m pytest tests/unit -q` → 562 passed;
+  `python -m pytest tests/api -q` → 61 passed; `ruff check .` → All checks
+  passed. `uvicorn api.main:app --port 8000` against the existing seeded
+  `zamboni_local.db` (`ZAMBONI_LOCAL_MODE=true`): `/docs` → 200;
+  `curl localhost:8000/api/system/mode` →
+  `{"data":{"mode":"local","app_env":"dev","dry_run_default":true},"pagination":null,"error":null}`;
+  `curl "localhost:8000/api/tables?page=1&size=5"` → 5 rows with
+  `"pagination":{"page":1,"size":5,"total":17}`.
+- No Streamlit file modified this phase.
+
+2026-07-06 Phase 3: React Foundation + Home shipped, then grew well past
+its original "Home only" scope into a second fully-built page (Health
+Dashboard) plus several rounds of UI polish, per Sujith's live review.
+562 unit + 61 api tests passing throughout (backend additions were
+additive-only), ruff clean. Zero engine logic touched.
+- `ui/` (new): Vite + React 18 + TypeScript (strict) + Ant Design v5 +
+  TanStack Query + react-router-dom, exactly per contracts §7. `npx tsc
+  --noEmit` and `npm run build` both clean.
+- **Theme**: started from contracts §7's light-sidebar starting tokens,
+  then fully replaced with "Zamboni Arctic Blue" (`.claude/ui_design.md`,
+  a design doc Sujith supplied mid-phase) — dark navy gradient Sider,
+  Phosphor duotone icons (`@phosphor-icons/react`, replacing
+  `@ant-design/icons` everywhere, not just the sidebar), mint-green
+  "all clear" safety motif reused across the dry-run banner and Home's
+  Governance card, coastal-gradient KPI cards. See `.claude/decisions.md`
+  for the full reconciliation (including that the design doc's sample
+  `fill` icon prop doesn't exist in the real Phosphor API — approximated
+  with `color="currentColor"` + CSS-driven hover/active states instead).
+- **Sidebar**: 13 routes grouped into 5 categories (Overview/Registry/
+  Monitoring/Governance & Safety/Administration), one icon hue per
+  category (not per-icon — reconciles Sujith's "add color" ask with the
+  design doc's "no rainbow icons" rule). `position: sticky` + internal
+  flex layout (brand → scrollable menu region → user-menu footer) so it
+  stays fixed while page content scrolls. Took several rounds to get
+  right — a double-nested `overflow:auto` was letting the *outer* Sider
+  reserve its own scrollbar width on Windows' classic (non-overlay)
+  scrollbars, squeezing nav labels; fixed by making only the inner menu
+  region scrollable, then tightening `Menu` item spacing (`theme.ts`)
+  until the full 13-item/5-group list fits without scrolling at all on
+  normal viewport heights. Full history in `.claude/decisions.md`.
+- **Home** (`ui/src/pages/Home/`, complete): 5 clickable KPI cards (each
+  opens a `CoverageDetailModal` or `ExecutionsDetailModal` drill-down),
+  Fleet Coverage by Domain + Execution Trend charts (`recharts`, newly
+  added), a state-driven Governance card (mint when
+  `conflicts.conflicted === 0 && activeLocks === 0`, amber otherwise —
+  deliberately not static, since a fixed mint fill was contradicting a
+  red conflict chip inside it), Recent Activity grid at the bottom.
+  `hooks.ts`/`index.tsx` split is the canonical pattern documented in
+  `ui/PATTERN.md` for Waves 1-2 to replicate.
+- **Health Dashboard** (`ui/src/pages/HealthDashboard/`, also built —
+  was meant to stay a `PlaceholderPage` this phase, but Sujith asked for
+  a "major uplift" mid-session): Storage Reclaimed trend + Top Tables by
+  Reclaim leaderboard, Estimated Athena Cost trend, Fleet Health
+  Scorecard (donut) + Unhealthy Tables grid, Non-Prod Lifecycle Funnel,
+  Dry-Run Adoption table. Two deliberate honesty calls, both in
+  decisions.md: the health score is a proxy from failures/integrity/
+  conflicts (not a live per-table Iceberg `$snapshots` call — too
+  expensive fleet-wide), and "Dry-Run Adoption" is a snapshot ("which
+  domains have tables waiting longest") rather than a fabricated
+  historical trend, since the schema has no graduation-event log to plot
+  a real one against.
+- **Backend**: `api/services/executions_svc.py::health_kpis()` extended
+  three separate times (all additive fields, same locked route — contracts
+  §6 already documents it as serving "home + health dashboard numbers"):
+  `coverage_by_domain`/`execution_trend` for Home's charts, then
+  `reclaimed_storage_trend`/`top_tables_by_reclaim`/`cost_trend`/
+  `storage_savings`/`fleet_health`/`nonprod_funnel`/`dry_run_adoption` for
+  Health Dashboard. `api/services/system_svc.py::system_mode()` gained a
+  `user` field for the new sidebar user/logout menu (still a stub — no
+  real session exists yet, contracts §10 D5's OIDC seam is still
+  unbuilt; "Log out" shows a `message.info` saying so rather than faking
+  a session). `config/settings.py`: added `S3_STANDARD_USD_PER_GB_MONTH`
+  (flat-rate storage-cost estimate, same convention as the existing
+  $5/TB Athena estimate).
+- **Found and fixed, not pre-existing to this phase**:
+  `scripts/seed_local_db.py`'s dry-run ramp-up date had a sign bug
+  (`_date(-7 + 14)` == `_date(7)` == 7 days *ago*, not "expires in 7 days"
+  as the comment claimed) — `in_dry_run`/the new `dry_run_adoption` were
+  silently always 0/empty in local mode until fixed to `_date(-7)`. Also
+  added `seed_vacuum_audit_demo_rows()`/`seed_archival_demo_rows()` —
+  `vacuum_audit` had zero seeded rows (only ever populated by hand during
+  Phase 1b's own manual verification) and `execution_log` had zero
+  `engine='archival'` rows at all, so the new reclaim charts had nothing
+  to show without them.
+- **Found and fixed during this phase's own prod-serve verification**:
+  `api/main.py`'s `ui/dist` static mount 404'd on a direct GET to any
+  client-side route (`/health`, `/tables`, ...) — `StaticFiles(html=True)`
+  serves real files/index.html on exact matches only, no SPA fallback for
+  unmatched paths. Invisible in dev (Vite's dev server has this built in)
+  but real in prod-serve. Fixed with a `_SPAStaticFiles` subclass that
+  retries `index.html` on a 404 — caught a second bug fixing the first:
+  `except HTTPException` (FastAPI's subclass) never matched the
+  `starlette.exceptions.HTTPException` instance Starlette's own
+  `StaticFiles.get_response()` actually raises, so the first version of
+  the fallback silently never fired. Verified: `/`, `/health`, `/tables`
+  all 200 with the app shell; `/api/system/mode` still returns JSON
+  (registered before the mount, unaffected).
+- Verified end-to-end: `python -m pytest tests/unit -q` → 562 passed;
+  `python -m pytest tests/api -q` → 61 passed; `ruff check .` → All
+  checks passed; `npx tsc --noEmit` and `npm run build` (ui/) both clean;
+  prod-serve (`uvicorn api.main:app`, no Vite dev server running) confirmed
+  above. Full design-decision history — including the several rounds of
+  visual back-and-forth — lives in `.claude/decisions.md`, not repeated
+  here.

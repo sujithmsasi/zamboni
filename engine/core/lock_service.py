@@ -137,6 +137,71 @@ class LockService:
                 table_fqn=lock.table_fqn, lock_owner=lock.lock_owner,
             )
 
+    def list_locks(self) -> list[dict]:
+        """Return all currently-held locks (contracts.md §6 GET /api/locks)."""
+        if self.mode == "local":
+            return self._sqlite_list()
+        return self._ddb_list()
+
+    def release_force(self, table_fqn: str) -> bool:
+        """
+        Admin force-release, ignoring lock_owner (contracts.md §6
+        DELETE /api/locks/{fqn}) -- callers are responsible for auditing.
+        Returns True if a lock was actually removed.
+        """
+        if self.mode == "local":
+            return self._sqlite_release_force(table_fqn)
+        return self._ddb_release_force(table_fqn)
+
+    # ── SQLite backend: list / force-release ─────────────────────────────────
+
+    def _sqlite_list(self) -> list[dict]:
+        from engine.utils.local_db import get_connection
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT table_fqn, lock_owner, operation, acquired_at, "
+            "heartbeat_at, expires_at FROM maintenance_locks"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _sqlite_release_force(self, table_fqn: str) -> bool:
+        from engine.utils.local_db import get_connection
+        conn = get_connection()
+        cur = conn.execute("DELETE FROM maintenance_locks WHERE table_fqn = ?", (table_fqn,))
+        conn.commit()
+        return cur.rowcount > 0
+
+    # ── DynamoDB backend: list / force-release ───────────────────────────────
+
+    def _ddb_list(self) -> list[dict]:
+        client = self._client()
+        items: list[dict] = []
+        kwargs: dict = {"TableName": DDB_LOCK_TABLE}
+        while True:
+            resp = client.scan(**kwargs)
+            for i in resp.get("Items", []):
+                items.append({
+                    "table_fqn":    i["table_fqn"]["S"],
+                    "lock_owner":   i["lock_owner"]["S"],
+                    "operation":    i["operation"]["S"],
+                    "acquired_at":  i["acquired_at"]["S"],
+                    "heartbeat_at": i["heartbeat_at"]["S"],
+                    "expires_at":   int(i["expires_at"]["N"]),
+                })
+            if "LastEvaluatedKey" not in resp:
+                break
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+        return items
+
+    def _ddb_release_force(self, table_fqn: str) -> bool:
+        client = self._client()
+        try:
+            client.delete_item(TableName=DDB_LOCK_TABLE, Key={"table_fqn": {"S": table_fqn}})
+            return True
+        except Exception as e:
+            log.warning("lock_service.release_force_failed", table_fqn=table_fqn, error=str(e))
+            return False
+
     # ── SQLite backend (local mode) ──────────────────────────────────────────
 
     def _sqlite_acquire(

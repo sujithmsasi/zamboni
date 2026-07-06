@@ -66,6 +66,7 @@ class AuditAction:
     ESCALATION_CHANGE        = "escalation_change"
     DRY_RUN_UNTIL_SET        = "dry_run_until_set"
     METADATA_ROLLBACK        = "metadata_rollback"
+    GATE0_OVERRIDE_SET       = "gate0_override_set"
 
 
 # ── AuditEvent dataclass ──────────────────────────────────────────────────────
