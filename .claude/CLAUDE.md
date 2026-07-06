@@ -36,12 +36,15 @@ deploy/              CodeDeploy/CodeBuild pieces — NO CloudFormation template
 api/                 FastAPI app (Phase 2) — main.py, deps.py, models.py,
                      routers/ (8, one per contracts §6 section), services/
                      (8, lift SQL from the matching Streamlit page)
-ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3) — Home
-                     and Health Dashboard complete, 11 routes still
-                     PlaceholderPage; see ui/PATTERN.md for the canonical
-                     page structure Waves 1-2 replicate
+ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-4) — Home,
+                     Health Dashboard, Domain Management, Live Activity,
+                     Execution Log, Cost Report, Dry Run Viewer, and Audit
+                     Log complete; 5 routes still PlaceholderPage (Table
+                     Registration, Policy Configuration, Non-Prod Lifecycle,
+                     Stale Resources, Settings — Wave 2); see ui/PATTERN.md
+                     for the canonical page structure Wave 2 replicates
 tests/unit/          562 tests, all passing
-tests/api/           61 tests — run as its own `pytest tests/api`
+tests/api/           69 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
 ```
@@ -118,13 +121,14 @@ tests/api/           61 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through Phase 3)
+## Test Baseline (2026-07-06, updated through Phase 4)
 ```
 python -m pytest tests/unit -q   → 562 passed
-python -m pytest tests/api -q    → 61 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/api -q    → 69 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
+cd ui && npm run lint            → clean (oxlint)
 ```
 
 ## Migration Progress
@@ -566,3 +570,184 @@ additive-only), ruff clean. Zero engine logic touched.
   above. Full design-decision history — including the several rounds of
   visual back-and-forth — lives in `.claude/decisions.md`, not repeated
   here.
+
+2026-07-06 Phase 4: Pages Wave 1 shipped — 7 read-heavy pages, RULE ZERO
+(Home pattern replicated exactly: `index.tsx`/`hooks.ts`/`components/`
+split, `<DataGrid>`, query-key convention, Skeleton/Alert/Empty states).
+631 tests passing (562 unit + 69 api, up from 61 — 4 new domains tests + 1
+integrity_status filter test + 3 existing suites untouched), ruff clean,
+`tsc --noEmit` clean, `npm run build` clean, `npm run lint` (oxlint) clean.
+Zero engine logic touched.
+
+- **DomainManagement — no domains router existed anywhere in contracts.md
+  §6** (confirmed: Phase 2's REALITY note only evaluated the 8 sections
+  already specified there, and no `api/routers/domains.py` was ever
+  written). Added `api/services/domains_svc.py` (`list_domains` — enriches
+  with a per-domain `table_count` the way the Streamlit twin does,
+  `get_domain`, `create_domain` wrapping `engine/core/registry.py::
+  register_domain`, `update_domain` — raw `UPDATE domain_registry` over the
+  Streamlit edit form's exact field set) + `api/routers/domains.py` (GET
+  `/api/domains`, GET `/api/domains/{name}`, POST `/api/domains`, PUT
+  `/api/domains/{name}` — same envelope/dry_run/audit conventions as every
+  other router, `AuditAction.DOMAIN_CREATE`/`DOMAIN_UPDATE` already existed)
+  + `RegisterDomainRequest`/`UpdateDomainRequest` in `api/models.py`.
+  `.claude/contracts.md` §6 updated with a `> ADDED (Phase 4):` subsection;
+  `tests/api/test_contract_smoke.py`'s route count bumped 44→48 (4 new
+  routes); `tests/api/test_domains.py` (new, 7 tests) covers list/get/404/
+  create-dry-run/validation-400/update-dry-run/update-404.
+- `api/services/executions_svc.py::list_executions()` / `api/routers/
+  executions.py`: added an `integrity_status` filter param (additive,
+  optional) — needed for the Health Dashboard's integrity-failures grid;
+  contracts.md §6 already documented `GET /api/executions` generically
+  enough that this didn't need its own `> ADDED` note, just a test
+  (`test_list_executions_filtered_by_integrity_status`).
+- **Shared infra additions** (all additive, no pattern deviation): `ui/src/
+  utils/csv.ts::downloadCsv()` — client-side CSV generation for endpoints
+  that return full JSON rather than a real CSV stream (`GET /api/
+  conflicts?export=csv` and the executions/audit list endpoints all return
+  JSON envelopes, not `text/csv` — unlike `/api/tables/job-mapping/export`,
+  which `CsvButtons` already assumes). `components/DataGrid.tsx` gained an
+  optional `expandable` passthrough prop (AntD `Table`'s own prop, just not
+  wired through before) for Execution Log's and Audit Log's row-expand
+  detail panels. `GovernanceChip` promoted from `pages/Home/components/` to
+  `components/` (now shared by Home, HealthDashboard's GovernanceSection,
+  and DryRunViewer's gate chips) — reuse-driven, not a new pattern. New
+  `api/hooks/`: `useExecutions.ts` (list/detail/dryrun/costs),
+  `useGates.ts` (conflicts list/export/rescan mutation), `useAudit.ts`,
+  `useDomains.ts` (list/detail/create/update), `useTables.ts` (search-only,
+  minimal — Table Registration itself is a Wave 2 page). `useSystem.ts`
+  gained `useReleaseLock()` and an optional `refetchInterval` param on
+  `useLocks()`.
+- **HealthDashboard** (`components/GovernanceSection.tsx`, new — extends
+  the existing page rather than replacing it): Dual-Optimizer Risk Report
+  KPI row (reuses `health_kpis().conflicts` already fetched on page load —
+  no extra call), domain-filtered + paginated conflicts `<DataGrid>`,
+  client-side CSV export, "Rescan conflicts" mutation invalidating
+  `['conflicts']` + `['health']`, and a Recent Integrity Failures grid via
+  the new `integrity_status` filter. This is the page the phase brief
+  named as "REPLACES the 1c Streamlit stopgap as the governance showcase
+  surface" — Streamlit's own Maintenance Governance section is untouched
+  (still lives at `app/pages/4_Health_Dashboard.py`, this doesn't delete
+  it, only supersedes it in the React app).
+- **LiveActivity** (new page): the phase brief's one hard-refetch-interval
+  page — `useExecutionsList(..., 10_000)` on both the running and recent
+  grids plus `useLocks(10_000)`, replacing the Streamlit twin's blocking
+  `time.sleep(30)` + manual toggle with real background polling.
+  `components/LocksStrip.tsx` — active-lock chips with a force-release
+  confirm `Modal` (admin override copy) wired to the new `useReleaseLock`
+  mutation, audited server-side by `system_svc.release_lock`.
+- **ExecutionLog** (new page): fqn/engine/status/date-range filters, row
+  expand → `components/ExecutionDetailPanel.tsx` lazily calling
+  `GET /api/executions/{id}` only once a row is actually opened, CSV
+  export.
+- **CostReport** (new page): group_by (domain/layer/tier) + period
+  selectors, `Statistic` KPI row from `costs().totals`, plain `<Table>`
+  (not `<DataGrid>` — `by_group` is a fixed array, not server-paginated,
+  same documented exception as `UnhealthyTablesGrid`) for the cost-by-group
+  breakdown, live-billing-vs-estimate-mode `Alert` banner. No charts added
+  (phase brief: "prefer skipping charts this wave" unless
+  `@ant-design/plots` is added — it wasn't, `recharts` already covers Home/
+  Health Dashboard and a second charting lib for one page isn't worth it).
+- **AuditLog** (new page): days/action/actor filters map to
+  `GET /api/audit`'s real params; status is filtered client-side over the
+  current page (backend has no status param — same approach the Streamlit
+  twin used, filtering its own already-fetched window in pandas). Row
+  expand → `components/AuditDetailPanel.tsx` showing before/after JSON.
+  KPI row (total/failures/rejected/live-actions) computed from the
+  status-filtered current page.
+- **DryRunViewer** (new page): `Select showSearch` fed by
+  `useTablesSearch()` (new, minimal `GET /api/tables?search=` hook) →
+  `GET /api/dryrun/{fqn}` → Descriptions/GovernanceChip-based gate summary
+  (parity-checked field-by-field against the Streamlit twin's gate rows)
+  + conditional SQL preview (only for `compaction_strategy='binpack'`,
+  exactly matching the Streamlit twin's own conditional) with a
+  clipboard-copy button. Verified live end-to-end (search → select →
+  render) against `fin_payment_master` (strategy=`zorder`, correctly hid
+  the SQL preview since it's binpack-only).
+- **DomainManagement** (new page): plain `<Table>` (bare-array response,
+  same DataGrid exception as CostReport) with a Register/Edit
+  `components/DomainFormModal.tsx` — create mode omits `domain_name` from
+  edit, edit mode adds `is_active`/`digest_enabled`/`digest_email` fields
+  plus a read-only "Escalation / Notification Routing" `Descriptions` block
+  (owner email / digest recipient / digest-enabled state) sourced from the
+  domain record already in hand — no new endpoint needed for it.
+- **Not ported (documented, not silently dropped)**: LiveActivity's
+  "Today's Engine Summary" aggregate table and grouped "Currently Running"
+  view (no aggregation endpoint in contracts §6, only row-level
+  `GET /api/executions`); ExecutionLog's SLA Breach Tracker (no equivalent
+  endpoint — closest is `GET /api/stale?kind=hk`, a different page with
+  different semantics, not in this wave); CostReport's Budget Alert and ROI
+  Estimate sections (Budget depends on the Settings page, a later wave;
+  ROI needs a second ad-hoc 30d query the endpoint doesn't expose
+  independently of the selected period); DryRunViewer's "Promote to Live"
+  action and "Domain Dry Run" bulk tab (no POST endpoint for either in
+  contracts §6, and adding one wasn't authorized for this wave the way the
+  domains router was).
+- `ui/src/routes.tsx`: 6 routes switched from `PlaceholderPage` to their
+  real pages (`/domains`, `/activity`, `/executions`, `/costs`, `/dryrun`,
+  `/audit`); Health Dashboard's route was already live. 5 routes remain
+  `PlaceholderPage` for Wave 2 (Table Registration, Policy Configuration,
+  Non-Prod Lifecycle, Stale Resources, Settings).
+- **Parity checklists** (Streamlit twin feature → ported / not ported):
+  - *Health Dashboard governance section* vs `4_Health_Dashboard.py`'s
+    Maintenance Governance block: ✅ 5 KPI stats, ✅ domain filter,
+    ✅ dual-optimizer grid (compaction/retention/orphan flags, checked-at,
+    override-until), ✅ rescan button + flash message, ✅ CSV export,
+    ✅ integrity-failures grid (7d).
+  - *Live Activity* vs `5_Live_Activity.py`: ✅ auto-refresh (improved: real
+    10s polling vs blocking sleep toggle), ✅ manual refresh button,
+    ✅ currently-running grid (row-level, not grouped — see Not Ported),
+    ✅ recent-operations grid + engine/status filters, ✅ active-locks strip
+    with force-release (new vs Streamlit, which had no lock concept at all
+    — Workstream A postdates this page's Streamlit version). ❌ Today's
+    Engine Summary aggregate (see Not Ported).
+  - *Execution Log* vs `7_Execution_Log.py`: ✅ domain/engine/status/
+    time-range filters (range via `RangePicker` instead of a day-count
+    Select — finer-grained, strictly more capable), ✅ CSV export,
+    ✅ drill-in detail (via row expand + `GET /api/executions/{id}` instead
+    of a paste-an-ID box — same data, better UX). ❌ SLA Breach Tracker (see
+    Not Ported), ❌ hide-DRY_RUN-by-default checkbox (status filter covers
+    the same need — select `!= DRY_RUN` manually; minor UX gap, not a
+    missing capability).
+  - *Cost Report* vs `8_Cost_Report.py`: ✅ live-billing-vs-estimate banner,
+    ✅ domain-independent group_by + period selectors (Streamlit had domain
+    filter + fixed group; this wave's endpoint groups by domain/layer/tier
+    instead, a cleaner axis choice already built into contracts §6),
+    ✅ top-level KPIs, ✅ cost-by-group table. ❌ charts (deliberately
+    skipped, see above), ❌ archival-by-domain pie / monthly trend chart
+    (would need the skipped charting library), ❌ Budget Alert, ❌ ROI
+    Estimate (see Not Ported).
+  - *Audit Log* vs `12_Audit_Log.py`: ✅ time-range/action/actor filters,
+    ✅ status filter (client-side, matching Streamlit's own approach),
+    ✅ summary KPIs, ✅ before/after detail view (row expand instead of a
+    select-by-audit_id box), ✅ CSV export. ❌ Domain / Target ID free-text
+    filters (no backend params for them, see Not Ported).
+  - *Dry Run Viewer* vs `6_Dry_Run_Viewer.py`: ✅ table search/select,
+    ✅ domain/layer/tier summary, ✅ window evaluation, ✅ gate summary
+    (all 3 gates + upstream job + window decision, field-for-field),
+    ✅ conditional compaction SQL preview, ✅ copy-SQL action. ❌ Promote to
+    Live, ❌ Domain Dry Run bulk tab (see Not Ported).
+  - *Domain Management* vs `1_Domain_Management.py`: ✅ list with table
+    counts + all display columns, ✅ register form (all fields, defaults
+    matching Streamlit's), ✅ edit form (all fields incl. is_active/
+    digest_enabled/digest_email), ✅ escalation/notification routing
+    preview (reframed as a read-only summary rather than the Streamlit
+    twin's interactive digest-preview button, since `build_digest()` has no
+    API endpoint in this wave). ❌ live Weekly Digest Preview button (no
+    endpoint; the static summary above covers the "where would this route"
+    question without fabricating a live digest call).
+- Verified live in dev mode (Playwright against a `uvicorn` instance
+  serving the built `ui/dist` + the seeded local DB, screenshots reviewed
+  then discarded — not committed): Domain Management (5 seeded domains,
+  table counts correct), Health Dashboard's Governance section (shows
+  exactly 1 conflicted table — `fin_payment_master`, `aws_opt_compaction`
+  — confirming the ≥1-conflict acceptance bar), Live Activity (1024
+  seeded executions, 10s `refetchInterval` confirmed in source and via
+  network-idle re-fetch), Execution Log (filters + expand render real
+  rows), Cost Report ($104.4 estimated cost, 4-domain breakdown), Audit
+  Log (36 events, 3 statuses, expand shows before/after), Dry Run Viewer
+  end-to-end (searched `fin_payment_master`, selected it, got a real gate
+  summary — Gate 1 disabled, Gates 2/3 enabled with EXECUTE decision,
+  SQL preview correctly absent since the table's strategy is `zorder` not
+  `binpack`). Zero console errors across all 7 pages.
+- No Streamlit file modified this phase.

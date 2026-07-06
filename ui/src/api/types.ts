@@ -175,3 +175,111 @@ export interface ConflictRow {
   gate0_override_until: string | null;
   [key: string]: unknown;
 }
+
+// ── locks ─────────────────────────────────────────────────────────────────────
+
+export interface RescanResult {
+  scanned: number;
+  conflicts: number;
+  audit_id: string;
+}
+
+// ── costs ─────────────────────────────────────────────────────────────────────
+
+export interface CostTotals {
+  estimated_athena_cost_usd: number | null;
+  gb_scanned: number | null;
+  gb_compacted: number | null;
+  gb_archived: number | null;
+}
+
+export interface CostGroupRow {
+  cost_usd: number;
+  gb_scanned: number;
+  [key: string]: unknown;
+}
+
+export interface CostsResponse {
+  group_by: string;
+  totals: CostTotals;
+  by_group: CostGroupRow[];
+  cost_explorer_enabled: boolean;
+  live_billing?: Record<string, unknown>;
+}
+
+// ── audit ─────────────────────────────────────────────────────────────────────
+
+export interface AuditRow {
+  audit_id: string;
+  timestamp: string;
+  actor: string;
+  action_type: string;
+  page_source: string;
+  target_type: string;
+  target_id: string;
+  domain: string;
+  environment: string;
+  dry_run: boolean;
+  status: string;
+  reason: string;
+  ticket_number: string;
+  before_value: string;
+  after_value: string;
+  error_message: string;
+  [key: string]: unknown;
+}
+
+// ── dry run viewer ────────────────────────────────────────────────────────────
+
+export interface DryRunGates {
+  gate1_enabled: boolean;
+  gate2_enabled: boolean;
+  gate3_enabled: boolean;
+  upstream_job: string | null;
+  window_decision: string;
+}
+
+export interface DryRunView {
+  table_fqn: string;
+  registration: Record<string, unknown>;
+  config: Record<string, unknown>;
+  gates: DryRunGates;
+  planned_sql: string | null;
+}
+
+// ── gates ─────────────────────────────────────────────────────────────────────
+
+export interface GatesInfo {
+  table_fqn: string;
+  gate1_enabled: boolean;
+  gate2_enabled: boolean;
+  gate3_enabled: boolean;
+  gate0_override_until: string | null;
+  gate0_override_reason: string | null;
+  gate0_override_by: string | null;
+  conflict_cache: Record<string, unknown> | null;
+}
+
+// ── domains ───────────────────────────────────────────────────────────────────
+
+export interface DomainRow {
+  domain_name: string;
+  display_name: string;
+  description: string;
+  owner_name: string;
+  owner_email: string;
+  team_name: string;
+  ci_number: string;
+  archive_enabled: boolean;
+  hot_retention_days: number;
+  archive_duration_days: number;
+  stale_threshold_days: number;
+  auto_delete_after_days: number;
+  is_active: boolean;
+  digest_enabled: boolean;
+  digest_email: string | null;
+  notes: string;
+  registered_at: string;
+  table_count?: number;
+  [key: string]: unknown;
+}

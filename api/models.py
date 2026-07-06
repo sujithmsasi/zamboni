@@ -199,6 +199,43 @@ class NonprodClaimRequest(BaseModel):
     dry_run: bool = True
 
 
+# ── domains (> ADDED Phase 4 — no domains section existed in contracts §6) ────
+
+class RegisterDomainRequest(BaseModel):
+    domain_name: str
+    display_name: str
+    owner_email: str
+    description: str = ""
+    owner_name: str = ""
+    team_name: str = ""
+    ci_number: str = ""
+    archive_enabled: bool = True
+    hot_retention_days: int = 30
+    archive_duration_days: int = 365
+    stale_threshold_days: int = 60
+    auto_delete_after_days: int = 120
+    notes: str = ""
+    dry_run: bool = True
+
+
+class UpdateDomainRequest(BaseModel):
+    display_name: str | None = None
+    owner_name: str | None = None
+    owner_email: str | None = None
+    team_name: str | None = None
+    ci_number: str | None = None
+    archive_enabled: bool | None = None
+    hot_retention_days: int | None = None
+    archive_duration_days: int | None = None
+    stale_threshold_days: int | None = None
+    auto_delete_after_days: int | None = None
+    is_active: bool | None = None
+    digest_enabled: bool | None = None
+    digest_email: str | None = None
+    notes: str | None = None
+    dry_run: bool = True
+
+
 # ── controlm ──────────────────────────────────────────────────────────────────
 
 class JobUpsertRequest(BaseModel):

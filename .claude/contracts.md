@@ -414,6 +414,19 @@ DELETE /api/escalation/{key}
 GET    /api/audit                      ?actor&action&from&to&page&size
 ```
 
+### routers/domains.py
+```
+> ADDED (Phase 4): this section did not exist in the original Phase 0 lock --
+> contracts.md §6 had no domains router at all. Phase 4's DomainManagement
+> page needs domain CRUD (parity with app/pages/1_Domain_Management.py), so
+> these 4 routes were added then, following the same envelope/dry_run/audit
+> conventions as every other router. See api/services/domains_svc.py.
+GET    /api/domains            ?active_only
+GET    /api/domains/{name}
+POST   /api/domains            RegisterDomainRequest (all register_domain() params)
+PUT    /api/domains/{name}     partial update (all Streamlit edit-form fields)
+```
+
 ### routers/system.py
 ```
 GET    /api/system/mode                {mode, app_env, dry_run_default}

@@ -49,6 +49,12 @@ CONTRACT_ROUTES = [
     ("GET", "/api/system/health"),
     ("GET", "/api/locks"),
     ("DELETE", "/api/locks/{fqn}"),
+    # > ADDED (Phase 4): no domains section existed in contracts.md §6 --
+    # see api/services/domains_svc.py's REALITY note.
+    ("GET", "/api/domains"),
+    ("GET", "/api/domains/{name}"),
+    ("POST", "/api/domains"),
+    ("PUT", "/api/domains/{name}"),
 ]
 
 
@@ -73,5 +79,6 @@ def test_every_contract_route_exists(client):
 
 
 def test_route_count_matches_contract():
-    """Belt-and-braces: total method+path count should match the 44 defined here."""
-    assert len(CONTRACT_ROUTES) == 44
+    """Belt-and-braces: total method+path count should match the 48 defined here
+    (44 from contracts.md §6 + 4 domains routes added in Phase 4)."""
+    assert len(CONTRACT_ROUTES) == 48

@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.routers import controlm, executions, gates, lifecycle, policies, settings_router, system, tables
+from api.routers import controlm, domains, executions, gates, lifecycle, policies, settings_router, system, tables
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -57,6 +57,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
 for router in (
     tables.router, policies.router, gates.router, lifecycle.router,
     executions.router, controlm.router, settings_router.router, system.router,
+    domains.router,
 ):
     app.include_router(router)
 

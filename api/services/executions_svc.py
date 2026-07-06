@@ -33,7 +33,8 @@ def _esc(value: str) -> str:
 
 def list_executions(
     page: int, size: int, fqn: str | None = None, engine: str | None = None,
-    status: str | None = None, from_date: str | None = None, to_date: str | None = None,
+    status: str | None = None, integrity_status: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
 ) -> tuple[list[dict], int]:
     conditions = []
     if fqn:
@@ -42,6 +43,8 @@ def list_executions(
         conditions.append(f"engine = '{_esc(engine)}'")
     if status:
         conditions.append(f"status = '{_esc(status)}'")
+    if integrity_status:
+        conditions.append(f"integrity_status = '{_esc(integrity_status)}'")
     if from_date:
         conditions.append(f"execution_date >= '{_esc(from_date)}'")
     if to_date:
