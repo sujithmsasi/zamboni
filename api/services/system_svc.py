@@ -4,7 +4,14 @@ Zamboni API -- system service (contracts.md §6 routers/system.py).
 from __future__ import annotations
 
 from api.deps import get_current_user
-from config.settings import APP_ENV, DRY_RUN_DEFAULT, STREAM_REGISTRY_TABLE, ZAMBONI_LOCAL_MODE, get_mode
+from config.settings import (
+    APP_ENV,
+    DRY_RUN_DEFAULT,
+    GATE0_OVERRIDE_MAX_HOURS,
+    STREAM_REGISTRY_TABLE,
+    ZAMBONI_LOCAL_MODE,
+    get_mode,
+)
 from engine.core.audit import AuditAction, AuditEvent, audit
 from engine.core.lock_service import LockService
 from engine.utils.athena_client import read_sql
@@ -16,6 +23,11 @@ def system_mode() -> dict:
         "app_env": APP_ENV,
         "dry_run_default": DRY_RUN_DEFAULT,
         "user": get_current_user(),
+        # Phase 5a: Policy Configuration's Gate 0 override DatePicker needs
+        # this cap client-side (contracts.md §6 gates router already
+        # enforces it server-side; this just lets the UI disable dates
+        # beyond the cap instead of round-tripping a 400).
+        "gate0_override_max_hours": GATE0_OVERRIDE_MAX_HOURS,
     }
 
 

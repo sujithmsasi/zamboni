@@ -15,23 +15,29 @@ def list_tables(
     page_params: PageParams = Depends(),
     domain: str | None = None, layer: str | None = None,
     tier: str | None = None, env: str | None = None, search: str | None = None,
+    database_name: str | None = None,
 ):
     rows, total = tables_svc.list_tables(
         page_params.page, page_params.size, domain=domain, layer=layer, tier=tier, env=env, search=search,
+        database_name=database_name,
     )
     return envelope(rows, pagination={"page": page_params.page, "size": page_params.size, "total": total})
 
 
 @router.post("/api/tables/register")
 def register_table(req: RegisterTableRequest, actor: str = Depends(get_current_user)):
-    ok = tables_svc.register_table(req.model_dump(exclude={"dry_run"}), registered_by=actor, dry_run=req.dry_run)
+    result = tables_svc.register_table(req.model_dump(exclude={"dry_run"}), registered_by=actor, dry_run=req.dry_run)
     event = AuditEvent(
         actor=actor, action_type=AuditAction.TABLE_REGISTER, page_source="api",
         target_type="table", target_id=req.table_fqn, domain=req.domain, environment=req.environment,
         dry_run=req.dry_run, status="DRY_RUN" if req.dry_run else "SUCCESS",
+        after_value=f"template={result['template']}",
     )
     audit(event)
-    return envelope(MutationResult(success=ok, dry_run=req.dry_run, audit_id=event.audit_id).model_dump())
+    return envelope({
+        "template": result["template"],
+        **MutationResult(success=result["success"], dry_run=req.dry_run, audit_id=event.audit_id).model_dump(),
+    })
 
 
 @router.post("/api/tables/bulk-controlm")

@@ -163,10 +163,30 @@ class TemplateUpdateRequest(BaseModel):
     dry_run: bool = True
 
 
+class TemplateCreateRequest(BaseModel):
+    """> ADDED (Phase 5a): POST /api/templates has no contracts.md §6 lock --
+    see api/services/policies_svc.py::create_template()'s note."""
+    name: str
+    description: str = ""
+    compaction_strategy: str = "binpack"
+    compaction_engine: str = "athena"
+    compaction_target_file_size_mb: int = 128
+    snapshot_retention_days: int = 7
+    snapshot_min_to_keep: int = 2
+    orphan_file_retention_days: int = 2
+    run_frequency: str = "daily"
+    gate1_enabled: bool = False
+    gate2_enabled: bool = True
+    gate3_enabled: bool = True
+    window_config: dict[str, Any] | None = None
+    dry_run: bool = True
+
+
 class TemplateApplyRequest(BaseModel):
     domain: str | None = None
     layer: str | None = None
     tier: str | None = None
+    skip_overridden: bool = True
     dry_run: bool = True
 
 

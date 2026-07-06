@@ -14,7 +14,17 @@ export function downloadCsv(rows: Record<string, unknown>[], filename: string): 
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [columns.join(','), ...rows.map((row) => columns.map((c) => escape(row[c])).join(','))];
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  downloadRawCsv(lines.join('\n'), filename);
+}
+
+/**
+ * Same blob-download trick as downloadCsv(), but for endpoints that already
+ * return a pre-built CSV string inside the JSON envelope (e.g.
+ * GET /api/tables/job-mapping/export -> {"csv": "..."}) rather than row
+ * objects to serialize.
+ */
+export function downloadRawCsv(csvText: string, filename: string): void {
+  const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

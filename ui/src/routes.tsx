@@ -24,6 +24,8 @@ import HealthDashboardPage from './pages/HealthDashboard';
 import HomePage from './pages/Home';
 import LiveActivityPage from './pages/LiveActivity';
 import { PlaceholderPage } from './pages/PlaceholderPage';
+import PolicyConfigPage from './pages/PolicyConfig';
+import TableRegistrationPage from './pages/TableRegistration';
 
 export interface RouteMeta {
   path: string;
@@ -63,14 +65,14 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Table Registration',
         icon: TableIcon,
         color: '#4FD1C5',
-        element: <PlaceholderPage title="Table Registration" />,
+        element: <TableRegistrationPage />,
       },
       {
         path: '/policies',
         label: 'Policy Configuration',
         icon: ShieldCheck,
         color: '#4FD1C5',
-        element: <PlaceholderPage title="Policy Configuration" />,
+        element: <PolicyConfigPage />,
       },
     ],
   },

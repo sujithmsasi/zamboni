@@ -364,6 +364,15 @@ PUT    /api/policies/{fqn}             full hk_config update incl. gates + windo
 GET    /api/templates
 PUT    /api/templates/{name}
 POST   /api/templates/{name}/apply     {domain?, layer?, tier?, dry_run} → affected count
+
+> ADDED (Phase 5a): this section only locked GET/PUT for templates -- the
+> Policy Configuration page's "Add Template"/"Delete Template" sub-tabs
+> (3_Policy_Configuration.py tmpl_tab_add/tmpl_tab_del) have no equivalent
+> contract endpoint. Same precedent as Phase 4's domains router: additive,
+> same envelope/dry_run/audit conventions. See
+> api/services/policies_svc.py::create_template()/delete_template().
+POST   /api/templates                  TemplateCreateRequest (name + all template fields)
+DELETE /api/templates/{name}           ?dry_run  -- blocked if built-in or in use by any table
 ```
 
 ### routers/gates.py

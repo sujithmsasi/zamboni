@@ -102,3 +102,55 @@ def test_glue_databases(client):
     resp = client.get("/api/glue/databases")
     assert resp.status_code == 200
     assert isinstance(resp.json()["data"], list)
+
+
+def test_register_table_auto_applies_template(client):
+    """Browse & Register tab parity: registering infers + applies a policy
+    template in the same call (2_Table_Registration.py calls both
+    registry.register_table() and apply_template() per row)."""
+    payload = {
+        "table_fqn": "glue_catalog.finance_staging_db.zamboni_api_test_tmpl",
+        "domain": "finance", "layer": "staging", "tier": "critical",
+        "dry_run": True,
+    }
+    resp = client.post("/api/tables/register", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["template"] == "CRITICAL_HIGH_VOL"  # infer_template(staging, critical)
+
+
+def test_list_tables_filtered_by_database_name(client, a_table_fqn):
+    db_name = a_table_fqn.split(".")[1]
+    resp = client.get(f"/api/tables?page=1&size=50&database_name={db_name}")
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert len(body) > 0
+    assert all(f".{db_name}." in row["table_fqn"] for row in body)
+
+
+def test_bulk_controlm_engine_flags(client):
+    """Engine Flags 'Bulk Apply' sub-tab reuses bulk-controlm's filter+set
+    mechanism for hk/archive/lifecycle_enabled rather than a second endpoint."""
+    resp = client.post("/api/tables/bulk-controlm", json={
+        "filters": {"domain": "finance"},
+        "set_fields": {"hk_enabled": True, "archive_enabled": False},
+        "dry_run": True,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["data"]["dry_run"] is True
+    assert resp.json()["data"]["affected"] > 0
+
+
+def test_bulk_controlm_exclude_fqns(client, a_table_fqn):
+    resp_all = client.post("/api/tables/bulk-controlm", json={
+        "filters": {}, "set_fields": {"ci_number": "CI-EXCL-TEST"}, "dry_run": True,
+    })
+    total = resp_all.json()["data"]["affected"]
+
+    resp_excl = client.post("/api/tables/bulk-controlm", json={
+        "filters": {"exclude_fqns": [a_table_fqn]},
+        "set_fields": {"ci_number": "CI-EXCL-TEST"},
+        "dry_run": True,
+    })
+    assert resp_excl.status_code == 200
+    assert resp_excl.json()["data"]["affected"] == total - 1

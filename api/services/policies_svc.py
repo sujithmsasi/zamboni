@@ -17,6 +17,21 @@ from engine.utils.athena_client import read_sql, run_query
 
 _TEMPLATES_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "policy_templates.json"
 
+# Mirrors 3_Policy_Configuration.py's tmpl_tab_del `_BUILTIN` set -- these
+# templates ship with the app and can't be removed via the UI.
+_BUILTIN_TEMPLATES = {
+    "STAGING_DEFAULT", "DATALAKE_DEFAULT", "BASE_SCD2",
+    "MASTER_DEFAULT", "CRITICAL_HIGH_VOL", "NON_PROD_DEFAULT",
+}
+
+_DEFAULT_WINDOW_CONFIG = {
+    "type": "post_batch",
+    "timezone": "America/Los_Angeles",
+    "delay_minutes": 30,
+    "duration_hours": 4,
+    "blackout_hours": [6, 7, 8, 9, 18, 19, 20, 21],
+}
+
 
 def _esc(value: str) -> str:
     return str(value).replace("'", "''")
@@ -125,17 +140,105 @@ def update_template(name: str, fields: dict, dry_run: bool) -> bool:
     return True
 
 
-def apply_template_bulk(name: str, domain: str | None, layer: str | None, tier: str | None, dry_run: bool) -> int:
-    conditions = ["hk_enabled = 1", "table_format = 'iceberg'"]
+def create_template(name: str, fields: dict, dry_run: bool) -> bool:
+    """
+    > ADDED (Phase 5a): contracts.md §6 policies router only locked GET/PUT
+    for templates -- 3_Policy_Configuration.py's "Add Template" sub-tab has
+    no contract endpoint yet. Same precedent as Phase 4's domains router:
+    additive, same envelope/dry_run/audit conventions as every other route.
+    """
+    key = name.strip().upper()
+    if not key:
+        raise ValueError("Template name is required.")
+
+    with open(_TEMPLATES_PATH) as f:
+        all_templates = json.load(f)
+    if key in all_templates:
+        raise ValueError(f"Template '{key}' already exists.")
+
+    if dry_run:
+        return True
+
+    all_templates[key] = {
+        "description": fields.get("description") or "",
+        "compaction_strategy": fields.get("compaction_strategy") or "binpack",
+        "compaction_engine": fields.get("compaction_engine") or "athena",
+        "compaction_target_file_size_mb": fields.get("compaction_target_file_size_mb") or 128,
+        "snapshot_retention_days": fields.get("snapshot_retention_days") or 7,
+        "snapshot_min_to_keep": fields.get("snapshot_min_to_keep") or 2,
+        "orphan_file_retention_days": fields.get("orphan_file_retention_days") or 2,
+        "run_frequency": fields.get("run_frequency") or "daily",
+        "gate1_enabled": bool(fields.get("gate1_enabled", False)),
+        "gate2_enabled": bool(fields.get("gate2_enabled", True)),
+        "gate3_enabled": bool(fields.get("gate3_enabled", True)),
+        "window_config": fields.get("window_config") or dict(_DEFAULT_WINDOW_CONFIG),
+    }
+    with open(_TEMPLATES_PATH, "w") as f:
+        json.dump(all_templates, f, indent=2)
+    reload_templates()
+    return True
+
+
+def count_template_usage(name: str) -> int:
+    df = read_sql(
+        f"SELECT COUNT(*) AS cnt FROM {HK_CONFIG_TABLE} WHERE policy_template = '{_esc(name)}'", workgroup="app",
+    )
+    return int(df.iloc[0]["cnt"]) if not df.empty else 0
+
+
+def delete_template(name: str, dry_run: bool) -> bool:
+    """> ADDED (Phase 5a) -- see create_template()'s note. Mirrors the
+    Streamlit "Delete Template" sub-tab's built-in-protection + usage-count
+    guard exactly."""
+    if name in _BUILTIN_TEMPLATES:
+        raise ValueError(f"Template '{name}' is built-in and cannot be deleted.")
+
+    with open(_TEMPLATES_PATH) as f:
+        all_templates = json.load(f)
+    if name not in all_templates:
+        raise ValueError(f"Unknown template '{name}'.")
+
+    usage = count_template_usage(name)
+    if usage > 0:
+        raise ValueError(f"Template '{name}' is assigned to {usage} table(s); reassign them first.")
+
+    if dry_run:
+        return True
+
+    del all_templates[name]
+    with open(_TEMPLATES_PATH, "w") as f:
+        json.dump(all_templates, f, indent=2)
+    reload_templates()
+    return True
+
+
+def apply_template_bulk(
+    name: str, domain: str | None, layer: str | None, tier: str | None, dry_run: bool,
+    skip_overridden: bool = True,
+) -> int:
+    """
+    skip_overridden mirrors 3_Policy_Configuration.py's "Override existing
+    manual overrides" checkbox (default unchecked -> skip): a bulk template
+    apply should not silently clobber a table someone deliberately
+    hand-tuned unless explicitly told to. Requires a LEFT JOIN to hk_config
+    since manually_overridden lives there, not on stream_registry.
+    """
+    conditions = ["r.hk_enabled = 1", "r.table_format = 'iceberg'"]
     if domain:
-        conditions.append(f"domain = '{_esc(domain)}'")
+        conditions.append(f"r.domain = '{_esc(domain)}'")
     if layer:
-        conditions.append(f"layer = '{_esc(layer)}'")
+        conditions.append(f"r.layer = '{_esc(layer)}'")
     if tier:
-        conditions.append(f"tier = '{_esc(tier)}'")
+        conditions.append(f"r.tier = '{_esc(tier)}'")
+    if skip_overridden:
+        conditions.append("(c.manually_overridden IS NULL OR c.manually_overridden = 0)")
     where = "WHERE " + " AND ".join(conditions)
 
-    df = read_sql(f"SELECT table_fqn FROM {STREAM_REGISTRY_TABLE} {where}", workgroup="app")
+    df = read_sql(
+        f"SELECT r.table_fqn FROM {STREAM_REGISTRY_TABLE} r "
+        f"LEFT JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn {where}",
+        workgroup="app",
+    )
     if df.empty:
         return 0
 

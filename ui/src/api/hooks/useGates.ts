@@ -1,6 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { qs, request, requestPaged } from '../client';
-import type { ConflictRow, RescanResult } from '../types';
+import type { ConflictRow, GatesInfo, MutationResult, RescanResult } from '../types';
+
+export function useGatesDetail(fqn: string | null) {
+  return useQuery({
+    queryKey: ['gates', 'detail', fqn],
+    queryFn: () => request<GatesInfo>(`/gates/${fqn}`),
+    enabled: !!fqn,
+  });
+}
+
+export function useUpdateGates() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ fqn, body }: { fqn: string; body: Record<string, unknown> }) =>
+      request<MutationResult>(`/gates/${fqn}`, { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: (_r, { fqn }) => {
+      queryClient.invalidateQueries({ queryKey: ['gates', 'detail', fqn] });
+      queryClient.invalidateQueries({ queryKey: ['conflicts'] });
+    },
+  });
+}
 
 export function useConflicts(page: number, size: number, domain?: string) {
   return useQuery({

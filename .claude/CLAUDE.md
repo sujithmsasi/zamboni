@@ -36,15 +36,15 @@ deploy/              CodeDeploy/CodeBuild pieces — NO CloudFormation template
 api/                 FastAPI app (Phase 2) — main.py, deps.py, models.py,
                      routers/ (8, one per contracts §6 section), services/
                      (8, lift SQL from the matching Streamlit page)
-ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-4) — Home,
+ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5a) — Home,
                      Health Dashboard, Domain Management, Live Activity,
-                     Execution Log, Cost Report, Dry Run Viewer, and Audit
-                     Log complete; 5 routes still PlaceholderPage (Table
-                     Registration, Policy Configuration, Non-Prod Lifecycle,
-                     Stale Resources, Settings — Wave 2); see ui/PATTERN.md
+                     Execution Log, Cost Report, Dry Run Viewer, Audit Log,
+                     Table Registration, and Policy Configuration complete;
+                     3 routes still PlaceholderPage (Non-Prod Lifecycle,
+                     Stale Resources, Settings — Wave 2b); see ui/PATTERN.md
                      for the canonical page structure Wave 2 replicates
 tests/unit/          562 tests, all passing
-tests/api/           69 tests — run as its own `pytest tests/api`
+tests/api/           80 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
 ```
@@ -121,10 +121,10 @@ tests/api/           69 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through Phase 4)
+## Test Baseline (2026-07-06, updated through Phase 5a)
 ```
 python -m pytest tests/unit -q   → 562 passed
-python -m pytest tests/api -q    → 69 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/api -q    → 80 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
@@ -750,4 +750,153 @@ Zero engine logic touched.
   summary — Gate 1 disabled, Gates 2/3 enabled with EXECUTE decision,
   SQL preview correctly absent since the table's strategy is `zorder` not
   `binpack`). Zero console errors across all 7 pages.
+- No Streamlit file modified this phase.
+
+2026-07-06 Phase 5a: Wave 2a — Table Registration (5 tabs) + Policy
+Configuration (4 tabs) shipped, plus 3 new shared components
+(`ControlMFields`, `GatesEditor`, `WindowBlackoutEditor` in
+`ui/src/components/`). 642 tests passing (562 unit + 80 api, up from 69 —
+10 new: register-returns-template, `database_name` filter,
+bulk-controlm engine-flags + `exclude_fqns`, create/delete-template ×5,
+bulk-apply `skip_overridden`), ruff clean, `tsc --noEmit` clean,
+`npm run build` clean, `npm run lint` (oxlint) clean. Zero engine logic
+touched.
+
+- **Backend was ~90% already built in Phase 2** (`api/services/tables_svc.py`,
+  `policies_svc.py`, `gates_svc.py`, `controlm_svc.py` already lifted almost
+  every query/mutation this wave needed) — this phase's backend work was
+  closing real gaps found while wiring the UI to it, not building from
+  scratch:
+  - `tables_svc.register_table()` now also infers + applies a policy
+    template in the same call (`infer_template()` + `apply_template()`,
+    matching 2_Table_Registration.py's Browse & Register tab exactly) and
+    returns `{"success", "template"}` so the UI can show which template got
+    applied; router response gained a `template` field (additive).
+  - `tables_svc.list_tables()` gained an optional `database_name` filter
+    (needed for Bulk Control-M's preview grid); `GET /api/tables` router
+    param added to match.
+  - `tables_svc.bulk_controlm()`'s `_BULK_SETTABLE` gained
+    `hk_enabled`/`archive_enabled`/`lifecycle_enabled` (Engine Flags' Bulk
+    Apply sub-tab reuses this one generic filter+set endpoint instead of a
+    second bulk endpoint) — **found and fixed a bool-handling bug in the
+    same function while extending it**: `isinstance(value, int) and not
+    isinstance(value, bool)` fell through to the string-quoting branch for
+    real booleans, which would have written `hk_enabled = 'True'` instead
+    of `1`; reordered to check `isinstance(value, bool)` first.
+    `_build_bulk_where()` also gained `exclude_fqns` support (Manual Bulk
+    Apply's per-row exclude, now a native AntD `rowSelection` deselect
+    instead of Streamlit's session-state multiselect).
+  - `policies_svc.apply_template_bulk()` **found a real behavior gap, not
+    just a UI polish item**: it didn't check `manually_overridden` at all,
+    while the Streamlit twin's "Override existing manual overrides"
+    checkbox (default unchecked) skips manually-overridden tables. Added
+    `skip_overridden: bool = True` (default matches Streamlit's default),
+    requiring a `LEFT JOIN hk_config` the function didn't have before.
+    `TemplateApplyRequest` gained the matching field.
+  - `> ADDED (Phase 5a)` in contracts.md §6 (same precedent as Phase 4's
+    domains router): `POST /api/templates` and `DELETE /api/templates/{name}`
+    — the Streamlit "Add Template"/"Delete Template" sub-tabs had no contract
+    endpoint at all. `policies_svc.create_template()` (name-uppercase,
+    duplicate-name rejected) and `delete_template()` (built-in-template set
+    hardcoded same as Streamlit's `_BUILTIN`, usage-count guard via a new
+    `count_template_usage()`) — both additive, same envelope/dry_run/audit
+    conventions as every other route. Contract-smoke route count bumped
+    48→50.
+  - `system_svc.system_mode()` gained `gate0_override_max_hours` (from
+    `config/settings.py::GATE0_OVERRIDE_MAX_HOURS`) so the Gate 0 override
+    DatePicker can disable dates beyond the cap client-side instead of
+    round-tripping a 400 — additive field on an already-locked route, same
+    pattern as `health_kpis()`'s repeated extensions in Phase 3.
+- **Shared components** (`ui/src/components/`, used by both pages per the
+  phase brief): `ControlMFields.tsx` (6-field block — job name AutoComplete
+  fed by `GET /api/jobs?search`, HK job, Gate 1 job, job type, TimePicker,
+  duration; identical field names across Register/Edit/Bulk so no prefix
+  plumbing needed), `GatesEditor.tsx` (Gate 1/2/3 switches +
+  optional Gate 0 override control — DatePicker capped at
+  `now + gate0_override_max_hours`, reason required, status Alert;
+  `showOverride={false}` hides the override section for Templates, which
+  carry no per-table override state), `WindowBlackoutEditor.tsx` (window
+  type/timing + 7-preset/24-checkbox blackout grid, fully controlled,
+  reacts instantly — no Streamlit rerun/session-state gymnastics).
+- **Table Registration** (`ui/src/pages/TableRegistration/`, 5 tabs, all
+  present in the app though the phase brief's prose only named 4 — Engine
+  Flags was ported anyway per "skip no tab/sub-tab"): Browse & Register
+  (Glue database Select incl. "All Databases" fanned out via TanStack
+  Query's `useQueries` in parallel; native AntD `rowSelection` replaces
+  Streamlit's Select-All/Clear-All session-state dance; register result
+  shows the *actual* applied template from the API response rather than
+  re-implementing `infer_template()`'s layer/tier mapping table in
+  TypeScript, which would risk silent drift), Registered Tables (full
+  filters + CSV export; gates deliberately not duplicated here — they
+  already have a home in Policy Configuration's View Configs, and
+  `GET /api/tables` is stream_registry-only, no hk_config join), Edit Table,
+  Engine Flags (Single Table + Bulk Apply sub-tabs), Bulk Control-M (Manual
+  Apply w/ preview+exclude, Import Mapping w/ dry-run-then-real-apply,
+  Export Template w/ client-side CSV-string preview, Control-M Job
+  Registry).
+- **Policy Configuration** (`ui/src/pages/PolicyConfig/`, 4 tabs): View
+  Configs, Edit Single Table (Gates card + Window/Blackout card + the same
+  compaction/snapshot validations as Streamlit — reason required, numeric
+  floors, sort/zorder-requires-glue cross-check, scheduled-window
+  start-time-not-in-blackout check — replicated client-side, submits both
+  `PUT /api/policies/{fqn}` and `PUT /api/gates/{fqn}`), Bulk Apply
+  Template (domain+layer required, template preview stats,
+  `skip_overridden` wired to the checkbox), Templates (View All / Edit
+  [shared `GatesEditor`+`WindowBlackoutEditor`] / Add / Delete — Delete has
+  no dedicated usage-count endpoint, so it preflights with a
+  `DELETE ?dry_run=true` call, which already runs the same
+  built-in/usage-count checks server-side without writing anything, and
+  surfaces that message before the real confirm+delete).
+- **Two real bugs found and fixed during this phase's own live
+  verification** (Playwright against a fresh `uvicorn` + the built
+  `ui/dist`, not just screenshots — a stale `uvicorn --reload` process from
+  an earlier session was still serving pre-Phase-5a code and had to be
+  killed/restarted first, see `context_hints.md`):
+  1. `BrowseRegisterTab`'s register form never called `form.resetFields()`
+     after a successful submit — since the form stays mounted across
+     tab/selection changes (unlike Streamlit, which resets every widget on
+     each rerun), Domain/Layer/Tier silently carried over into the *next*,
+     unrelated batch of selected tables, including passing required-field
+     validation it shouldn't have. Fixed by resetting the form after
+     `setSelectedFqns([])` on success; same fix applied to
+     `EngineFlagsTab`'s and `PolicyConfig/EditTableTab`'s per-table search
+     pickers, which had the identical risk (a background refetch of
+     `detail.data` mid-edit would re-run the `useEffect` that syncs local
+     edit state from server data, silently discarding an in-progress Gate
+     toggle right before Save) — all three now key their sync effect on
+     `fqn` via a `useRef` guard, not on `detail.data`'s object identity.
+  2. Three places used `useTablesList({ size: 500 })` / `{ size: 5000 })`
+     to feed a table-search dropdown — `api/deps.py::PageParams` caps
+     `size` at 250, so these 422'd outright rather than just being
+     inefficient at scale. Fixed properly, not by lowering the number:
+     `TableRegistration/EditTableTab` and `EngineFlagsTab`'s single-table
+     picker now use the existing `useTablesSearch()` search-as-you-type
+     hook (same pattern DryRunViewer already uses) instead of loading the
+     whole fleet into one dropdown — the real fleet runs ~30k tables, so
+     "load everything" was never going to work regardless of the cap.
+     `ManualApply`'s preview grid kept `useTablesList` (it's genuinely
+     paged/filtered) but capped at 250.
+- Verified live end-to-end against the seeded local DB (`uvicorn` serving
+  the production `ui/dist` build): registered `fin_claims_stg` via Browse &
+  Register → template `STAGING_DEFAULT` auto-applied → confirmed via
+  `GET /api/tables/{fqn}` (domain/layer/tier persisted) and the Registered
+  Tables grid; submitting Register with no Domain selected blocked client-side
+  ("Domain is required"); Policy Config Edit Table — setting a Gate 0
+  override with no reason blocked ("A reason is required to set a Gate 0
+  override"), then toggling Gate 2 off + setting a valid 2h override with a
+  reason saved successfully (two audit IDs, one per PUT), View Configs
+  reflected Gate 2 ❌ and `GET /api/gates/{fqn}` showed the override
+  timestamp/reason; Bulk Control-M's Import Job Mapping — uploaded a 1-row
+  CSV (`domain=finance,controlm_job_name=ACE-VERIFY-JOB-PRD`), applied it,
+  confirmed via `GET /api/tables/{fqn}` that `controlm_pipeline_job` updated;
+  Templates — added a throwaway custom template, toggled its Gate 1 on,
+  saved, bulk-applied it to `finance/staging` — the apply correctly reported
+  only 1 table affected (not 2), because `fin_claims_stg` was already
+  `manually_overridden=1` from the Edit Table step above and
+  `skip_overridden` (default true) correctly protected it, applying instead
+  to the other `finance/staging` table — a live confirmation that the new
+  `skip_overridden` fix actually works, not just that its unit test passes.
+  Cleaned up the throwaway template and reset the affected table back to
+  `STAGING_DEFAULT` afterward so `config/policy_templates.json` (a tracked
+  repo file) isn't left mutated.
 - No Streamlit file modified this phase.
