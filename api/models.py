@@ -214,6 +214,7 @@ class RegisterDomainRequest(BaseModel):
     archive_duration_days: int = 365
     stale_threshold_days: int = 60
     auto_delete_after_days: int = 120
+    is_active: bool = True
     notes: str = ""
     dry_run: bool = True
 

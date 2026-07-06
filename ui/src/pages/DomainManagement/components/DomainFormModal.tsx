@@ -1,4 +1,4 @@
-import { Checkbox, Descriptions, Form, Input, InputNumber, message, Modal } from 'antd';
+import { Checkbox, Col, Descriptions, Form, Input, InputNumber, message, Modal, Row, Space } from 'antd';
 import { useEffect } from 'react';
 import { useCreateDomain, useUpdateDomain } from '../../../api/hooks/useDomains';
 import type { DomainRow } from '../../../api/types';
@@ -11,6 +11,7 @@ interface DomainFormModalProps {
 
 const CREATE_DEFAULTS = {
   archive_enabled: true,
+  is_active: true,
   hot_retention_days: 30,
   archive_duration_days: 365,
   stale_threshold_days: 60,
@@ -60,62 +61,102 @@ export function DomainFormModal({ open, domain, onClose }: DomainFormModalProps)
   return (
     <Modal
       open={open}
+      destroyOnHidden
       title={isEdit ? `Edit Domain — ${domain?.domain_name}` : 'Register New Domain'}
       onCancel={onClose}
       onOk={handleSubmit}
       confirmLoading={create.isPending || update.isPending}
-      width={640}
+      width={880}
       okText={isEdit ? 'Update Domain' : 'Register Domain'}
     >
       <Form form={form} layout="vertical" initialValues={CREATE_DEFAULTS}>
-        {!isEdit && (
-          <Form.Item name="domain_name" label="Domain Name" rules={[{ required: true }]} help="Lowercase, no spaces — e.g. finance, ers, membership">
-            <Input placeholder="finance" />
-          </Form.Item>
-        )}
-        <Form.Item name="display_name" label="Display Name" rules={[{ required: true }]}>
-          <Input placeholder="Finance" />
+        <Row gutter={24}>
+          <Col span={12}>
+            {!isEdit && (
+              <Form.Item name="domain_name" label="Domain Name" rules={[{ required: true }]} help="Lowercase, no spaces — e.g. finance, ers, membership">
+                <Input placeholder="finance" />
+              </Form.Item>
+            )}
+            <Form.Item name="display_name" label="Display Name" rules={[{ required: true }]}>
+              <Input placeholder="Finance" />
+            </Form.Item>
+            <Form.Item name="owner_name" label="Owner Name">
+              <Input placeholder="John Smith" />
+            </Form.Item>
+            <Form.Item
+              name="owner_email"
+              label="Owner Email"
+              rules={[
+                { required: true, message: 'Owner email is required' },
+                { type: 'email', message: 'Enter a valid email address' },
+              ]}
+            >
+              <Input placeholder="da-finance@company.com" />
+            </Form.Item>
+            <Form.Item name="team_name" label="Team">
+              <Input placeholder="Data & Analytics - Finance" />
+            </Form.Item>
+            <Form.Item name="ci_number" label="CI Number">
+              <Input placeholder="CI-10234" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="hot_retention_days" label="Hot Retention (days)"
+              rules={[{ required: true, type: 'number', min: 1, message: 'Enter a whole number ≥ 1' }]}
+            >
+              <InputNumber min={1} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item
+              name="archive_duration_days" label="Archive Duration (days)"
+              rules={[{ required: true, type: 'number', min: 1, message: 'Enter a whole number ≥ 1' }]}
+            >
+              <InputNumber min={1} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item
+              name="stale_threshold_days" label="Stale Threshold (days)"
+              rules={[{ required: true, type: 'number', min: 7, message: 'Enter a whole number ≥ 7' }]}
+            >
+              <InputNumber min={7} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item
+              name="auto_delete_after_days" label="Auto-Delete After (days)"
+              rules={[{ required: true, type: 'number', min: 30, message: 'Enter a whole number ≥ 30' }]}
+            >
+              <InputNumber min={30} style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Form.Item style={{ marginBottom: 16 }}>
+          <Space size="large">
+            <Form.Item name="archive_enabled" valuePropName="checked" noStyle>
+              <Checkbox>Enable Archival</Checkbox>
+            </Form.Item>
+            <Form.Item name="is_active" valuePropName="checked" noStyle>
+              <Checkbox>Domain Active</Checkbox>
+            </Form.Item>
+            {isEdit && (
+              <Form.Item name="digest_enabled" valuePropName="checked" noStyle>
+                <Checkbox>Weekly Digest Enabled</Checkbox>
+              </Form.Item>
+            )}
+          </Space>
         </Form.Item>
-        <Form.Item name="owner_name" label="Owner Name">
-          <Input placeholder="John Smith" />
-        </Form.Item>
-        <Form.Item name="owner_email" label="Owner Email" rules={[{ required: true }]}>
-          <Input placeholder="da-finance@company.com" />
-        </Form.Item>
-        <Form.Item name="team_name" label="Team">
-          <Input placeholder="Data & Analytics - Finance" />
-        </Form.Item>
-        <Form.Item name="ci_number" label="CI Number">
-          <Input placeholder="CI-10234" />
-        </Form.Item>
-        <Form.Item name="archive_enabled" label="Enable Archival" valuePropName="checked">
-          <Checkbox />
-        </Form.Item>
-        <Form.Item name="hot_retention_days" label="Hot Retention (days)">
-          <InputNumber min={1} style={{ width: '100%' }} />
-        </Form.Item>
-        <Form.Item name="archive_duration_days" label="Archive Duration (days)">
-          <InputNumber min={1} style={{ width: '100%' }} />
-        </Form.Item>
-        <Form.Item name="stale_threshold_days" label="Stale Threshold (days)">
-          <InputNumber min={7} style={{ width: '100%' }} />
-        </Form.Item>
-        <Form.Item name="auto_delete_after_days" label="Auto-Delete After (days)">
-          <InputNumber min={30} style={{ width: '100%' }} />
-        </Form.Item>
+
         {isEdit && (
-          <>
-            <Form.Item name="is_active" label="Domain Active" valuePropName="checked">
-              <Checkbox />
-            </Form.Item>
-            <Form.Item name="digest_enabled" label="Weekly Digest Enabled" valuePropName="checked">
-              <Checkbox />
-            </Form.Item>
-            <Form.Item name="digest_email" label="Digest Email Override">
-              <Input placeholder="Leave blank to use Owner Email" />
-            </Form.Item>
-          </>
+          <Row gutter={24}>
+            <Col span={12}>
+              <Form.Item
+                name="digest_email" label="Digest Email Override"
+                rules={[{ type: 'email', message: 'Enter a valid email address' }]}
+              >
+                <Input placeholder="Leave blank to use Owner Email" />
+              </Form.Item>
+            </Col>
+          </Row>
         )}
+
         <Form.Item name="notes" label="Notes">
           <Input.TextArea rows={2} />
         </Form.Item>

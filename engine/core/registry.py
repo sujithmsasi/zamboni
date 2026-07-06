@@ -63,6 +63,7 @@ def register_domain(
     archive_duration_days: int = 365,
     stale_threshold_days: int = 60,
     auto_delete_after_days: int = 120,
+    is_active: bool = True,
     environment: str = "prod",
     registered_by: str = "streamlit",
     notes: str = "",
@@ -77,6 +78,7 @@ def register_domain(
 
     now = _now()
     archive_int = 1 if archive_enabled else 0
+    active_int = 1 if is_active else 0
     sql = f"""
         INSERT INTO {DOMAIN_REGISTRY_TABLE} (
             domain_name, display_name, description,
@@ -99,7 +101,7 @@ def register_domain(
             {archive_duration_days},
             {stale_threshold_days},
             {auto_delete_after_days},
-            1,
+            {active_int},
             '{environment}',
             '{now}',
             '{registered_by}',

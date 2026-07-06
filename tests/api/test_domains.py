@@ -31,6 +31,19 @@ def test_create_domain_dry_run(client):
     assert body["audit_id"]
 
 
+def test_create_domain_respects_is_active_false(client):
+    resp = client.post("/api/domains", json={
+        "domain_name": "test-inactive-domain",
+        "display_name": "Test Inactive Domain",
+        "owner_email": "da-test@company.com",
+        "is_active": False,
+        "dry_run": False,
+    })
+    assert resp.status_code == 200
+    created = client.get("/api/domains/test-inactive-domain").json()["data"]
+    assert created["is_active"] == 0
+
+
 def test_create_domain_requires_fields(client):
     resp = client.post("/api/domains", json={
         "domain_name": "",

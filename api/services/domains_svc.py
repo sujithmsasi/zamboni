@@ -63,6 +63,7 @@ def create_domain(fields: dict, actor: str, dry_run: bool) -> bool:
         archive_duration_days=int(fields.get("archive_duration_days", 365)),
         stale_threshold_days=int(fields.get("stale_threshold_days", 60)),
         auto_delete_after_days=int(fields.get("auto_delete_after_days", 120)),
+        is_active=bool(fields.get("is_active", True)),
         registered_by=f"api:{actor}",
         notes=fields.get("notes", "").strip(),
         dry_run=dry_run,
