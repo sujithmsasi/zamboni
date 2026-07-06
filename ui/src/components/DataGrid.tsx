@@ -16,6 +16,7 @@ interface DataGridProps<T extends object> {
   onPageChange?: (page: number, size: number) => void;
   toolbar?: React.ReactNode;
   emptyText?: string;
+  expandable?: TableProps<T>['expandable'];
 }
 
 /** AntD <Table> wrapper: server pagination, size changer, loading/error/empty state. Never use raw <Table>. */
@@ -27,6 +28,7 @@ export function DataGrid<T extends object>({
   onPageChange,
   toolbar,
   emptyText = 'No data',
+  expandable,
 }: DataGridProps<T>) {
   const { data, isLoading, isError, error, refetch } = queryResult;
   const rows = data?.data ?? [];
@@ -56,6 +58,7 @@ export function DataGrid<T extends object>({
         dataSource={rows}
         rowKey={rowKey}
         rowSelection={rowSelection}
+        expandable={expandable}
         loading={isLoading}
         size="small"
         sticky

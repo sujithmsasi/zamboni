@@ -15,9 +15,17 @@ import {
   type Icon,
 } from '@phosphor-icons/react';
 import type { ReactNode } from 'react';
+import AuditLogPage from './pages/AuditLog';
+import CostReportPage from './pages/CostReport';
+import DomainManagementPage from './pages/DomainManagement';
+import DryRunViewerPage from './pages/DryRunViewer';
+import ExecutionLogPage from './pages/ExecutionLog';
 import HealthDashboardPage from './pages/HealthDashboard';
 import HomePage from './pages/Home';
+import LiveActivityPage from './pages/LiveActivity';
 import { PlaceholderPage } from './pages/PlaceholderPage';
+import PolicyConfigPage from './pages/PolicyConfig';
+import TableRegistrationPage from './pages/TableRegistration';
 
 export interface RouteMeta {
   path: string;
@@ -50,21 +58,21 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Domain Management',
         icon: SquaresFour,
         color: '#4FD1C5',
-        element: <PlaceholderPage title="Domain Management" />,
+        element: <DomainManagementPage />,
       },
       {
         path: '/tables',
         label: 'Table Registration',
         icon: TableIcon,
         color: '#4FD1C5',
-        element: <PlaceholderPage title="Table Registration" />,
+        element: <TableRegistrationPage />,
       },
       {
         path: '/policies',
         label: 'Policy Configuration',
         icon: ShieldCheck,
         color: '#4FD1C5',
-        element: <PlaceholderPage title="Policy Configuration" />,
+        element: <PolicyConfigPage />,
       },
     ],
   },
@@ -83,21 +91,21 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Live Activity',
         icon: Lightning,
         color: '#F2B84B',
-        element: <PlaceholderPage title="Live Activity" />,
+        element: <LiveActivityPage />,
       },
       {
         path: '/executions',
         label: 'Execution Log',
         icon: FileText,
         color: '#F2B84B',
-        element: <PlaceholderPage title="Execution Log" />,
+        element: <ExecutionLogPage />,
       },
       {
         path: '/costs',
         label: 'Cost Report',
         icon: ChartBar,
         color: '#F2B84B',
-        element: <PlaceholderPage title="Cost Report" />,
+        element: <CostReportPage />,
       },
     ],
   },
@@ -109,7 +117,7 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Dry Run Viewer',
         icon: Flask,
         color: '#6FCF97',
-        element: <PlaceholderPage title="Dry Run Viewer" />,
+        element: <DryRunViewerPage />,
       },
       {
         path: '/nonprod',
@@ -142,7 +150,7 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Audit Log',
         icon: MagnifyingGlass,
         color: '#B197FC',
-        element: <PlaceholderPage title="Audit Log" />,
+        element: <AuditLogPage />,
       },
     ],
   },

@@ -163,10 +163,30 @@ class TemplateUpdateRequest(BaseModel):
     dry_run: bool = True
 
 
+class TemplateCreateRequest(BaseModel):
+    """> ADDED (Phase 5a): POST /api/templates has no contracts.md §6 lock --
+    see api/services/policies_svc.py::create_template()'s note."""
+    name: str
+    description: str = ""
+    compaction_strategy: str = "binpack"
+    compaction_engine: str = "athena"
+    compaction_target_file_size_mb: int = 128
+    snapshot_retention_days: int = 7
+    snapshot_min_to_keep: int = 2
+    orphan_file_retention_days: int = 2
+    run_frequency: str = "daily"
+    gate1_enabled: bool = False
+    gate2_enabled: bool = True
+    gate3_enabled: bool = True
+    window_config: dict[str, Any] | None = None
+    dry_run: bool = True
+
+
 class TemplateApplyRequest(BaseModel):
     domain: str | None = None
     layer: str | None = None
     tier: str | None = None
+    skip_overridden: bool = True
     dry_run: bool = True
 
 
@@ -196,6 +216,44 @@ class NonprodExemptRequest(BaseModel):
 class NonprodClaimRequest(BaseModel):
     fqns: list[str]
     reason: str
+    dry_run: bool = True
+
+
+# ── domains (> ADDED Phase 4 — no domains section existed in contracts §6) ────
+
+class RegisterDomainRequest(BaseModel):
+    domain_name: str
+    display_name: str
+    owner_email: str
+    description: str = ""
+    owner_name: str = ""
+    team_name: str = ""
+    ci_number: str = ""
+    archive_enabled: bool = True
+    hot_retention_days: int = 30
+    archive_duration_days: int = 365
+    stale_threshold_days: int = 60
+    auto_delete_after_days: int = 120
+    is_active: bool = True
+    notes: str = ""
+    dry_run: bool = True
+
+
+class UpdateDomainRequest(BaseModel):
+    display_name: str | None = None
+    owner_name: str | None = None
+    owner_email: str | None = None
+    team_name: str | None = None
+    ci_number: str | None = None
+    archive_enabled: bool | None = None
+    hot_retention_days: int | None = None
+    archive_duration_days: int | None = None
+    stale_threshold_days: int | None = None
+    auto_delete_after_days: int | None = None
+    is_active: bool | None = None
+    digest_enabled: bool | None = None
+    digest_email: str | None = None
+    notes: str | None = None
     dry_run: bool = True
 
 

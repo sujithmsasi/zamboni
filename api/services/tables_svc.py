@@ -16,6 +16,7 @@ import pandas as pd
 
 from config.settings import STREAM_REGISTRY_TABLE
 from engine.core import registry
+from engine.core.config import apply_template, infer_template
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 
@@ -33,6 +34,7 @@ def _now() -> str:
 def list_tables(
     page: int, size: int, domain: str | None = None, layer: str | None = None,
     tier: str | None = None, env: str | None = None, search: str | None = None,
+    database_name: str | None = None,
 ) -> tuple[list[dict], int]:
     conditions = []
     if domain:
@@ -45,6 +47,8 @@ def list_tables(
         conditions.append(f"environment = '{_esc(env)}'")
     if search:
         conditions.append(f"table_fqn LIKE '%{_esc(search)}%'")
+    if database_name:
+        conditions.append(f"database_name = '{_esc(database_name)}'")
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     total_df = read_sql(f"SELECT COUNT(*) AS cnt FROM {STREAM_REGISTRY_TABLE} {where}", workgroup="app")
@@ -66,8 +70,15 @@ def get_table(fqn: str) -> dict | None:
 
 # ── register / update ────────────────────────────────────────────────────────
 
-def register_table(req: dict, registered_by: str, dry_run: bool) -> bool:
-    return registry.register_table(
+def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
+    """
+    Register + auto-infer/apply a policy template in one call -- mirrors
+    2_Table_Registration.py's Browse & Register tab, which calls
+    registry.register_table() then apply_template(infer_template(...)) for
+    every selected row. Returns {"success", "template"} so the router/UI can
+    show which template got applied (editable later in Policy Config).
+    """
+    ok = registry.register_table(
         table_fqn=req["table_fqn"], domain=req["domain"], layer=req["layer"], tier=req["tier"],
         environment=req.get("environment", "prod"), table_format=req.get("table_format", "iceberg"),
         stream_id=req.get("stream_id"), owner_email=req.get("owner_email", ""),
@@ -83,6 +94,10 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> bool:
         dependent_job_type=req.get("dependent_job_type", "controlm"),
         dry_run=dry_run,
     )
+    template = infer_template(req["layer"], req["tier"])
+    if ok:
+        apply_template(table_fqn=req["table_fqn"], template_name=template, dry_run=dry_run)
+    return {"success": ok, "template": template}
 
 
 _UPDATABLE_FIELDS = {
@@ -115,11 +130,19 @@ def update_table(fqn: str, fields: dict, dry_run: bool) -> bool:
 # ── bulk Control-M ────────────────────────────────────────────────────────────
 
 def _build_bulk_where(filters: dict) -> str:
+    """
+    filters also accepts `exclude_fqns` (list[str]) -- the Manual Bulk Apply
+    tab's per-row exclude multiselect (2_Table_Registration.py bc_tab_manual):
+    the preview grid lets the user deselect specific matched tables before
+    applying, so the apply call carries the same match filters plus an
+    explicit exclusion list rather than a second round-trip.
+    """
     conds = []
     domain = filters.get("domain")
     layer = filters.get("layer")
     database_name = filters.get("database_name")
     pattern = filters.get("pattern")
+    exclude_fqns = filters.get("exclude_fqns")
     if domain:
         conds.append(f"domain = '{_esc(domain)}'")
     if layer:
@@ -128,6 +151,9 @@ def _build_bulk_where(filters: dict) -> str:
         conds.append(f"database_name = '{_esc(database_name)}'")
     if pattern:
         conds.append(f"table_fqn LIKE '%.{_esc(pattern)}%'")
+    if exclude_fqns:
+        excluded = ", ".join(f"'{_esc(fqn)}'" for fqn in exclude_fqns)
+        conds.append(f"table_fqn NOT IN ({excluded})")
     return ("WHERE " + " AND ".join(conds)) if conds else ""
 
 
@@ -135,6 +161,10 @@ _BULK_SETTABLE = {
     "controlm_pipeline_job", "controlm_hk_job", "dependent_on_controlm_job",
     "dependent_job_type", "controlm_job_start_time", "controlm_expected_duration_min",
     "ci_number", "stream_id",
+    # Engine Flags "Bulk Apply" sub-tab reuses this same filter+set mechanism
+    # rather than a second bulk endpoint -- domain/layer/database_name filters
+    # are identical, only the set_fields differ.
+    "hk_enabled", "archive_enabled", "lifecycle_enabled",
 }
 
 
@@ -149,7 +179,9 @@ def bulk_controlm(filters: dict, set_fields: dict, dry_run: bool) -> int:
     for key, value in set_fields.items():
         if key not in _BULK_SETTABLE or value is None:
             continue
-        if isinstance(value, int) and not isinstance(value, bool):
+        if isinstance(value, bool):
+            sets.append(f"{key} = {1 if value else 0}")
+        elif isinstance(value, int):
             sets.append(f"{key} = {value}")
         else:
             sets.append(f"{key} = '{_esc(str(value))}'")

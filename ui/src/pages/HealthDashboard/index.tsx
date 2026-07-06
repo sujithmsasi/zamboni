@@ -3,6 +3,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { CostTrendChart } from './components/CostTrendChart';
 import { DryRunAdoptionTable } from './components/DryRunAdoptionTable';
 import { FleetHealthScorecard } from './components/FleetHealthScorecard';
+import { GovernanceSection } from './components/GovernanceSection';
 import { NonprodFunnelChart } from './components/NonprodFunnelChart';
 import { ReclaimedStorageTrendChart } from './components/ReclaimedStorageTrendChart';
 import { TopReclaimChart } from './components/TopReclaimChart';
@@ -108,6 +109,14 @@ export default function HealthDashboardPage() {
           </Card>
         </Col>
       </Row>
+
+      <Card size="small" title="🛡️ Maintenance Governance" style={{ marginTop: 16 }}>
+        {loading ? (
+          <Skeleton active />
+        ) : (
+          <GovernanceSection conflicts={k?.conflicts ?? { total: 0, scanned: 0, conflicted: 0, stale_cache: 0, overridden: 0 }} />
+        )}
+      </Card>
     </div>
   );
 }

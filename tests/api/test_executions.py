@@ -12,6 +12,14 @@ def test_list_executions_filtered_by_status(client):
     assert all(row["status"] == "SUCCESS" for row in resp.json()["data"])
 
 
+def test_list_executions_filtered_by_integrity_status(client):
+    """> ADDED (Phase 4): integrity_status filter added for the Health
+    Dashboard's integrity-failures grid."""
+    resp = client.get("/api/executions?integrity_status=FAILED&page=1&size=20")
+    assert resp.status_code == 200
+    assert all(row["integrity_status"] == "FAILED" for row in resp.json()["data"])
+
+
 def test_get_execution_404(client):
     resp = client.get("/api/executions/does-not-exist")
     assert resp.status_code == 404

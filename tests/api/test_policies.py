@@ -60,3 +60,89 @@ def test_apply_template_dry_run(client):
     resp = client.post("/api/templates/STAGING_DEFAULT/apply", json={"domain": "finance", "dry_run": True})
     assert resp.status_code == 200
     assert resp.json()["data"]["dry_run"] is True
+
+
+def test_apply_template_skips_manually_overridden_tables_by_default(client, a_table_fqn):
+    """Bulk Apply's 'Override existing manual overrides' checkbox, unchecked
+    by default -- a manually-overridden table should not be silently
+    reset by a bulk template apply unless skip_overridden=False."""
+    from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
+    from engine.utils.athena_client import read_sql, run_query
+
+    domain = read_sql(
+        f"SELECT domain, layer FROM {STREAM_REGISTRY_TABLE} WHERE table_fqn = '{a_table_fqn}'", workgroup="app",
+    ).iloc[0]
+    run_query(
+        f"UPDATE {HK_CONFIG_TABLE} SET manually_overridden = 1 WHERE table_fqn = '{a_table_fqn}'",
+        workgroup="app", dry_run=False,
+    )
+    try:
+        resp = client.post("/api/templates/STAGING_DEFAULT/apply", json={
+            "domain": domain["domain"], "layer": domain["layer"], "skip_overridden": True, "dry_run": True,
+        })
+        assert resp.status_code == 200
+        skip_count = resp.json()["data"]["affected"]
+
+        resp2 = client.post("/api/templates/STAGING_DEFAULT/apply", json={
+            "domain": domain["domain"], "layer": domain["layer"], "skip_overridden": False, "dry_run": True,
+        })
+        no_skip_count = resp2.json()["data"]["affected"]
+        assert no_skip_count > skip_count
+    finally:
+        run_query(
+            f"UPDATE {HK_CONFIG_TABLE} SET manually_overridden = 0 WHERE table_fqn = '{a_table_fqn}'",
+            workgroup="app", dry_run=False,
+        )
+
+
+def test_create_template_dry_run(client):
+    resp = client.post("/api/templates", json={"name": "ZAMBONI_TEST_TMPL", "dry_run": True})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["success"] is True
+    assert "ZAMBONI_TEST_TMPL" not in client.get("/api/templates").json()["data"]
+
+
+def test_create_template_duplicate_rejected(client):
+    resp = client.post("/api/templates", json={"name": "STAGING_DEFAULT", "dry_run": True})
+    assert resp.status_code == 400
+
+
+def test_create_template_then_delete_round_trip(client):
+    create = client.post("/api/templates", json={
+        "name": "ZAMBONI_TEST_ROUNDTRIP", "compaction_strategy": "sort",
+        "compaction_engine": "glue", "dry_run": False,
+    })
+    assert create.status_code == 200
+    templates = client.get("/api/templates").json()["data"]
+    assert templates["ZAMBONI_TEST_ROUNDTRIP"]["compaction_strategy"] == "sort"
+
+    delete = client.delete("/api/templates/ZAMBONI_TEST_ROUNDTRIP?dry_run=false")
+    assert delete.status_code == 200
+    assert "ZAMBONI_TEST_ROUNDTRIP" not in client.get("/api/templates").json()["data"]
+
+
+def test_delete_builtin_template_blocked(client):
+    resp = client.delete("/api/templates/STAGING_DEFAULT?dry_run=true")
+    assert resp.status_code == 400
+
+
+def test_delete_template_in_use_blocked(client, a_table_fqn):
+    resp = client.post("/api/templates", json={"name": "ZAMBONI_TEST_INUSE", "dry_run": False})
+    assert resp.status_code == 200
+    try:
+        from config.settings import HK_CONFIG_TABLE
+        from engine.utils.athena_client import run_query
+        run_query(
+            f"UPDATE {HK_CONFIG_TABLE} SET policy_template = 'ZAMBONI_TEST_INUSE' "
+            f"WHERE table_fqn = '{a_table_fqn}'",
+            workgroup="app", dry_run=False,
+        )
+        resp = client.delete("/api/templates/ZAMBONI_TEST_INUSE?dry_run=true")
+        assert resp.status_code == 400
+    finally:
+        run_query(
+            f"UPDATE {HK_CONFIG_TABLE} SET policy_template = 'STAGING_DEFAULT' "
+            f"WHERE table_fqn = '{a_table_fqn}'",
+            workgroup="app", dry_run=False,
+        )
+        client.delete("/api/templates/ZAMBONI_TEST_INUSE?dry_run=false")

@@ -13,11 +13,12 @@ router = APIRouter(tags=["executions"])
 def list_executions(
     page_params: PageParams = Depends(),
     fqn: str | None = None, engine: str | None = None, status: str | None = None,
+    integrity_status: str | None = None,
     from_: str | None = Query(None, alias="from"), to: str | None = None,
 ):
     rows, total = executions_svc.list_executions(
         page_params.page, page_params.size, fqn=fqn, engine=engine, status=status,
-        from_date=from_, to_date=to,
+        integrity_status=integrity_status, from_date=from_, to_date=to,
     )
     return envelope(rows, pagination={"page": page_params.page, "size": page_params.size, "total": total})
 
