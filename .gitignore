@@ -44,3 +44,12 @@ manifests/*.yaml
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 logs/
+
+# ── Node / React UI (ui/) ─────────────────────────────────────────────────────
+node_modules/
+ui/dist/
+*.tsbuildinfo
+
+# ── SQLite transient journal files (zamboni_local.db itself is tracked) ───────
+*.db-shm
+*.db-wal

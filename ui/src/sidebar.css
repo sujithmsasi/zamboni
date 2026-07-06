@@ -1,0 +1,138 @@
+/* Zamboni Arctic Blue sidebar — icon state is CSS-driven (color: currentColor
+   on the icon, recolored by :hover/.ant-menu-item-selected) rather than
+   JS hover tracking per menu item. See .claude/ui_design.md icon system.
+   Default icon color is set per-item inline (one hue per category, not per
+   icon — see routes.tsx); hover/active override to white and need
+   !important to beat that inline style. */
+
+.zamboni-nav-icon {
+  display: inline-flex;
+  transition: color 0.15s ease;
+}
+
+/* Only the menu region scrolls if the nav list overflows the viewport —
+   the outer Sider clips (overflow:hidden in App.tsx) so it never shows its
+   own scrollbar and squeezes the sidebar width. Thin + dark to stay
+   unobtrusive against the navy background instead of a default OS bar. */
+.zamboni-sider-menu-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+.zamboni-sider-menu-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.zamboni-sider-menu-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+.zamboni-sider-menu-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.zamboni-sider .ant-menu-item:hover .zamboni-nav-icon,
+.zamboni-sider .ant-menu-item-selected .zamboni-nav-icon {
+  color: #ffffff !important;
+}
+
+.zamboni-sider .ant-menu-item-group-title {
+  color: #8cb0c9 !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  padding: 9px 16px 3px !important;
+}
+
+.zamboni-sider .ant-menu-item {
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.zamboni-sider .ant-menu-item:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(105, 183, 227, 0.25),
+    0 3px 8px rgba(0, 0, 0, 0.12);
+}
+
+.zamboni-sider .ant-menu-item-selected {
+  box-shadow: inset 3px 0 0 #69b7e3;
+}
+
+.zamboni-brand {
+  padding: 13px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  margin-bottom: 4px;
+}
+
+.zamboni-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zamboni-brand-logo {
+  width: 43px;
+  height: 43px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(214, 241, 245, 0.38);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.zamboni-brand-logo img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.zamboni-brand-title {
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.zamboni-brand-subtitle {
+  color: #b8d3e4;
+  text-transform: uppercase;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.zamboni-user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: #d8e8f2;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.zamboni-user-menu:hover {
+  background: #1e4e70;
+  color: #ffffff;
+}
+
+.zamboni-user-menu-name {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

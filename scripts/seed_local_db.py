@@ -429,7 +429,12 @@ def seed_stream_registry() -> list[dict]:
         hk_en    = 1 if fqn in hk_enabled_set else 0
         dry_until = None
         if fqn in rampup_set:
-            dry_until = _date(-7 + 14)  # active ramp-up, expires in 7 days
+            # Found, not previously exercised: _date(-7 + 14) == _date(7) is
+            # 7 days AGO, not "expires in 7 days" as the old comment claimed
+            # -- the sign was backwards, so in_dry_run/dry_run_adoption were
+            # silently always empty in local mode. _date(-7) is 7 days
+            # ahead (_date(offset_days) = now - offset_days).
+            dry_until = _date(-7)  # active ramp-up, expires in 7 days
 
         is_conflict_demo = fqn == _CONFLICT_DEMO_FQN
 
@@ -628,6 +633,82 @@ def seed_rollback_demo_rows(stream_rows: list[dict]) -> list[dict]:
             "snapshot_id_before":       9000 + days_ago,
             "snapshot_id_after":        9000 + days_ago - 1,
             "integrity_status":        "VERIFIED",
+        })
+    return rows
+
+
+def seed_vacuum_audit_demo_rows(stream_rows: list[dict]) -> list[dict]:
+    """
+    vacuum_audit is created by TABLES's DDL but no seeder ever populated it
+    (Phase 1b's "real local dry run" note only ever produced one row by hand
+    during that phase's own manual verification) -- so the Health Dashboard's
+    "Storage Reclaimed" chart and executions_svc.py's
+    _reclaimed_storage_trend()/_top_tables_by_reclaim() have nothing to show
+    without this. ~18 realistic runs across 30 days, most successful, two
+    ORPHAN_SANITY_ABORT aborts for authenticity (contracts.md §5-A step b).
+    """
+    candidates = [r for r in stream_rows if r["hk_enabled"]]
+    rows = []
+    for day in [1, 2, 4, 5, 7, 8, 10, 12, 13, 15, 17, 19, 20, 22, 24, 26, 27, 29]:
+        tbl = random.choice(candidates)
+        aborted = day in (12, 24)  # a couple of sanity-abort demo rows
+        snapshots_before = random.randint(60, 220)
+        bytes_reclaimed = 0 if aborted else random.randint(500_000_000, 6_000_000_000)
+        rows.append({
+            "run_id":                f"hk-{_date(day)}-{uuid.uuid4().hex[:6]}",
+            "table_fqn":              tbl["table_fqn"],
+            "operation":              "vacuum",
+            "snapshots_before":       snapshots_before,
+            "snapshots_after":        snapshots_before if aborted else random.randint(10, 40),
+            "files_estimated":        random.randint(100, 3000),
+            "files_deleted":          0 if aborted else random.randint(50, 2000),
+            "bytes_reclaimed":        bytes_reclaimed,
+            "older_than_hours_used":  96,
+            "sanity_pct":             round(random.uniform(22, 35), 1) if aborted else round(random.uniform(2, 18), 1),
+            "aborted":                1 if aborted else 0,
+            "aborted_reason":         "ORPHAN_SANITY_ABORT" if aborted else None,
+            "lock_id":                f"{tbl['table_fqn']}:demo-owner",
+            "dry_run":                0,
+            "started_at":             _now(day, 1),
+            "completed_at":           _now(day, 0),
+        })
+    return rows
+
+
+def seed_archival_demo_rows(stream_rows: list[dict]) -> list[dict]:
+    """
+    execution_log has zero engine='archival' rows -- seed_execution_log()
+    only ever generates 'hk' engine ops. Needed for the Reclaimed Storage
+    chart's archival series and the cost report's gb_archived total.
+    """
+    candidates = [r for r in stream_rows if r["layer"] == "staging"] or stream_rows
+    rows = []
+    for day in [2, 6, 9, 14, 16, 21, 23, 28]:
+        tbl = random.choice(candidates)
+        started = _now(day, 3)
+        rows.append({
+            "execution_id":     str(uuid.uuid4()),
+            "run_id":           f"archival-{_date(day)}-{uuid.uuid4().hex[:6]}",
+            "engine":           "archival",
+            "operation":        "export_then_delete",
+            "table_fqn":        tbl["table_fqn"],
+            "stream_id":        tbl.get("stream_id", ""),
+            "domain":           tbl["domain"],
+            "layer":            tbl["layer"],
+            "tier":             tbl["tier"],
+            "environment":      "prod",
+            "status":           "SUCCESS",
+            "dry_run":          0,
+            "skip_reason":      None,
+            "error_message":    None,
+            "started_at":       started,
+            "completed_at":     _now(day, 2),
+            "duration_seconds": round(random.uniform(120, 900), 1),
+            "bytes_archived":   random.randint(1_000_000_000, 12_000_000_000),
+            "rows_archived":    random.randint(10_000, 500_000),
+            "athena_query_id":  f"query-{uuid.uuid4().hex[:12]}",
+            "bytes_scanned":    random.randint(1_000_000_000, 8_000_000_000),
+            "execution_date":   _date(day),
         })
     return rows
 
@@ -852,6 +933,15 @@ def main():
     rollback_demo_rows = seed_rollback_demo_rows(streams)
     n = insert_rows("execution_log", rollback_demo_rows)
     print(f"  {n} rollback-candidate demo records")
+
+    archival_demo_rows = seed_archival_demo_rows(streams)
+    n = insert_rows("execution_log", archival_demo_rows)
+    print(f"  {n} archival demo records")
+
+    print("Seeding vacuum_audit...")
+    vacuum_audit_rows = seed_vacuum_audit_demo_rows(streams)
+    n = insert_rows("vacuum_audit", vacuum_audit_rows)
+    print(f"  {n} vacuum_audit records")
 
     print("Seeding nonprod_registry...")
     nonprod = seed_nonprod_registry()

@@ -173,6 +173,13 @@ def clamp_orphan_age(policy_hours: int) -> int:
     """Clamp a policy-configured orphan age (hours) up to the hard floor."""
     return max(int(policy_hours), ORPHAN_MIN_AGE_HOURS_FLOOR)
 
+
+# ── Cost estimation (Health Dashboard "storage saved" widget) ────────────────
+# Flat-rate estimate, same convention as the $5/TB Athena scan-cost estimate
+# api/services/executions_svc.py::costs() already uses -- illustrative, not a
+# live billing figure. us-east-1 S3 Standard list price as of this writing.
+S3_STANDARD_USD_PER_GB_MONTH = float(os.getenv("S3_STANDARD_USD_PER_GB_MONTH", "0.023"))
+
 # ── Execution Log Write Mode (v2) ─────────────────────────────────────────────
 # Controls how engines write to the Iceberg execution_log table:
 #   parquet — Batch Parquet to S3 + add_files (preferred, fast)

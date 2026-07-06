@@ -182,6 +182,191 @@ general-purpose fake AWS):
     and manifest files are Avro, and reading them is genuinely best-effort
     per the phase brief ("capped").
 
+## Phase 3: "Zamboni Arctic Blue" theme supersedes contracts §7's starting tokens
+`.claude/ui_design.md` (approved after Phase 3's initial build-and-sign-off
+round) is a full visual-system spec — dark navy Sider, Ant Design v5 tokens,
+Phosphor duotone icons, mint-green dry-run/governance surfaces, coastal-
+palette KPI cards — and supersedes the light-sidebar starting-point
+`theme.ts` contracts.md §7 shipped with (that doc explicitly allowed "one
+adjustment round" during acceptance; this was a full swap, not a tweak, so
+recorded here rather than silently overwriting the locked snippet). No
+change to information architecture, routing, or data fetching — visual
+layer only, per `ui_design.md`'s own IMPLEMENTATION REQUIREMENTS section.
+
+## Phase 3: icon library is Phosphor, not Ant Design Icons
+`ui_design.md` mandates `@phosphor-icons/react` (duotone weight) for sidebar
+icons and explicitly forbids mixing icon families. `@ant-design/icons` was
+removed from `ui/package.json` entirely (antd still pulls its own copy
+internally for built-in chrome like Table sort arrows) rather than left as
+an unused dependency, since nothing in `ui/src` imports it anymore
+(CsvButtons' upload/download icons and DryRunBanner's check icon were moved
+to Phosphor too, for one consistent family app-wide, not just in the
+sidebar).
+
+## Phase 3: Phosphor `fill` prop in ui_design.md's sample code doesn't exist
+The design doc's `iconProps()` example passes both `color` and `fill` to
+the icon component, implying independently-colorable duotone layers. The
+actual `IconProps` type (`node_modules/@phosphor-icons/react/dist/lib/types.d.ts`)
+only exposes `color` — duotone's second layer is a fixed-opacity variant
+baked into the icon itself, not a separate prop. Implemented as: every icon
+gets `color="currentColor"`, wrapped in a `.zamboni-nav-icon` span whose CSS
+`color` is set inline per-item (see next entry) — hover/selected states
+override to white via a CSS rule needing `!important` to beat that inline
+style. This gets the intended "muted default -> white on hover/active"
+behavior through pure CSS with no per-item JS hover tracking, matching
+`ui_design.md`'s own suggestion that a CSS-driven approach is acceptable.
+
+## Phase 3 (post-review, LOCKED — Sujith sign-off): sidebar categorized + colored per-category, not per-icon
+`ui_design.md` explicitly said "no rainbow navigation icons" / "do not give
+every icon a random different color" — a blanket per-icon rainbow. Sujith's
+follow-up ask was for colored icons plus grouping the 13 routes into
+sections; the two asks are reconciled as **one hue per category** (5
+categories: Overview/icy-blue, Registry/teal, Monitoring/amber,
+Governance & Safety/mint, Administration/violet — `ui/src/routes.tsx`'s
+`ROUTE_CATEGORIES`), not 13 independent colors. This keeps the "no rainbow
+per item" spirit of the original spec while giving the visual grouping and
+color Sujith asked for. Mint for the Governance & Safety category
+deliberately reuses the same hue the dry-run banner uses for
+safety/reassurance surfaces, per `ui_design.md`'s own convention that mint
+is reserved for that meaning.
+
+## Phase 3 (post-review, LOCKED — Sujith sign-off): KPI row is a CSS grid, not an AntD 24-col Row/Col
+Five KPI cards don't divide evenly into Ant Design's 24-column grid
+(`span={24/5}` = 4.8) — this was rendering correctly in the math but the
+row visibly stopped short of the page's full width in practice. Replaced
+with a plain `display:grid; grid-template-columns:repeat(5,1fr)` (
+`ui/src/pages/Home/home.css`), which also implements the 5→3→2→1 responsive
+reflow `ui_design.md`'s RESPONSIVENESS section asks for and Phase 3's
+initial build hadn't gotten to yet.
+
+## Phase 3 (post-review, LOCKED — Sujith sign-off): Governance card fill is state-driven, not static
+Original Phase 3 build gave the Home "Governance" card a static mint fill,
+matching the dry-run banner's safety motif. That was wrong whenever
+`conflicts.conflicted > 0`: the card read "calm/all-clear" via its green
+background while a red "N conflicted table(s)" chip sat inside it, arguing
+with its own container. Fixed as a 3-way, state-driven tone
+(`ui/src/pages/Home/index.tsx`'s `governanceTone`):
+- **Loading**: neutral white/`colorBorder` — state isn't known yet.
+- **Clear** (`conflicted === 0 && activeLocks === 0`): the same mint
+  gradient/border the dry-run banner uses — mint now consistently means
+  "all clear," never a fixed decoration.
+- **Needs attention** (either count > 0): soft amber wash
+  (`#FFFAEB → #FFFDF6`, border `#FEDF89`, title `#8A5B12`) — same amber
+  family as the warning status-tag tone in `colors.ts`, so it reads as one
+  system rather than a one-off color.
+**LOCKED as of 2026-07-06** — Sujith approved this after reviewing the
+live amber-state render (1 conflicted table, 0 locks, in the seeded local
+DB). Don't revert to a static fill without a new sign-off.
+
+## Phase 3+: Health Dashboard built for real (was a placeholder), health_kpis extended
+Sujith asked for a "major uplift" of the Health Dashboard with VP-level
+charts: storage reclaimed trend, cost savings, healthy/unhealthy tables,
+non-prod lifecycle, dry-run adoption. Built as a real
+`ui/src/pages/HealthDashboard/` page (replacing its PlaceholderPage) rather
+than piling more onto Home, since Home already covers the "VP glance" and
+this is explicitly the deep-dive destination Home's Governance card already
+links to. `api/services/executions_svc.py::health_kpis()` gained 7 new
+fields (`reclaimed_storage_trend`, `top_tables_by_reclaim`, `cost_trend`,
+`storage_savings`, `fleet_health`, `nonprod_funnel`, `dry_run_adoption`) —
+kept on the one existing endpoint rather than a new route, since
+contracts.md §6 already documents `GET /api/health/kpis` as serving both
+Home and the Health Dashboard from one shared source.
+
+- **"Storage Reclaimed" deliberately excludes compaction's bytes_rewritten.**
+  Compaction rewrites files for query performance; it doesn't reduce total
+  bytes. Only vacuum's `bytes_reclaimed` (orphan/snapshot removal) and
+  archival's `bytes_archived` (moved to cheaper tier) count as genuinely
+  freed capacity for the cost-savings framing.
+- **Estimated $ savings, not live billing.** `S3_STANDARD_USD_PER_GB_MONTH`
+  (`config/settings.py`, default $0.023) is a flat-rate illustrative
+  estimate, same convention as `costs()`'s existing $5/TB Athena estimate —
+  not a real AWS Cost Explorer figure. Computed all-time (not just the 30d
+  trend window) since freed capacity stays freed going forward.
+- **Fleet Health Scorecard is a proxy classification, not
+  `engine/core/health_checker.py::check()`.** That function needs a live
+  Iceberg `$snapshots`/`$files` call per table — fine for the Dry Run
+  Viewer's single-table case, too expensive to run fleet-wide on every
+  Health Dashboard load. Instead: AT_RISK = integrity failure in 7d, AWS
+  optimizer conflict, or no successful run in 14d; NEEDS_ATTENTION = a
+  failure in 7d otherwise; HEALTHY = neither. One aggregate SQL query, not
+  N live per-table calls.
+- **"Dry-Run Adoption" is a snapshot, not a trend line.** The schema has no
+  "graduated_at" event to plot a real historical trend against
+  (`stream_registry` only has current `dry_run_until`, not a change log).
+  Built instead as "which domains have tables waiting longest in shadow
+  mode" (`DATE_DIFF('day', registered_at, NOW())`), which answers Sujith's
+  actual question — "which teams are hesitant" — more directly than a
+  fabricated trend would have.
+- **`UnhealthyTablesGrid` uses a plain AntD `<Table>`, not the shared
+  `<DataGrid>`.** `fleet_health.tables` is a fixed array embedded in the
+  KPI payload, not a server-paginated resource — DataGrid's
+  query-result/pagination contract doesn't fit data shaped like this.
+- **Found and fixed: `seed_local_db.py`'s dry-run ramp-up date had a sign
+  bug.** `_date(-7 + 14)` evaluated to `_date(7)` (7 days *ago*), not
+  "expires in 7 days" as the comment claimed, so `in_dry_run` and this new
+  `dry_run_adoption` were silently always empty/zero in local mode. Fixed
+  to `_date(-7)`. Also added `seed_vacuum_audit_demo_rows()` and
+  `seed_archival_demo_rows()` — `vacuum_audit` had zero seeded rows (only
+  ever populated by hand during Phase 1b's own manual verification) and
+  `execution_log` had zero `engine='archival'` rows at all, so the new
+  reclaim charts had nothing to show without them.
+
+## Phase 3+ (post-review, LOCKED — Sujith sign-off on the final spacing): Sider made sticky; Snapshot Bloat Heatmap deferred to Health Dashboard; user/logout menu added
+Three follow-ups from Sujith reviewing the Health Dashboard:
+
+- **Sidebar was scrolling with page content — took two follow-up rounds to
+  fully fix.** `App.tsx`'s `<Sider>` had no positioning, so on tall pages
+  (the new Health Dashboard) it scrolled away with everything else. Round 1:
+  `position: sticky; top: 0; height: 100vh` on the Sider, restructured into
+  a flex column (brand, `flex:1 overflowY:auto` menu wrapper, user-menu
+  footer pinned last) — but gave the *outer* Sider its own `overflow: auto`
+  too, so both it and the inner menu wrapper could scroll. On Windows'
+  classic (non-overlay) scrollbars this reserved real layout width from a
+  219px-wide column, squeezing labels ("Domain Management" →
+  "Domain Manage…"). Round 2: outer Sider changed to `overflow: hidden`
+  (clip only, never its own scrollbar) so just the inner menu region can
+  scroll. That alone wasn't enough — the nav list (13 items + 5 group
+  labels) still slightly overflowed typical viewport heights, so the inner
+  scrollbar still appeared and still cost width. Round 3: tightened spacing
+  so the list fits without scrolling at all — `itemHeight: 34`,
+  `itemMarginBlock: 2` plus tight group-title/brand/footer padding. Verified
+  via Playwright (`scrollHeight <= clientHeight`) at 800/900/1000px — no
+  overflow, no scrollbar, full labels. Round 4: Sujith called round 3 "too
+  tight" (visually cramped, not a functional bug) — measured the nav list's
+  *actual* natural height (`Element.scrollHeight` on `.ant-menu` itself,
+  unconstrained) against available space at several viewport heights before
+  guessing again, landing on `itemHeight: 36, itemMarginBlock: 3` +
+  slightly more group-title/brand/footer padding (`sidebar.css`). This needs
+  ~652px of nav-list height, which fits with slack from ~800px of available
+  viewport height upward — comfortably covers normal windows, but a very
+  short browser window (<~800px tall) could still show the inner scrollbar.
+  Lesson: don't assume headless-Chromium overflow behavior matches a real
+  Windows Chrome session (classic scrollbars there reserve width that
+  overlay scrollbars in automated testing often don't) — and when tuning
+  spacing, measure the unconstrained content height directly rather than
+  just checking a binary "does it overflow" at one viewport size.
+- **Snapshot Bloat Heatmap: confirmed not a must-have, deferred.** It's the
+  one real gap in Fleet Health Scorecard (which deliberately proxies health
+  from failures/integrity/conflicts, not live snapshot/small-file counts —
+  see the Health Dashboard entry above) — but Sujith agreed it's a nice-to-
+  have, not blocking. If built later, it belongs on the Health Dashboard
+  (not Home) and should reuse `execution_log.snapshots_before` averaged by
+  domain×tier rather than adding live per-table Iceberg calls.
+- **User/logout menu added, but it's an honest stub.** There is no real
+  session anywhere yet — `api/deps.py::get_current_user()` is still the
+  env-var stub contracts.md D5 describes ("OIDC seam ... for SSO later"),
+  not a login system to log out of. `api/services/system_svc.py::system_mode()`
+  now also returns `user` (additive, same convention as the other endpoint
+  extensions this phase). `ui/src/components/UserMenu.tsx` shows that
+  username in a Sider-footer dropdown with a "Log out" item that pops a
+  `message.info` explaining SSO isn't wired up yet — same honesty
+  convention as `PlaceholderPage` for unbuilt routes, rather than faking a
+  session or silently no-op'ing.
+- **Home stays lean.** Discussed pulling a "tables need attention" chip and
+  an "Est. Monthly Savings" stat onto Home's Governance strip, but nothing
+  was implemented — Sujith said "all good for now." Revisit only if asked;
+  don't duplicate Health Dashboard's charts onto Home in the meantime.
+
 ## Phase 1c: fleet_conflict_summary staleness computed in Python, not SQL INTERVAL HOUR
 `engine/core/governance.py::fleet_conflict_summary()` fetches raw
 `aws_opt_checked_at`/`gate0_override_until` values and computes
