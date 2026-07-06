@@ -206,6 +206,36 @@ CREATE TABLE IF NOT EXISTS home_snapshot (
     cost_summary_json       TEXT DEFAULT '[]'
 )""",
 
+"maintenance_locks": """
+CREATE TABLE IF NOT EXISTS maintenance_locks (
+    table_fqn               TEXT PRIMARY KEY,
+    lock_owner              TEXT,
+    operation               TEXT,
+    acquired_at             TEXT,
+    heartbeat_at            TEXT,
+    expires_at              INTEGER
+)""",
+
+"vacuum_audit": """
+CREATE TABLE IF NOT EXISTS vacuum_audit (
+    run_id                  TEXT,
+    table_fqn               TEXT,
+    operation               TEXT,
+    snapshots_before        INTEGER,
+    snapshots_after         INTEGER,
+    files_estimated         INTEGER,
+    files_deleted           INTEGER,
+    bytes_reclaimed         INTEGER,
+    older_than_hours_used   INTEGER,
+    sanity_pct              REAL,
+    aborted                 INTEGER DEFAULT 0,
+    aborted_reason          TEXT,
+    lock_id                 TEXT,
+    dry_run                 INTEGER DEFAULT 0,
+    started_at              TEXT,
+    completed_at             TEXT
+)""",
+
 "audit_log": """
 CREATE TABLE IF NOT EXISTS audit_log (
     audit_id                TEXT PRIMARY KEY,
@@ -379,6 +409,18 @@ def seed_stream_registry() -> list[dict]:
 
     hk_enabled_set = {t[0] for t in (fin_aps + fin_claims + ers_bkg[:2] + mbr[:1] + clm)}
     rampup_set     = {ers_bkg[2][0], mbr[1][0]}
+
+    # ── Dual-Optimizer conflict demo table (Workstream A / Phase 1c) ────────
+    # governance.dual_optimizer_report() / fleet_conflict_summary() need at
+    # least one hk_enabled table with an aws_opt_* flag set to render a
+    # non-empty Governance tab -- none of the seeded rows had this set
+    # before Phase 1c. Also carries the recovery-tool demo's simulated
+    # "current" metadata_location (see get_rollback_candidates()).
+    _CONFLICT_DEMO_FQN = "glue_catalog.finance_master_db.fin_payment_master"
+    _CONFLICT_DEMO_LOCATION = (
+        "s3://zamboni-metadata-demo/finance_master_db/fin_payment_master/"
+        "metadata/00042-c9f1a2e0-cur.metadata.json"
+    )
     for i, (fqn, layer, tier, stream_id, db_name,
             pipeline_job, dep_job, hk_job, freq) in enumerate(all_groups):
 
@@ -388,6 +430,8 @@ def seed_stream_registry() -> list[dict]:
         dry_until = None
         if fqn in rampup_set:
             dry_until = _date(-7 + 14)  # active ramp-up, expires in 7 days
+
+        is_conflict_demo = fqn == _CONFLICT_DEMO_FQN
 
         tables.append({
             "table_fqn":               fqn,
@@ -418,6 +462,11 @@ def seed_stream_registry() -> list[dict]:
             "registered_at":           _now(60 - i),
             "updated_at":              _now(random.randint(0, 10)),
             "database_name":           db_name,
+            "aws_opt_compaction":      1 if is_conflict_demo else 0,
+            "aws_opt_retention":       0,
+            "aws_opt_orphan":          0,
+            "aws_opt_checked_at":      _now(0, 2) if is_conflict_demo else None,
+            "metadata_location":       _CONFLICT_DEMO_LOCATION if is_conflict_demo else None,
         })
 
     return tables
@@ -523,6 +572,63 @@ def seed_execution_log(stream_rows: list[dict]) -> list[dict]:
                     "execution_date":   _date(day),
                 })
 
+    return rows
+
+
+def seed_rollback_demo_rows(stream_rows: list[dict]) -> list[dict]:
+    """
+    Realistic execution_log rows with metadata_location_before/after for
+    engine.core.recovery.get_rollback_candidates()'s CLI demo (Workstream A
+    / Phase 1c). seed_execution_log() seeds 30 days of history but never
+    populates the Phase 1a/1b safety-core columns, so without this the
+    local rollback-candidates list would be empty for every table.
+    """
+    fqn  = "glue_catalog.finance_master_db.fin_payment_master"
+    row  = next(r for r in stream_rows if r["table_fqn"] == fqn)
+    base = "s3://zamboni-metadata-demo/finance_master_db/fin_payment_master/metadata"
+
+    # (operation, days_ago, metadata_location_before, metadata_location_after)
+    steps = [
+        ("vacuum",   3, f"{base}/00040-a1b2c3d4-old.metadata.json", f"{base}/00041-b2c3d4e5-mid.metadata.json"),
+        ("optimize", 1, f"{base}/00041-b2c3d4e5-mid.metadata.json", f"{base}/00042-c9f1a2e0-cur.metadata.json"),
+    ]
+    rows = []
+    for op, days_ago, before, after in steps:
+        rows.append({
+            "execution_id":             str(uuid.uuid4()),
+            "run_id":                   f"hk-{_date(days_ago)}-{uuid.uuid4().hex[:6]}",
+            "engine":                   "hk",
+            "operation":                op,
+            "table_fqn":                fqn,
+            "stream_id":                row.get("stream_id", ""),
+            "domain":                   row["domain"],
+            "layer":                    row["layer"],
+            "tier":                     row["tier"],
+            "environment":              "prod",
+            "status":                   "SUCCESS",
+            "dry_run":                  0,
+            "skip_reason":              None,
+            "error_message":            None,
+            "started_at":               _now(days_ago, 2),
+            "completed_at":             _now(days_ago, 1),
+            "duration_seconds":         45.0,
+            "snapshots_before":         120,
+            "snapshots_after":          40 if op == "vacuum" else 121,
+            "snapshots_expired":        80 if op == "vacuum" else None,
+            "files_compacted":         850 if op == "optimize" else None,
+            "bytes_rewritten":          2_400_000_000 if op == "optimize" else None,
+            "orphan_files_deleted":     210 if op == "vacuum" else None,
+            "bytes_archived":           None,
+            "athena_query_id":          f"query-{uuid.uuid4().hex[:12]}",
+            "bytes_scanned":            1_800_000_000,
+            "execution_date":           _date(days_ago),
+            "lock_id":                  f"{fqn}:demo-owner",
+            "metadata_location_before": before,
+            "metadata_location_after":  after,
+            "snapshot_id_before":       9000 + days_ago,
+            "snapshot_id_after":        9000 + days_ago - 1,
+            "integrity_status":        "VERIFIED",
+        })
     return rows
 
 
@@ -683,6 +789,28 @@ def main():
         ("domain_registry",  "archive_duration_days",  "INTEGER DEFAULT 365"),
         ("domain_registry",  "auto_delete_after_days", "INTEGER DEFAULT 120"),
         ("domain_registry",  "registered_by",      "TEXT DEFAULT ''"),
+        # ── Safety Core (Workstream A / Phase 1a — contracts.md §3.2) ───────
+        ("stream_registry",  "aws_opt_compaction", "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_retention",  "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_orphan",     "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_checked_at", "TEXT"),
+        ("hk_config",        "gate0_override_until",  "TEXT"),
+        ("hk_config",        "gate0_override_reason", "TEXT"),
+        ("hk_config",        "gate0_override_by",     "TEXT"),
+        ("execution_log",    "lock_id",                  "TEXT"),
+        ("execution_log",    "metadata_location_before", "TEXT"),
+        ("execution_log",    "metadata_location_after",  "TEXT"),
+        ("execution_log",    "snapshot_id_before",       "INTEGER"),
+        ("execution_log",    "snapshot_id_after",        "INTEGER"),
+        ("execution_log",    "integrity_status",         "TEXT"),
+        # ── Recovery tooling (Workstream A / Phase 1c) ───────────────────────
+        # Local-mode-only simulation column: recovery.py's rollback path
+        # reads/writes this to simulate Glue's Parameters['metadata_location']
+        # since there is no live Glue catalog in ZAMBONI_LOCAL_MODE (same gap
+        # integrity_checker.capture_state() documents). NOT part of
+        # contracts.md's locked Athena DDL -- in real mode the current
+        # pointer always comes from live Glue Parameters, never this table.
+        ("stream_registry",  "metadata_location",        "TEXT"),
     ]
     from engine.utils.local_db import get_connection as _gc
     _conn = _gc()
@@ -716,6 +844,14 @@ def main():
     executions = seed_execution_log(streams)
     n = insert_rows("execution_log", executions)
     print(f"  {n} execution records")
+
+    # Separate insert_rows() call: it derives its INSERT column list from
+    # rows[0].keys() alone, so a batch mixing seed_execution_log()'s narrower
+    # row shape with these Safety-Core-column rows would silently drop the
+    # extra columns on every row (including these).
+    rollback_demo_rows = seed_rollback_demo_rows(streams)
+    n = insert_rows("execution_log", rollback_demo_rows)
+    print(f"  {n} rollback-candidate demo records")
 
     print("Seeding nonprod_registry...")
     nonprod = seed_nonprod_registry()

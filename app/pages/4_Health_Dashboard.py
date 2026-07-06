@@ -11,17 +11,20 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from app.components.athena_runner import cached_read_sql
 from app.components.auth import check_login
 from app.components.filters import domain_filter, environment_filter, layer_filter, tier_filter
+from app.components.grid_utils import render_grid
 from app.components.header import render as render_header
 from app.components.kpi_cards import format_count, render_kpi_row
 from app.components.sidebar import render as render_sidebar
 from config.settings import EXECUTION_LOG_TABLE, STREAM_REGISTRY_TABLE
 from engine.core.audit import AuditAction, AuditEvent, audit  # noqa: F401
+from engine.core.governance import dual_optimizer_report, fleet_conflict_summary
 
 st.set_page_config(page_title="Zamboni — Health Dashboard", page_icon="📊", layout="wide")
 check_login()
@@ -204,3 +207,90 @@ try:
         st.dataframe(never_df, use_container_width=True, hide_index=True, height=300)
 except Exception as e:
     st.error(f"Query failed: {e}")
+
+st.divider()
+
+# ── 🛡️ Maintenance Governance (Workstream A / Phase 1c) ───────────────────────
+st.subheader("🛡️ Maintenance Governance")
+st.caption(
+    "Dual-Optimizer Risk Report — tables where Zamboni HK is enabled AND an "
+    "AWS Glue table optimizer (compaction / retention / orphan-file deletion) "
+    "is also active on the same table. Gate 0 (contracts.md §4) refuses to "
+    "run Zamboni maintenance on these until the conflict clears or a "
+    "time-boxed override is granted."
+)
+
+if st.session_state.get("gov_rescan_flash"):
+    st.success(st.session_state.pop("gov_rescan_flash"))
+
+try:
+    gov_summary = fleet_conflict_summary()
+    render_kpi_row([
+        {"label": "HK-Enabled Tables", "value": format_count(gov_summary["total"])},
+        {"label": "Optimizer-Scanned", "value": format_count(gov_summary["scanned"])},
+        {"label": "⚠️ Conflicted",     "value": format_count(gov_summary["conflicted"]),
+         "help": "hk_enabled AND at least one AWS Glue optimizer type is active"},
+        {"label": "Stale Cache",       "value": format_count(gov_summary["stale_cache"]),
+         "help": "aws_opt_checked_at older than CONFLICT_CACHE_TTL_HOURS"},
+        {"label": "Overridden",        "value": format_count(gov_summary["overridden"]),
+         "help": "gate0_override_until is in the future"},
+    ])
+except Exception as e:
+    st.error(f"Governance summary failed: {e}")
+
+gov_col1, gov_col2 = st.columns([3, 1])
+with gov_col1:
+    gov_domain = domain_filter(key="gov_domain")
+with gov_col2:
+    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+    if st.button("🔄 Rescan conflicts", key="gov_rescan_btn", use_container_width=True):
+        from engine.core.conflict_detector import scan_fleet
+        with st.spinner("Scanning fleet for AWS Glue optimizer conflicts..."):
+            scan_result = scan_fleet()
+        cached_read_sql.clear()
+        st.session_state["gov_rescan_flash"] = (
+            f"✅ Scanned {scan_result['scanned']} table(s), "
+            f"found {scan_result['conflicts']} conflict(s)."
+        )
+        st.rerun()
+
+try:
+    gov_report = dual_optimizer_report(page=1, size=250, domain=gov_domain or None)
+    gov_df = pd.DataFrame(gov_report["data"])
+    if gov_df.empty:
+        st.success("✅ No dual-optimizer conflicts detected.")
+    else:
+        for _col in ("aws_opt_compaction", "aws_opt_retention", "aws_opt_orphan"):
+            gov_df[_col] = gov_df[_col].apply(lambda x: "✅" if not pd.isna(x) and x else "")
+        render_grid(gov_df, key="gov_grid", caption=f"{gov_report['total']} conflicted table(s)")
+        st.download_button(
+            "⬇️ Export CSV",
+            data=gov_df.to_csv(index=False),
+            file_name="zamboni_dual_optimizer_report.csv",
+            mime="text/csv",
+            key="gov_export_btn",
+        )
+except Exception as e:
+    st.error(f"Dual-optimizer report failed: {e}")
+
+st.markdown("##### Recent Integrity Failures — Last 7 Days")
+_fail_int_sql = f"""
+    SELECT table_fqn, domain, layer, tier, operation, integrity_status,
+           started_at, completed_at, error_message
+    FROM {EXECUTION_LOG_TABLE}
+    WHERE integrity_status = 'FAILED'
+      AND execution_date >= CURRENT_DATE - INTERVAL '7' DAY
+    ORDER BY started_at DESC
+    LIMIT 50
+"""
+try:
+    fail_int_df = cached_read_sql(_fail_int_sql)
+    if fail_int_df.empty:
+        st.success("✅ No integrity failures in the last 7 days.")
+    else:
+        render_grid(fail_int_df, key="gov_integrity_fail_grid")
+except Exception as e:
+    if "column" in str(e).lower():
+        st.info("integrity_status not migrated in this environment yet.")
+    else:
+        st.error(f"Integrity failures query failed: {e}")

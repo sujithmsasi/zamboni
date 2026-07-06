@@ -22,7 +22,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
-from config.settings import EXECUTION_LOG_MODE
+from config.settings import EXECUTION_LOG_MODE, ORCHESTRATED_MAINTENANCE
 from engine.core import (
     circuit_breaker,
     execution_log,
@@ -32,6 +32,7 @@ from engine.core import (
 )
 from engine.core.backpressure import wait_for_capacity
 from engine.core.config import get_hk_config
+from engine.core.conflict_detector import check_with_cache
 from engine.core.execution_log import LogEntry
 from engine.core.execution_log_parquet import ParquetLogBuffer
 from engine.core.health_checker import is_healthy
@@ -41,6 +42,7 @@ from engine.core.idempotency import (
     get_window_id,
     mark_executed,
 )
+from engine.core.lock_service import LockService
 from engine.core.property_sync import (
     apply_vacuum_properties,
     mark_properties_synced,
@@ -80,6 +82,92 @@ class FailureReason:
     SAFETY_BLOCKED     = "FAILURE_SAFETY_BLOCKED"
     APPROVAL_REQUIRED  = "FAILURE_APPROVAL_REQUIRED"
     OPERATION_ERROR    = "FAILURE_OPERATION_ERROR"
+
+
+def is_due(table_fqn: str, hk_config: dict) -> tuple[bool, str]:
+    """
+    Check if a table is due for HK based on run_frequency.
+    Also dedupes: skips if a successful run just happened recently.
+
+    Module-level so engine/core/orchestrator.py (Phase 1b) can reuse the
+    exact same frequency/dedupe logic without duplicating _FREQUENCY_HOURS.
+    HKEngine._is_due() below delegates here unchanged.
+
+    Returns: (is_due, skip_reason)
+    """
+    freq = hk_config.get("run_frequency", "daily")
+
+    if freq == "every_trigger":
+        return True, ""
+
+    threshold_hours = _FREQUENCY_HOURS.get(freq, 20)
+
+    try:
+        last = execution_log.get_last_run(
+            table_fqn,
+            operation="hk_run",
+            only_success=True,
+        )
+    except Exception:
+        return True, ""  # Can't check — allow run
+
+    if not last:
+        return True, ""  # Never run — always due
+
+    last_completed = last.get("completed_at")
+    if not last_completed:
+        return True, ""
+
+    # Parse timestamp
+    if isinstance(last_completed, str):
+        try:
+            from dateutil import parser as dtparser
+            last_completed = dtparser.parse(last_completed)
+        except Exception:
+            return True, ""
+
+    # Make timezone-aware
+    if last_completed.tzinfo is None:
+        from pytz import utc
+        last_completed = utc.localize(last_completed)
+
+    hours_since = (
+        datetime.now(UTC) - last_completed
+    ).total_seconds() / 3600
+
+    if hours_since < threshold_hours:
+        reason = (
+            f"SKIP_NOT_DUE ({freq} — last run "
+            f"{hours_since:.1f}h ago, threshold {threshold_hours}h)"
+        )
+        log.info(
+            "hk_engine.skip_not_due",
+            table_fqn=table_fqn,
+            freq=freq,
+            hours_since=round(hours_since, 1),
+            threshold=threshold_hours,
+        )
+        return False, reason
+
+    return True, ""
+
+
+def _parse_gate0_override(value) -> datetime | None:
+    """Parse hk_config.gate0_override_until into a tz-aware datetime, or None."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            from dateutil import parser as dtparser
+            dt = dtparser.parse(str(value))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        from pytz import utc
+        dt = utc.localize(dt)
+    return dt
 
 
 # ── run_frequency thresholds ──────────────────────────────────────────────────
@@ -156,6 +244,10 @@ class HKEngine(BaseEngine):
         # log_buffer through every call site (Gap 1).
         self._log_buffer = ParquetLogBuffer(run_id=self.run_id, engine="hk")
         log_buffer = self._log_buffer  # local alias for flush call below
+
+        # Gate 0 lock backend -- one per run, stateless factory (each acquire()
+        # call produces its own Lock; safe to share across the tier thread pools).
+        self._lock_service = LockService()
 
         succeeded     = 0
         failed        = 0
@@ -257,12 +349,84 @@ class HKEngine(BaseEngine):
         # ── Ramp-up check: per-table dry_run ─────────────────────────────────
         table_dry_run = self.dry_run or is_in_dry_run_ramp(table_row)
 
+        # ── Orchestrated mode opt-in (Workstream A / Phase 1b) ────────────────
+        # ORCHESTRATED_MAINTENANCE=true (default) routes this table through
+        # engine/core/orchestrator.py's completion-serialized, commit-verified
+        # sequence instead of the flow below. Rollback lever: set false to
+        # fall back to this file's pre-orchestrator per-op flow untouched.
+        if ORCHESTRATED_MAINTENANCE:
+            from engine.core.orchestrator import run_table_maintenance
+            run_result = run_table_maintenance(fqn, dry_run=table_dry_run, run_id=self.run_id)
+            if run_result.status == "SKIPPED":
+                return "skipped"
+            return "succeeded" if run_result.status == "SUCCESS" else "failed"
+
         # ── Get HK config ─────────────────────────────────────────────────────
         hk_config = get_hk_config(fqn)
         if not hk_config:
             self._log_table_skip(fqn, "SKIP_NO_CONFIG")
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_NO_CONFIG")
             return "skipped"
+
+        # ── Gate 0 — Maintenance Conflict Gate (contracts.md §4) ──────────────
+        # Runs before Gate 1. Order: time-boxed override -> AWS Glue optimizer
+        # conflict -> another execution already in flight -> lock acquire.
+        # Not user-toggleable like Gates 1-3 -- the only bypass is the
+        # time-boxed gate0_override_until/reason/by on hk_config.
+        override_until   = _parse_gate0_override(hk_config.get("gate0_override_until"))
+        gate0_overridden = bool(override_until and override_until > datetime.now(UTC))
+
+        if gate0_overridden:
+            log.warning(
+                "hk_engine.gate0_overridden",
+                table_fqn=fqn,
+                reason=hk_config.get("gate0_override_reason"),
+                actor=hk_config.get("gate0_override_by"),
+            )
+            self._write_log(
+                table_row, "gate0", "OVERRIDDEN",
+                skip_reason=(
+                    f"GATE0_OVERRIDDEN reason={hk_config.get('gate0_override_reason')} "
+                    f"actor={hk_config.get('gate0_override_by')}"
+                ),
+            )
+        else:
+            conflict = check_with_cache(fqn)
+            if conflict.get("conflict"):
+                self._log_table_skip(fqn, "SKIP_AWS_OPTIMIZER_CONFLICT")
+                self._write_log(
+                    table_row, "hk_run", "SKIPPED",
+                    skip_reason=f"SKIP_AWS_OPTIMIZER_CONFLICT ({conflict})",
+                )
+                return "skipped"
+
+        if execution_log.get_running(fqn):
+            self._log_table_skip(fqn, "SKIP_ALREADY_RUNNING")
+            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_ALREADY_RUNNING")
+            return "skipped"
+
+        lock = self._lock_service.acquire(fqn, "hk_run")
+        if lock is None:
+            self._log_table_skip(fqn, "SKIP_LOCK_HELD")
+            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_LOCK_HELD")
+            return "skipped"
+
+        try:
+            return self._run_gates_and_operations(table_row, hk_config, table_dry_run)
+        finally:
+            self._lock_service.release(lock)
+
+    def _run_gates_and_operations(
+        self, table_row: dict, hk_config: dict, table_dry_run: bool,
+    ) -> str:
+        """
+        Gates 1-4 + compaction/vacuum/orphan operations for one table.
+        Split out from _process_table so Gate 0's lock is guaranteed to be
+        released via try/finally regardless of which return path is taken
+        below.
+        """
+        fqn  = table_row["table_fqn"]
+        tier = table_row.get("tier", "standard")
 
         # ── Gate 1 — Upstream batch completion (Control-M) ────────────────────
         # gate1_enabled=0 by default until Control-M API integration is ready.
@@ -583,67 +747,9 @@ class HKEngine(BaseEngine):
     # ── run_frequency + dedupe (H1 + H2) ─────────────────────────────────────
 
     def _is_due(self, table_fqn: str, hk_config: dict) -> tuple[bool, str]:
-        """
-        Check if a table is due for HK based on run_frequency.
-        Also dedupes: skips if a successful run just happened recently.
-
-        Returns: (is_due, skip_reason)
-        """
-        freq = hk_config.get("run_frequency", "daily")
-
-        if freq == "every_trigger":
-            return True, ""
-
-        threshold_hours = _FREQUENCY_HOURS.get(freq, 20)
-
-        try:
-            last = execution_log.get_last_run(
-                table_fqn,
-                operation="hk_run",
-                only_success=True,
-            )
-        except Exception:
-            return True, ""  # Can't check — allow run
-
-        if not last:
-            return True, ""  # Never run — always due
-
-        last_completed = last.get("completed_at")
-        if not last_completed:
-            return True, ""
-
-        # Parse timestamp
-        if isinstance(last_completed, str):
-            try:
-                from dateutil import parser as dtparser
-                last_completed = dtparser.parse(last_completed)
-            except Exception:
-                return True, ""
-
-        # Make timezone-aware
-        if last_completed.tzinfo is None:
-            from pytz import utc
-            last_completed = utc.localize(last_completed)
-
-        hours_since = (
-            datetime.now(UTC) - last_completed
-        ).total_seconds() / 3600
-
-        if hours_since < threshold_hours:
-            reason = (
-                f"SKIP_NOT_DUE ({freq} — last run "
-                f"{hours_since:.1f}h ago, threshold {threshold_hours}h)"
-            )
-            log.info(
-                "hk_engine.skip_not_due",
-                table_fqn=table_fqn,
-                freq=freq,
-                hours_since=round(hours_since, 1),
-                threshold=threshold_hours,
-            )
-            return False, reason
-
-        return True, ""
+        """Delegates to the module-level is_due() (see above) — kept as an
+        instance method for backward compatibility with existing callers."""
+        return is_due(table_fqn, hk_config)
 
     # ── Execution log helper ──────────────────────────────────────────────────
 

@@ -89,3 +89,8 @@ def head_object(bucket: str, key: str) -> dict | None:
         if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
             return None
         raise
+
+
+def get_object_bytes(bucket: str, key: str) -> bytes:
+    """Return the full body of an S3 object as bytes."""
+    return _get_client().get_object(Bucket=bucket, Key=key)["Body"].read()

@@ -66,6 +66,14 @@ class LogEntry:
     athena_query_id:  str | None   = None
     bytes_scanned:    int | None   = None
 
+    # Safety Core (Workstream A / Phase 1a — contracts.md §3.2)
+    lock_id:                  str | None = None
+    metadata_location_before: str | None = None
+    metadata_location_after:  str | None = None
+    snapshot_id_before:       int | None = None
+    snapshot_id_after:        int | None = None
+    integrity_status:         str | None = None  # VERIFIED | FAILED | SKIPPED
+
     # Auto-generated
     execution_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     execution_date: date = field(default_factory=date.today)
@@ -147,7 +155,13 @@ def write(entry: LogEntry, dry_run: bool = False) -> bool:
             {_s(entry.post_validation)},
             {_s(entry.athena_query_id)},
             {_n(entry.bytes_scanned)},
-            {_dt(entry.execution_date)}
+            {_dt(entry.execution_date)},
+            {_s(entry.lock_id)},
+            {_s(entry.metadata_location_before)},
+            {_s(entry.metadata_location_after)},
+            {_n(entry.snapshot_id_before)},
+            {_n(entry.snapshot_id_after)},
+            {_s(entry.integrity_status)}
         )
     """
 
@@ -231,6 +245,29 @@ def get_last_run(
     sql = f"""
         SELECT * FROM {EXECUTION_LOG_TABLE}
         WHERE {where}
+        ORDER BY started_at DESC
+        LIMIT 1
+    """
+    df = read_sql(sql, workgroup="app")
+    if df.empty:
+        return None
+    return df.iloc[0].to_dict()
+
+
+def get_running(table_fqn: str) -> dict | None:
+    """
+    Return the most recent execution_log row with status='RUNNING' for a
+    table, or None. Used by Gate 0's in-flight check (contracts.md §4 step 3).
+
+    No engine writes status='RUNNING' yet as of Phase 1a -- the Phase 1b
+    orchestrator will mark each step RUNNING at start and terminal at
+    completion. This check is wired into Gate 0 now so it activates without
+    further changes once that write path lands.
+    """
+    sql = f"""
+        SELECT * FROM {EXECUTION_LOG_TABLE}
+        WHERE table_fqn = '{table_fqn}'
+          AND status    = 'RUNNING'
         ORDER BY started_at DESC
         LIMIT 1
     """

@@ -118,6 +118,61 @@ NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 ZAMBONI_LOCAL_MODE = os.getenv("ZAMBONI_LOCAL_MODE", "false").lower() == "true"
 ZAMBONI_LOCAL_DB   = os.getenv("ZAMBONI_LOCAL_DB", "zamboni_local.db")
 
+
+# ── Mode / Session Factory (Workstream A, Phase 1a — contracts.md §2) ───────
+# get_mode() is the single source of truth for which backend a call should
+# use. ZAMBONI_LOCAL_MODE (bool, above) is preserved for backward
+# compatibility -- "local" here maps 1:1 onto it. aws_local is the
+# laptop-demo mode (real AWS via SSO profile); aws_ec2 is the deployed
+# instance-role mode (default when neither ZAMBONI_MODE nor
+# ZAMBONI_LOCAL_MODE is set).
+def get_mode() -> str:
+    m = os.getenv("ZAMBONI_MODE")
+    if m in ("local", "aws_local", "aws_ec2"):
+        return m
+    return "local" if os.getenv("ZAMBONI_LOCAL_MODE", "").lower() == "true" else "aws_ec2"
+
+
+def get_boto3_session():
+    """Return a boto3 Session appropriate for the current mode."""
+    import boto3
+    if get_mode() == "aws_local":
+        return boto3.Session(profile_name=os.getenv("AWS_SSO_PROFILE", "prod-toolsgenai-sso"))
+    return boto3.Session()  # instance role / env chain
+
+
+# ── Maintenance Safety (Workstream A — contracts.md §2, §3.1) ───────────────
+# Coordination primitives for the lock service, conflict detector, and Gate 0.
+# ORPHAN_MIN_RETENTION_HOURS (above, =48) predates this phase and is asserted
+# by 2 existing tests (test_settings.py, test_vacuum.py) but is not consumed
+# by engine/operations/vacuum.py -- the real floor there is TBLPROPERTIES-
+# driven. ORPHAN_MIN_AGE_HOURS_FLOOR below is the floor Gate 0/orchestrator
+# actually clamps to (contracts.md D2). Both constants are kept side by side
+# -- see contracts.md Conflict List item 3.
+ORPHAN_MIN_AGE_HOURS_FLOOR   = int(os.getenv("ORPHAN_MIN_AGE_HOURS_FLOOR", "72"))   # hard clamp-up
+ORPHAN_DEFAULT_AGE_HOURS     = int(os.getenv("ORPHAN_DEFAULT_AGE_HOURS", "96"))
+SNAPSHOT_MIN_AGE_HOURS       = int(os.getenv("SNAPSHOT_MIN_AGE_HOURS", "24"))       # never expire younger
+MAX_ORPHAN_DELETE_PCT        = int(os.getenv("MAX_ORPHAN_DELETE_PCT", "20"))        # abort above this
+CONFLICT_CACHE_TTL_HOURS     = int(os.getenv("CONFLICT_CACHE_TTL_HOURS", "24"))
+LOCK_TTL_MINUTES             = int(os.getenv("LOCK_TTL_MINUTES", "120"))
+LOCK_HEARTBEAT_SECONDS       = int(os.getenv("LOCK_HEARTBEAT_SECONDS", "60"))
+GATE0_OVERRIDE_MAX_HOURS     = int(os.getenv("GATE0_OVERRIDE_MAX_HOURS", "24"))
+DDB_LOCK_TABLE               = os.getenv("DDB_LOCK_TABLE", "zamboni_maintenance_locks")
+
+# ── Orchestrator (Workstream A, Phase 1b — contracts.md §5 / §5-A) ───────────
+# Rollback lever: false preserves the pre-orchestrator per-op flow in
+# hk_engine.py untouched. Default true once Phase 1b ships.
+ORCHESTRATED_MAINTENANCE = os.getenv("ORCHESTRATED_MAINTENANCE", "true").lower() == "true"
+VACUUM_AUDIT_TABLE = os.getenv(
+    "VACUUM_AUDIT_TABLE",
+    "glue_catalog.zamboni_catalog.vacuum_audit"
+)
+
+
+def clamp_orphan_age(policy_hours: int) -> int:
+    """Clamp a policy-configured orphan age (hours) up to the hard floor."""
+    return max(int(policy_hours), ORPHAN_MIN_AGE_HOURS_FLOOR)
+
 # ── Execution Log Write Mode (v2) ─────────────────────────────────────────────
 # Controls how engines write to the Iceberg execution_log table:
 #   parquet — Batch Parquet to S3 + add_files (preferred, fast)

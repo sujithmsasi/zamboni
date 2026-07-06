@@ -269,4 +269,11 @@ class ParquetLogBuffer:
             "bytes_scanned":      g("bytes_scanned", 0) or 0,
             # ── Partition ────────────────────────────────────────
             "execution_date":     now_utc.date().isoformat(),
+            # ── Safety Core (Phase 1a) ───────────────────────────
+            "lock_id":                  g("lock_id"),
+            "metadata_location_before": g("metadata_location_before"),
+            "metadata_location_after":  g("metadata_location_after"),
+            "snapshot_id_before":       g("snapshot_id_before"),
+            "snapshot_id_after":        g("snapshot_id_after"),
+            "integrity_status":         g("integrity_status", "SKIPPED"),
         }

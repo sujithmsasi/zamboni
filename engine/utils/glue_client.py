@@ -260,6 +260,87 @@ def _detect_date_column(columns: list[dict]) -> dict | None:
     return None
 
 
+# ── Gate 0 — AWS Glue Table Optimizer (conflict detection) ────────────────────
+
+def get_table_optimizer(database: str, table_name: str, optimizer_type: str) -> bool:
+    """
+    Return True if the given Glue table optimizer is enabled for a table.
+    optimizer_type in {"compaction", "retention", "orphan_file_deletion"}.
+
+    An optimizer that was never configured raises EntityNotFoundException --
+    treated as enabled=False, same as an explicitly disabled optimizer. Any
+    other lookup failure also fails to enabled=False (fail-open, matching
+    backpressure.py's convention) rather than blocking Gate 0 on an
+    observability gap.
+
+    Local mode always returns False -- there is no Glue optimizer to check.
+    """
+    if ZAMBONI_LOCAL_MODE:
+        return False
+    try:
+        resp = _get_client().get_table_optimizer(
+            DatabaseName=database,
+            TableName=table_name,
+            Type=optimizer_type,
+        )
+        config = resp.get("TableOptimizer", {}).get("configuration", {})
+        return bool(config.get("enabled", False))
+    except _get_client().exceptions.EntityNotFoundException:
+        return False
+    except Exception as e:
+        log.warning(
+            "glue.get_table_optimizer_failed",
+            database=database, table=table_name,
+            optimizer_type=optimizer_type, error=str(e),
+        )
+        return False
+
+
+# ── Metadata Rollback (Workstream A / Phase 1c) ───────────────────────────────
+
+_READONLY_TABLE_KEYS = {
+    "DatabaseName", "CreateTime", "UpdateTime", "CreatedBy",
+    "IsRegisteredWithLakeFormation", "CatalogId", "VersionId",
+    "UpdateTableInputCombined",
+}
+
+
+def update_metadata_location(
+    database: str, table_name: str, metadata_location: str, dry_run: bool = False,
+) -> bool:
+    """
+    Set Parameters['metadata_location'] on a Glue table to a specific value,
+    preserving every other table parameter and the storage descriptor --
+    used by engine.core.recovery.rollback_metadata() to point a table's
+    catalog entry back at a prior (still-existing) Iceberg metadata.json.
+    """
+    if dry_run:
+        log.info(
+            "glue.update_metadata_location.dry_run",
+            database=database, table=table_name, metadata_location=metadata_location,
+        )
+        return True
+
+    table = get_table(database, table_name)
+    if not table:
+        log.error("glue.update_metadata_location.table_not_found", database=database, table=table_name)
+        return False
+
+    table_input = {k: v for k, v in table.items() if k not in _READONLY_TABLE_KEYS}
+    table_input["Parameters"] = {**table.get("Parameters", {}), "metadata_location": metadata_location}
+
+    try:
+        _get_client().update_table(DatabaseName=database, TableInput=table_input)
+        log.info(
+            "glue.update_metadata_location.done",
+            database=database, table=table_name, metadata_location=metadata_location,
+        )
+        return True
+    except Exception as e:
+        log.error("glue.update_metadata_location.failed", database=database, table=table_name, error=str(e))
+        return False
+
+
 # ── Gate 1 — Upstream Job Status ──────────────────────────────────────────────
 
 def get_last_job_run(job_name: str) -> dict | None:
