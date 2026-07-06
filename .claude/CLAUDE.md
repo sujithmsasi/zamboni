@@ -174,3 +174,93 @@ Gate 0. 518 tests passing (494 + 24 new), ruff clean.
   `hk_engine.py` (operations aren't long-running yet in this engine — Phase
   1b's orchestrator owns heartbeat-during-long-ops per contracts §4 step 5).
 - No changes to `vacuum.py` logic. No UI changes.
+
+2026-07-06 Phase 1b: Orchestrator, Integrity Checker, Safe Vacuum shipped.
+542 tests passing (518 + 24 new), ruff clean.
+- **CRITICAL OVERRIDE applied**: contracts §5-A (bare combined Athena
+  VACUUM, no `older_than` param, pointer ADVANCES) supersedes §5's
+  three-step "REMOVE ORPHANS — two-phase ... delete with older_than="
+  design and the phase brief's `run_expire()`/`run_orphan_delete()`
+  naming. See `.claude/decisions.md` for the full reconciliation.
+- `engine/core/integrity_checker.py` (new): `TableState` + `capture_state()`
+  (Glue `Parameters.metadata_location` + Athena `"$snapshots"` count/latest
+  snapshot id/ts; local mode returns a documented stub) and
+  `verify_advanced(before, after, operation, min_snapshot_age_hours=None)`
+  — `operation="optimize"` requires the pointer to change and snapshot
+  count non-decreasing; `operation="vacuum"` requires the pointer to
+  change (§5-A voids §5's old "pointer unchanged for orphan" rule),
+  snapshot count non-increasing, and (if given) the resulting snapshot
+  age ≥ the clamped floor.
+- `engine/core/maintenance_ops.py` (new): `run_optimize()` (thin wrapper
+  over `compaction.run_compaction`) and `run_safe_vacuum()` implementing
+  §5-A's a→d sequence — property clamp (`vacuum_max_snapshot_age_seconds`
+  ≥ max(policy, `ORPHAN_MIN_AGE_HOURS_FLOOR`, `SNAPSHOT_MIN_AGE_HOURS`)),
+  pre-flight sanity (`"$snapshots"`/`"$files"` scope estimate, abort above
+  `MAX_ORPHAN_DELETE_PCT` with no delete), the existing bare-VACUUM call
+  via `vacuum.run_expire_snapshots` (unmodified), and post-audit
+  files/bytes delta. `write_vacuum_audit()` persists one row per run
+  (including sanity-aborts) to the new `vacuum_audit` table, through both
+  local SQLite and Athena.
+- `engine/core/orchestrator.py` (new): `run_table_maintenance(fqn,
+  dry_run=True, run_id=None) -> RunResult` — Gate 0 (from 1a) → lock held
+  → Gate 1/2/idempotency/Gate 3/Gate 4 (duplicated here rather than
+  extracted from `hk_engine.py`, see decisions.md) → property sync →
+  health check → capture_state → OPTIMIZE → `verify_advanced("optimize")`
+  → capture_state → SAFE-VACUUM → `verify_advanced("vacuum")` → release
+  (finally). Any integrity FAILED or step exception immediately trips the
+  circuit breaker (not threshold-gated, unlike the legacy op-failure path)
+  and sends an SNS alert, then halts remaining steps. Every step writes
+  `execution_log` with `lock_id` + before/after metadata + snapshot ids +
+  `integrity_status`, routed through the existing `EXECUTION_LOG_MODE`
+  buffered/insert paths; the `RUNNING` marker is always written
+  immediately (unbuffered) so Gate 0's in-flight check is visible to
+  concurrent triggers for the run's duration.
+- `engine/engines/hk_engine.py`: `ORCHESTRATED_MAINTENANCE` (new
+  `config/settings.py` constant, default `true`) opt-in wired at the top
+  of `_process_table()` — when true, delegates the whole table to
+  `orchestrator.run_table_maintenance()` instead of the pre-existing
+  Gate 0 + `_run_gates_and_operations()` flow below it (untouched,
+  reachable by setting the constant to `false` — the rollback lever named
+  in the phase brief). `_is_due()`'s body was promoted to a module-level
+  `is_due()` function (delegated to, unchanged behavior) so both
+  `hk_engine.py` and `orchestrator.py` share one frequency/dedupe
+  implementation instead of duplicating `_FREQUENCY_HOURS`.
+- Schema: new `vacuum_audit` table (contracts §3.3) —
+  `sql/create_vacuum_audit.sql` (Athena DDL) + `scripts/seed_local_db.py`
+  SQLite mirror. No new `execution_log`/`stream_registry`/`hk_config`
+  columns needed — Phase 1a already added all six Safety Core columns
+  `execution_log.write()` and `execution_log_parquet.py` use here.
+- `config/settings.py`: added `ORCHESTRATED_MAINTENANCE` (bool) and
+  `VACUUM_AUDIT_TABLE` constants.
+- Test-suite fix (not a product regression): `ORCHESTRATED_MAINTENANCE`
+  defaulting to `true` bypassed the legacy `_process_table()` gates that
+  five `test_safety_core.py` tests and one `test_sprint5_gaps.py` test
+  exercise directly — those six tests now pin
+  `ORCHESTRATED_MAINTENANCE=False` since they test the rollback-lever path
+  specifically, not `engine/core/orchestrator.py`.
+- New tests: `tests/unit/test_integrity.py` (verify_advanced matrix, local
+  stub, capture_state failure-safety), `tests/unit/test_maintenance_ops.py`
+  (property clamp floor, orphan sanity abort/proceed, dry-run post-audit
+  skip, vacuum_audit INSERT shape), `tests/unit/test_orchestrator.py`
+  (happy path optimize→vacuum ordering, mid-step integrity failure halts +
+  trips breaker, dry_run skips verify/mark_executed, backpressure routes
+  through `_TIER_TO_WORKGROUP`, Gate 0 lock-held skip).
+- Verified via a real local dry run against the seeded DB
+  (`glue_catalog.finance_master_db.fin_payment_master`, gate2/frequency
+  bypassed to reach the operations): produced
+  `RunResult(status='SUCCESS', steps=[StepResult(step='vacuum',
+  status='DRY_RUN', integrity_status='SKIPPED', ...)])` and a real
+  `vacuum_audit` row (`aborted=0, dry_run=1, older_than_hours_used=720,
+  sanity_pct=0.0`) — the `0.0` sanity_pct is the documented local-mode
+  approximation (no `"$snapshots"`/`"$files"` equivalent in SQLite, see
+  decisions.md), not a bug.
+- **Found, not fixed** (pre-existing, out of scope — see decisions.md):
+  `execution_log.write()`'s positional INSERT (38 values) doesn't match
+  `scripts/seed_local_db.py`'s local `execution_log` table (37 columns,
+  missing `partition_date`/`archive_s3_path`/`pre_validation`/
+  `post_validation`, carrying three unrelated extra columns). Caught and
+  logged by `local_db.py`, never raises, predates this phase — no test
+  before Phase 1b exercised a real positional INSERT against the seeded
+  local table.
+- No changes to `vacuum.py` logic beyond what Phase 1a already made. No UI
+  changes.

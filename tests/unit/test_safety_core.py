@@ -275,6 +275,9 @@ def test_any_optimizer_type_enabled_is_conflict(monkeypatch):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_gate0_optimizer_conflict_skips(monkeypatch, lock_db):
+    # Phase 1b: pin the pre-orchestrator rollback-lever flow -- these tests
+    # exercise hk_engine.py's OWN Gate 0 wiring, not engine/core/orchestrator.py.
+    monkeypatch.setattr(hk_engine_mod, "ORCHESTRATED_MAINTENANCE", False)
     monkeypatch.setattr(hk_engine_mod, "get_hk_config", lambda fqn: {"policy_template": "TEST"})
     monkeypatch.setattr(hk_engine_mod, "check_with_cache", lambda fqn: {"conflict": True})
 
@@ -286,6 +289,7 @@ def test_gate0_optimizer_conflict_skips(monkeypatch, lock_db):
 
 
 def test_gate0_override_active_logs_and_proceeds(monkeypatch, lock_db):
+    monkeypatch.setattr(hk_engine_mod, "ORCHESTRATED_MAINTENANCE", False)
     future = (datetime.now(UTC) + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     monkeypatch.setattr(hk_engine_mod, "get_hk_config", lambda fqn: {
         "gate0_override_until":  future,
@@ -309,6 +313,7 @@ def test_gate0_override_active_logs_and_proceeds(monkeypatch, lock_db):
 
 
 def test_gate0_already_running_skips(monkeypatch, lock_db):
+    monkeypatch.setattr(hk_engine_mod, "ORCHESTRATED_MAINTENANCE", False)
     monkeypatch.setattr(hk_engine_mod, "get_hk_config", lambda fqn: {"policy_template": "TEST"})
     monkeypatch.setattr(hk_engine_mod, "check_with_cache", lambda fqn: {"conflict": False})
     monkeypatch.setattr(hk_engine_mod.execution_log, "get_running", lambda fqn: {"status": "RUNNING"})
@@ -321,6 +326,7 @@ def test_gate0_already_running_skips(monkeypatch, lock_db):
 
 
 def test_gate0_lock_held_skips(monkeypatch, lock_db):
+    monkeypatch.setattr(hk_engine_mod, "ORCHESTRATED_MAINTENANCE", False)
     monkeypatch.setattr(hk_engine_mod, "get_hk_config", lambda fqn: {"policy_template": "TEST"})
     monkeypatch.setattr(hk_engine_mod, "check_with_cache", lambda fqn: {"conflict": False})
     monkeypatch.setattr(hk_engine_mod.execution_log, "get_running", lambda fqn: None)
@@ -337,6 +343,7 @@ def test_gate0_lock_held_skips(monkeypatch, lock_db):
 
 
 def test_gate0_clean_acquires_and_releases_lock(monkeypatch, lock_db):
+    monkeypatch.setattr(hk_engine_mod, "ORCHESTRATED_MAINTENANCE", False)
     monkeypatch.setattr(hk_engine_mod, "get_hk_config", lambda fqn: {"policy_template": "TEST"})
     monkeypatch.setattr(hk_engine_mod, "check_with_cache", lambda fqn: {"conflict": False})
     monkeypatch.setattr(hk_engine_mod.execution_log, "get_running", lambda fqn: None)

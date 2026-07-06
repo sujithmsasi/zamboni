@@ -194,7 +194,8 @@ class TestWorkgroupMapping:
             "tier": "standard", "environment": "prod",
         }
 
-        with patch("engine.engines.hk_engine.wait_for_capacity", side_effect=mock_wait), \
+        with patch("engine.engines.hk_engine.ORCHESTRATED_MAINTENANCE", False), \
+             patch("engine.engines.hk_engine.wait_for_capacity", side_effect=mock_wait), \
              patch("engine.engines.hk_engine.execution_log"), \
              patch("engine.engines.hk_engine.registry.get_table", return_value=table_row), \
              patch("engine.engines.hk_engine.get_hk_config") as mhk, \

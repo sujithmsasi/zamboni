@@ -159,6 +159,15 @@ LOCK_HEARTBEAT_SECONDS       = int(os.getenv("LOCK_HEARTBEAT_SECONDS", "60"))
 GATE0_OVERRIDE_MAX_HOURS     = int(os.getenv("GATE0_OVERRIDE_MAX_HOURS", "24"))
 DDB_LOCK_TABLE               = os.getenv("DDB_LOCK_TABLE", "zamboni_maintenance_locks")
 
+# ── Orchestrator (Workstream A, Phase 1b — contracts.md §5 / §5-A) ───────────
+# Rollback lever: false preserves the pre-orchestrator per-op flow in
+# hk_engine.py untouched. Default true once Phase 1b ships.
+ORCHESTRATED_MAINTENANCE = os.getenv("ORCHESTRATED_MAINTENANCE", "true").lower() == "true"
+VACUUM_AUDIT_TABLE = os.getenv(
+    "VACUUM_AUDIT_TABLE",
+    "glue_catalog.zamboni_catalog.vacuum_audit"
+)
+
 
 def clamp_orphan_age(policy_hours: int) -> int:
     """Clamp a policy-configured orphan age (hours) up to the hard floor."""

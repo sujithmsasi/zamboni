@@ -59,3 +59,85 @@ translates Athena/Trino SQL (DATE_DIFF, DATE_TRUNC, etc.) into SQLite
 equivalents with a hand-written char-scanner (not regex) for nested-paren
 handling. This is a load-bearing dev/demo path, not a test double — treat it
 as a real backend when reasoning about behavior in `ZAMBONI_LOCAL_MODE`.
+
+## Phase 1b: §5-A orphan-estimation approach actually used
+`engine/core/maintenance_ops.py::_preflight_sanity()` computes
+`would_expire_pct` as `COUNT(snapshots older than the clamped floor) /
+COUNT(total snapshots)` via a single query against Iceberg's `"$snapshots"`
+metadata table — this is the literal reading of contracts.md §5-A step b,
+not an approximation of file-level scope. A true *file*-level estimate
+(files referenced only by snapshots about to expire) would require walking
+manifest lists per candidate snapshot, which Athena's `$files`/$snapshots`
+metadata views don't expose directly and which the existing `vacuum.py`
+gap-fix set (1,2,3,9,10) has no primitive for. Snapshot-count-based scope is
+the same signal `health_checker.py::_check_snapshots` already uses for
+`expired_snapshots`, so this reuses an established approximation rather than
+inventing a new one.
+In `ZAMBONI_LOCAL_MODE`, `"$snapshots"`/`"$files"` have no SQLite
+equivalent (see the "Local mode is a real SQLite shim" note above — the
+shim translates Athena SQL syntax, it does not fabricate Iceberg metadata
+tables). `read_sql_local()` returns an empty DataFrame for these queries,
+so `_preflight_sanity()` reports `would_expire_pct=0.0` (nothing to abort
+on) — matching how `health_checker.py` already treats an empty `$snapshots`
+result as "nothing to flag" in local mode. Confirmed via a real local
+dry run against the seeded DB (see Migration Progress entry).
+
+## Phase 1b: 72h floor = rollback window rationale
+`ORPHAN_MIN_AGE_HOURS_FLOOR=72` (contracts.md D2) is enforced in
+`maintenance_ops.py::_clamp_vacuum_properties()` by setting
+`vacuum_max_snapshot_age_seconds` on the table to at least 72h worth of
+seconds before every VACUUM call — this value is deliberately never used as
+a one-off delete-time argument (Athena engine v3 VACUUM has none) but as a
+*standing table property* that persists between runs. The reasoning: since
+a single combined VACUUM both expires snapshots and removes the files only
+those snapshots reference, the floor is the guaranteed minimum time window
+during which a bad commit's prior snapshot is still recoverable via Iceberg
+time-travel / rollback before its files can be physically deleted. Widening
+the floor (e.g. `ORPHAN_DEFAULT_AGE_HOURS=96`) buys a longer recovery
+window at the cost of slower orphan reclamation — the floor is a lower
+bound, not a target.
+
+## Phase 1b: run_expire()/run_orphan_delete() collapsed into run_safe_vacuum()
+The phase brief's intro paragraph asked for `maintenance_ops.py` to expose
+`run_optimize()`, `run_expire()`, `run_orphan_delete()`. The CRITICAL
+OVERRIDE in the phase prompt makes contracts.md §5-A (single combined bare
+`VACUUM`, no separable orphan-only call) supersede that framing wherever it
+conflicts — and it conflicts here, since there is nothing for a standalone
+`run_orphan_delete()` to call that `run_expire()` wouldn't also call.
+`engine/core/maintenance_ops.py` exposes `run_optimize()` and
+`run_safe_vacuum()` instead — the latter performing all of §5-A's a→d
+sequence (clamp → sanity → VACUUM → post-audit) as one atomic step. No dead
+aliases were added for the unused `run_expire`/`run_orphan_delete` names.
+
+## Phase 1b: gates 1-4 duplicated (not extracted) into orchestrator.py
+`engine/core/orchestrator.py::run_table_maintenance()` must be independently
+callable (contracts.md §5's acceptance CLI) and therefore re-implements
+Gate 1 (Control-M), Gate 2 (window), idempotency, Gate 3 (frequency), and
+Gate 4 (circuit breaker) rather than calling into
+`hk_engine.py::_run_gates_and_operations()`, which is tightly coupled to
+`HKEngine` instance state (`self._write_log`, `self._log_buffer`) and mixes
+gates with the legacy operations flow this phase replaces. Phase 1a already
+established the norm of not re-indenting large existing blocks (it split
+Gate 0 into `_run_gates_and_operations` specifically to avoid re-indenting
+~330 lines). Extracting `is_due()` to module level was safe and done (both
+`hk_engine.py` and `orchestrator.py` now share it); extracting the rest
+would have meant restructuring ~130 tested lines for one new caller, so the
+duplication was kept — bounded to straightforward conditional checks, never
+the safety-critical operations/verification logic.
+
+## Phase 1b: pre-existing execution_log local-schema column drift (found, not fixed)
+Running a real local dry run through `engine/core/orchestrator.py` surfaces
+(as a caught, logged, non-fatal error) `"table execution_log has 37 columns
+but 38 values were supplied"` on every `execution_log.write()` call in
+`ZAMBONI_LOCAL_MODE`. This predates Phase 1b: `scripts/seed_local_db.py`'s
+`execution_log` SQLite DDL + migrations are missing `partition_date`,
+`archive_s3_path`, `pre_validation`, `post_validation` (all present in the
+Athena DDL and in `execution_log.py::write()`'s positional INSERT) while
+carrying three extra local-only columns (`vacuum_iterations`,
+`oldest_snapshot_id`, `newest_snapshot_id`) that `write()` never
+references. Nothing before Phase 1b ever exercised a real positional
+INSERT against the seeded local `execution_log` table (existing tests
+mock `read_sql`/`run_query` above this layer), so the drift was latent.
+Out of scope here — flagged for a follow-up fix (either realign the local
+DDL positionally, or move `execution_log.write()` to a named-column
+INSERT so schema order stops being load-bearing).

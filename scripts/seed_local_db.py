@@ -216,6 +216,26 @@ CREATE TABLE IF NOT EXISTS maintenance_locks (
     expires_at              INTEGER
 )""",
 
+"vacuum_audit": """
+CREATE TABLE IF NOT EXISTS vacuum_audit (
+    run_id                  TEXT,
+    table_fqn               TEXT,
+    operation               TEXT,
+    snapshots_before        INTEGER,
+    snapshots_after         INTEGER,
+    files_estimated         INTEGER,
+    files_deleted           INTEGER,
+    bytes_reclaimed         INTEGER,
+    older_than_hours_used   INTEGER,
+    sanity_pct              REAL,
+    aborted                 INTEGER DEFAULT 0,
+    aborted_reason          TEXT,
+    lock_id                 TEXT,
+    dry_run                 INTEGER DEFAULT 0,
+    started_at              TEXT,
+    completed_at             TEXT
+)""",
+
 "audit_log": """
 CREATE TABLE IF NOT EXISTS audit_log (
     audit_id                TEXT PRIMARY KEY,

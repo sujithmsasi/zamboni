@@ -22,7 +22,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
-from config.settings import EXECUTION_LOG_MODE
+from config.settings import EXECUTION_LOG_MODE, ORCHESTRATED_MAINTENANCE
 from engine.core import (
     circuit_breaker,
     execution_log,
@@ -82,6 +82,74 @@ class FailureReason:
     SAFETY_BLOCKED     = "FAILURE_SAFETY_BLOCKED"
     APPROVAL_REQUIRED  = "FAILURE_APPROVAL_REQUIRED"
     OPERATION_ERROR    = "FAILURE_OPERATION_ERROR"
+
+
+def is_due(table_fqn: str, hk_config: dict) -> tuple[bool, str]:
+    """
+    Check if a table is due for HK based on run_frequency.
+    Also dedupes: skips if a successful run just happened recently.
+
+    Module-level so engine/core/orchestrator.py (Phase 1b) can reuse the
+    exact same frequency/dedupe logic without duplicating _FREQUENCY_HOURS.
+    HKEngine._is_due() below delegates here unchanged.
+
+    Returns: (is_due, skip_reason)
+    """
+    freq = hk_config.get("run_frequency", "daily")
+
+    if freq == "every_trigger":
+        return True, ""
+
+    threshold_hours = _FREQUENCY_HOURS.get(freq, 20)
+
+    try:
+        last = execution_log.get_last_run(
+            table_fqn,
+            operation="hk_run",
+            only_success=True,
+        )
+    except Exception:
+        return True, ""  # Can't check — allow run
+
+    if not last:
+        return True, ""  # Never run — always due
+
+    last_completed = last.get("completed_at")
+    if not last_completed:
+        return True, ""
+
+    # Parse timestamp
+    if isinstance(last_completed, str):
+        try:
+            from dateutil import parser as dtparser
+            last_completed = dtparser.parse(last_completed)
+        except Exception:
+            return True, ""
+
+    # Make timezone-aware
+    if last_completed.tzinfo is None:
+        from pytz import utc
+        last_completed = utc.localize(last_completed)
+
+    hours_since = (
+        datetime.now(UTC) - last_completed
+    ).total_seconds() / 3600
+
+    if hours_since < threshold_hours:
+        reason = (
+            f"SKIP_NOT_DUE ({freq} — last run "
+            f"{hours_since:.1f}h ago, threshold {threshold_hours}h)"
+        )
+        log.info(
+            "hk_engine.skip_not_due",
+            table_fqn=table_fqn,
+            freq=freq,
+            hours_since=round(hours_since, 1),
+            threshold=threshold_hours,
+        )
+        return False, reason
+
+    return True, ""
 
 
 def _parse_gate0_override(value) -> datetime | None:
@@ -280,6 +348,18 @@ class HKEngine(BaseEngine):
 
         # ── Ramp-up check: per-table dry_run ─────────────────────────────────
         table_dry_run = self.dry_run or is_in_dry_run_ramp(table_row)
+
+        # ── Orchestrated mode opt-in (Workstream A / Phase 1b) ────────────────
+        # ORCHESTRATED_MAINTENANCE=true (default) routes this table through
+        # engine/core/orchestrator.py's completion-serialized, commit-verified
+        # sequence instead of the flow below. Rollback lever: set false to
+        # fall back to this file's pre-orchestrator per-op flow untouched.
+        if ORCHESTRATED_MAINTENANCE:
+            from engine.core.orchestrator import run_table_maintenance
+            run_result = run_table_maintenance(fqn, dry_run=table_dry_run, run_id=self.run_id)
+            if run_result.status == "SKIPPED":
+                return "skipped"
+            return "succeeded" if run_result.status == "SUCCESS" else "failed"
 
         # ── Get HK config ─────────────────────────────────────────────────────
         hk_config = get_hk_config(fqn)
@@ -667,67 +747,9 @@ class HKEngine(BaseEngine):
     # ── run_frequency + dedupe (H1 + H2) ─────────────────────────────────────
 
     def _is_due(self, table_fqn: str, hk_config: dict) -> tuple[bool, str]:
-        """
-        Check if a table is due for HK based on run_frequency.
-        Also dedupes: skips if a successful run just happened recently.
-
-        Returns: (is_due, skip_reason)
-        """
-        freq = hk_config.get("run_frequency", "daily")
-
-        if freq == "every_trigger":
-            return True, ""
-
-        threshold_hours = _FREQUENCY_HOURS.get(freq, 20)
-
-        try:
-            last = execution_log.get_last_run(
-                table_fqn,
-                operation="hk_run",
-                only_success=True,
-            )
-        except Exception:
-            return True, ""  # Can't check — allow run
-
-        if not last:
-            return True, ""  # Never run — always due
-
-        last_completed = last.get("completed_at")
-        if not last_completed:
-            return True, ""
-
-        # Parse timestamp
-        if isinstance(last_completed, str):
-            try:
-                from dateutil import parser as dtparser
-                last_completed = dtparser.parse(last_completed)
-            except Exception:
-                return True, ""
-
-        # Make timezone-aware
-        if last_completed.tzinfo is None:
-            from pytz import utc
-            last_completed = utc.localize(last_completed)
-
-        hours_since = (
-            datetime.now(UTC) - last_completed
-        ).total_seconds() / 3600
-
-        if hours_since < threshold_hours:
-            reason = (
-                f"SKIP_NOT_DUE ({freq} — last run "
-                f"{hours_since:.1f}h ago, threshold {threshold_hours}h)"
-            )
-            log.info(
-                "hk_engine.skip_not_due",
-                table_fqn=table_fqn,
-                freq=freq,
-                hours_since=round(hours_since, 1),
-                threshold=threshold_hours,
-            )
-            return False, reason
-
-        return True, ""
+        """Delegates to the module-level is_due() (see above) — kept as an
+        instance method for backward compatibility with existing callers."""
+        return is_due(table_fqn, hk_config)
 
     # ── Execution log helper ──────────────────────────────────────────────────
 
