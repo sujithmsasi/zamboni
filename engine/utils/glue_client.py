@@ -260,6 +260,42 @@ def _detect_date_column(columns: list[dict]) -> dict | None:
     return None
 
 
+# ── Gate 0 — AWS Glue Table Optimizer (conflict detection) ────────────────────
+
+def get_table_optimizer(database: str, table_name: str, optimizer_type: str) -> bool:
+    """
+    Return True if the given Glue table optimizer is enabled for a table.
+    optimizer_type in {"compaction", "retention", "orphan_file_deletion"}.
+
+    An optimizer that was never configured raises EntityNotFoundException --
+    treated as enabled=False, same as an explicitly disabled optimizer. Any
+    other lookup failure also fails to enabled=False (fail-open, matching
+    backpressure.py's convention) rather than blocking Gate 0 on an
+    observability gap.
+
+    Local mode always returns False -- there is no Glue optimizer to check.
+    """
+    if ZAMBONI_LOCAL_MODE:
+        return False
+    try:
+        resp = _get_client().get_table_optimizer(
+            DatabaseName=database,
+            TableName=table_name,
+            Type=optimizer_type,
+        )
+        config = resp.get("TableOptimizer", {}).get("configuration", {})
+        return bool(config.get("enabled", False))
+    except _get_client().exceptions.EntityNotFoundException:
+        return False
+    except Exception as e:
+        log.warning(
+            "glue.get_table_optimizer_failed",
+            database=database, table=table_name,
+            optimizer_type=optimizer_type, error=str(e),
+        )
+        return False
+
+
 # ── Gate 1 — Upstream Job Status ──────────────────────────────────────────────
 
 def get_last_job_run(job_name: str) -> dict | None:

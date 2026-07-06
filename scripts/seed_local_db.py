@@ -206,6 +206,16 @@ CREATE TABLE IF NOT EXISTS home_snapshot (
     cost_summary_json       TEXT DEFAULT '[]'
 )""",
 
+"maintenance_locks": """
+CREATE TABLE IF NOT EXISTS maintenance_locks (
+    table_fqn               TEXT PRIMARY KEY,
+    lock_owner              TEXT,
+    operation               TEXT,
+    acquired_at             TEXT,
+    heartbeat_at            TEXT,
+    expires_at              INTEGER
+)""",
+
 "audit_log": """
 CREATE TABLE IF NOT EXISTS audit_log (
     audit_id                TEXT PRIMARY KEY,
@@ -683,6 +693,20 @@ def main():
         ("domain_registry",  "archive_duration_days",  "INTEGER DEFAULT 365"),
         ("domain_registry",  "auto_delete_after_days", "INTEGER DEFAULT 120"),
         ("domain_registry",  "registered_by",      "TEXT DEFAULT ''"),
+        # ── Safety Core (Workstream A / Phase 1a — contracts.md §3.2) ───────
+        ("stream_registry",  "aws_opt_compaction", "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_retention",  "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_orphan",     "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_checked_at", "TEXT"),
+        ("hk_config",        "gate0_override_until",  "TEXT"),
+        ("hk_config",        "gate0_override_reason", "TEXT"),
+        ("hk_config",        "gate0_override_by",     "TEXT"),
+        ("execution_log",    "lock_id",                  "TEXT"),
+        ("execution_log",    "metadata_location_before", "TEXT"),
+        ("execution_log",    "metadata_location_after",  "TEXT"),
+        ("execution_log",    "snapshot_id_before",       "INTEGER"),
+        ("execution_log",    "snapshot_id_after",        "INTEGER"),
+        ("execution_log",    "integrity_status",         "TEXT"),
     ]
     from engine.utils.local_db import get_connection as _gc
     _conn = _gc()

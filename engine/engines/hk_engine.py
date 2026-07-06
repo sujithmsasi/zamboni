@@ -32,6 +32,7 @@ from engine.core import (
 )
 from engine.core.backpressure import wait_for_capacity
 from engine.core.config import get_hk_config
+from engine.core.conflict_detector import check_with_cache
 from engine.core.execution_log import LogEntry
 from engine.core.execution_log_parquet import ParquetLogBuffer
 from engine.core.health_checker import is_healthy
@@ -41,6 +42,7 @@ from engine.core.idempotency import (
     get_window_id,
     mark_executed,
 )
+from engine.core.lock_service import LockService
 from engine.core.property_sync import (
     apply_vacuum_properties,
     mark_properties_synced,
@@ -80,6 +82,24 @@ class FailureReason:
     SAFETY_BLOCKED     = "FAILURE_SAFETY_BLOCKED"
     APPROVAL_REQUIRED  = "FAILURE_APPROVAL_REQUIRED"
     OPERATION_ERROR    = "FAILURE_OPERATION_ERROR"
+
+
+def _parse_gate0_override(value) -> datetime | None:
+    """Parse hk_config.gate0_override_until into a tz-aware datetime, or None."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            from dateutil import parser as dtparser
+            dt = dtparser.parse(str(value))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        from pytz import utc
+        dt = utc.localize(dt)
+    return dt
 
 
 # ── run_frequency thresholds ──────────────────────────────────────────────────
@@ -156,6 +176,10 @@ class HKEngine(BaseEngine):
         # log_buffer through every call site (Gap 1).
         self._log_buffer = ParquetLogBuffer(run_id=self.run_id, engine="hk")
         log_buffer = self._log_buffer  # local alias for flush call below
+
+        # Gate 0 lock backend -- one per run, stateless factory (each acquire()
+        # call produces its own Lock; safe to share across the tier thread pools).
+        self._lock_service = LockService()
 
         succeeded     = 0
         failed        = 0
@@ -263,6 +287,66 @@ class HKEngine(BaseEngine):
             self._log_table_skip(fqn, "SKIP_NO_CONFIG")
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_NO_CONFIG")
             return "skipped"
+
+        # ── Gate 0 — Maintenance Conflict Gate (contracts.md §4) ──────────────
+        # Runs before Gate 1. Order: time-boxed override -> AWS Glue optimizer
+        # conflict -> another execution already in flight -> lock acquire.
+        # Not user-toggleable like Gates 1-3 -- the only bypass is the
+        # time-boxed gate0_override_until/reason/by on hk_config.
+        override_until   = _parse_gate0_override(hk_config.get("gate0_override_until"))
+        gate0_overridden = bool(override_until and override_until > datetime.now(UTC))
+
+        if gate0_overridden:
+            log.warning(
+                "hk_engine.gate0_overridden",
+                table_fqn=fqn,
+                reason=hk_config.get("gate0_override_reason"),
+                actor=hk_config.get("gate0_override_by"),
+            )
+            self._write_log(
+                table_row, "gate0", "OVERRIDDEN",
+                skip_reason=(
+                    f"GATE0_OVERRIDDEN reason={hk_config.get('gate0_override_reason')} "
+                    f"actor={hk_config.get('gate0_override_by')}"
+                ),
+            )
+        else:
+            conflict = check_with_cache(fqn)
+            if conflict.get("conflict"):
+                self._log_table_skip(fqn, "SKIP_AWS_OPTIMIZER_CONFLICT")
+                self._write_log(
+                    table_row, "hk_run", "SKIPPED",
+                    skip_reason=f"SKIP_AWS_OPTIMIZER_CONFLICT ({conflict})",
+                )
+                return "skipped"
+
+        if execution_log.get_running(fqn):
+            self._log_table_skip(fqn, "SKIP_ALREADY_RUNNING")
+            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_ALREADY_RUNNING")
+            return "skipped"
+
+        lock = self._lock_service.acquire(fqn, "hk_run")
+        if lock is None:
+            self._log_table_skip(fqn, "SKIP_LOCK_HELD")
+            self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_LOCK_HELD")
+            return "skipped"
+
+        try:
+            return self._run_gates_and_operations(table_row, hk_config, table_dry_run)
+        finally:
+            self._lock_service.release(lock)
+
+    def _run_gates_and_operations(
+        self, table_row: dict, hk_config: dict, table_dry_run: bool,
+    ) -> str:
+        """
+        Gates 1-4 + compaction/vacuum/orphan operations for one table.
+        Split out from _process_table so Gate 0's lock is guaranteed to be
+        released via try/finally regardless of which return path is taken
+        below.
+        """
+        fqn  = table_row["table_fqn"]
+        tier = table_row.get("tier", "standard")
 
         # ── Gate 1 — Upstream batch completion (Control-M) ────────────────────
         # gate1_enabled=0 by default until Control-M API integration is ready.
