@@ -93,6 +93,7 @@ export function EditTableTab() {
                 <Form.Item name="ci_number" label="CI Number"><Input /></Form.Item>
               </Col>
             </Row>
+            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>⚙️ Engine Flags</div>
             <Row gutter={16}>
               <Col span={6}>
                 <Form.Item name="hk_enabled" valuePropName="checked" label=" ">
