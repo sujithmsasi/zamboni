@@ -4,10 +4,17 @@
 # Executes integration tests against dev environment before packaging.
 #
 # Phases:
-#   install     — Python 3.11 + dependencies
-#   pre_build   — unit tests (fast gate before integration)
-#   build       — integration tests against dev Athena + package artifact
+#   install     — Python 3.11 + Node 20 + dependencies
+#   pre_build   — lint + unit + api tests (fast gate before integration)
+#   build       — integration tests against dev Athena, build the React UI,
+#                 package artifact (incl. ui/dist)
 #   post_build  — confirm artifact contents
+#
+# Phase 6 addition: the React/FastAPI replatform (Workstream B) needs the
+# built ui/dist bundle in the deploy artifact -- api/main.py serves it as a
+# static SPA mount. Node 20 + `npm ci && npm run build` runs here so EC2
+# never needs Node installed at all (contracts.md §6/§8 D6: "No Node in
+# production").
 # =============================================================================
 
 version: 0.2
@@ -19,6 +26,7 @@ env:
     ATHENA_DATABASE: "zamboni_catalog"
     LOG_LEVEL: "INFO"
     DRY_RUN_DEFAULT: "true"
+    ZAMBONI_TEST_MODE: "true"
   parameter-store:
     # These parameters must be created by the DO team in SSM before first build
     ATHENA_RESULTS_BUCKET:    "/zamboni/dev/ATHENA_RESULTS_BUCKET"
@@ -32,10 +40,13 @@ phases:
   install:
     runtime-versions:
       python: 3.11
+      nodejs: 20
     commands:
-      - echo "[install] Installing dependencies..."
+      - echo "[install] Installing Python dependencies..."
       - pip install --upgrade pip
       - pip install -r requirements-dev.txt
+      - echo "[install] Installing UI dependencies..."
+      - cd ui && npm ci && cd ..
       - echo "[install] Done."
 
   pre_build:
@@ -48,6 +59,14 @@ phases:
             --tb=short
             --override-ini="addopts="
 
+      - echo "[pre_build] Running API tests (separate invocation -- see .claude/CLAUDE.md Phase 2 entry)..."
+      - pytest tests/api/ -v
+            --tb=short
+            --override-ini="addopts="
+
+      - echo "[pre_build] Type-checking + building the React UI..."
+      - cd ui && npx tsc --noEmit && cd ..
+
   build:
     commands:
       - echo "[build] Running integration tests against dev Athena..."
@@ -55,6 +74,9 @@ phases:
             --tb=short
             --override-ini="addopts="
             || echo "[build] WARNING: No integration tests found yet — skipping."
+
+      - echo "[build] Building the React UI (ui/dist)..."
+      - cd ui && npm run build && cd ..
 
       - echo "[build] Packaging artifact..."
       - echo "Branch  $CODEBUILD_SOURCE_VERSION" > build_info.txt
@@ -66,6 +88,8 @@ phases:
   post_build:
     commands:
       - echo "[post_build] Build complete."
+      - echo "Confirming ui/dist was produced..."
+      - test -f ui/dist/index.html && echo "  ui/dist/index.html present ✓" || (echo "  MISSING ui/dist/index.html" && exit 1)
       - echo "Files to deploy:"
       - ls -la
 
@@ -81,6 +105,8 @@ artifacts:
     - "htmlcov/**"
     - ".coverage"
     - "*.egg-info/**"
+    - "ui/node_modules/**"
+    - "node_modules/**"
   name: zamboni-$(date +%Y%m%d-%H%M%S)
   discard-paths: no
 

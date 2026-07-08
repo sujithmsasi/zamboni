@@ -31,8 +31,9 @@ config/              settings.py (central; nothing reads os.environ elsewhere),
                      platform_settings.py
 scripts/             seed_local_db.py (SQLite schema + migrations list),
                      seed_scale_test.py
-deploy/              CodeDeploy/CodeBuild pieces — NO CloudFormation template
-                     exists yet (see contracts.md §8 REALITY note)
+deploy/              zamboni-cfn.yaml (Phase 6, complete standalone stack) +
+                     CodeDeploy/CodeBuild pieces (buildspec.yml, appspec.yml,
+                     scripts/, systemd/zamboni-{api,streamlit}.service)
 api/                 FastAPI app (Phase 2) — main.py, deps.py, models.py,
                      routers/ (8, one per contracts §6 section), services/
                      (8, lift SQL from the matching Streamlit page)
@@ -42,8 +43,8 @@ ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5b) — all
                      Streamlit is fallback-only; see ui/PATTERN.md for the
                      canonical page structure and the page/endpoint
                      inventory table
-tests/unit/          562 tests, all passing
-tests/api/           97 tests — run as its own `pytest tests/api`
+tests/unit/          568 tests, all passing
+tests/api/           99 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
 ```
@@ -120,15 +121,22 @@ tests/api/           97 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-08 Phase 5b close-out)
+## Test Baseline (2026-07-06, updated through 2026-07-08 Phase 6 close-out)
 ```
-python -m pytest tests/unit -q   → 562 passed
-python -m pytest tests/api -q    → 97 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/unit -q   → 568 passed
+python -m pytest tests/api -q    → 99 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
 cd ui && npm run lint            → clean (oxlint)
+cfn-lint deploy/zamboni-cfn.yaml → zero errors, zero warnings
 ```
+> Note: 562→568 unit / 97→99 api reflects two commits made directly by
+> Sujith between the Phase 5b close-out and Phase 6 start
+> (`e8db72e` escalation drawer/Advanced tab validation/dry-run ramp-up,
+> `584e8df` `domain_registry.is_active` enforcement) that were never given
+> their own Migration Progress entry — recorded here so the count isn't
+> read as a Phase 6 regression from the previously-documented 562/97.
 
 ## Deferred Work
 - **Help doc / user guide generation**: intentionally not started. Sujith
@@ -1636,3 +1644,207 @@ convention; the per-tab parity notes below are the durable record).
   diff was left behind, same care as Phase 5a's template cleanup.
 - No changes to `vacuum.py`, orchestrator, gate logic, or any Streamlit
   file this phase.
+
+2026-07-08 Phase 6: Full CloudFormation, Demo Scripts, Smoke Test, Drop
+Prep shipped — Workstream B is now demo-ready end to end. **Program
+complete personal-side — demo-ready; org drop pending (Phase 7).** 568
+unit + 99 api tests passing (unchanged this phase — Phase 6 is
+infra/deploy/docs only, zero engine/api/ui source touched), ruff/tsc/
+build/lint clean, `cfn-lint deploy/zamboni-cfn.yaml` → zero errors, zero
+warnings.
+
+- **Baseline correction, not a regression**: the 562/97 counts documented
+  as of the Phase 5b close-out were stale — two commits landed directly
+  (not through a Claude Code phase session, no Migration Progress entry)
+  between that close-out and this phase starting: `584e8df`
+  (`domain_registry.is_active` now actually gates HK/archival/lifecycle
+  table selection, new `tests/unit/test_domain_kill_switch.py` — accounts
+  for the 562→568 unit delta) and `e8db72e` (escalation drawer overlap,
+  Advanced tab validation, dry-run ramp-up default, +32 lines to
+  `tests/api/test_tables.py` — accounts for the 97→99 api delta). Actual
+  pre-Phase-6 baseline was 568 unit + 99 api; Phase 6 added 0 new tests
+  (pure infra, no engine/api/ui source touched), so post-Phase-6 is
+  unchanged at 568/99.
+- `deploy/zamboni-cfn.yaml` (new, ~450 lines): the complete standalone
+  stack per contracts §10 R10.3 — DynamoDB `zamboni_maintenance_locks`
+  (§3.1 verbatim, `DeletionPolicy: Retain`), `ZamboniInstanceRole` (Athena
+  workgroups, Glue catalog read + `GetTableOptimizer`/
+  `BatchGetTableOptimizer`/`ListTableOptimizerRuns` + non-prod-only
+  `DeleteTable`, S3 on all 4 app buckets, SNS publish, DynamoDB on the
+  lock table, CloudWatch Logs/Metrics, CodeDeploy-agent S3 read) +
+  instance profile, security group (8000/8501/22, all three gated by one
+  `SourceCidr` parameter — never `0.0.0.0/0`, confirmed by `cfn-lint`
+  which would otherwise flag a literal open CIDR), one EC2 instance
+  (AL2023 via the public SSM AMI parameter, encrypted gp3 root volume,
+  UserData bootstraps CodeDeploy agent + Python 3.11), a CloudWatch log
+  group, and a CodePipeline/CodeBuild/CodeDeploy skeleton (GitHub source
+  via a `CodeStarSourceConnection` action — `GitHubConnectionArn` is a
+  parameter since CFN cannot complete the OAuth handshake itself; the
+  pipeline resource is behind a `HasGitHubConnection` condition so the
+  rest of the stack still deploys cleanly with it blank). Parameters:
+  `NamePrefix`, `VpcId`, `SubnetId`, `SourceCidr`, `KeyName` (optional,
+  `HasKeyName` condition), `InstanceType`, `AmiId`, `RootVolumeSizeGiB`,
+  `LogRetentionDays`, the 4 bucket names, 2 SNS ARNs, and the 4 GitHub
+  params. Outputs: `InstanceId`, `InstancePrivateIp`, `SecurityGroupId`,
+  `LockTableName`, `InstanceRoleArn`, `CodeDeployApplicationName`,
+  `PipelineArtifactBucket`.
+- **Decision, documented here since it diverges from the phase brief's
+  literal example**: the phase brief's systemd-unit template used
+  `/home/ec2-user/zamboni` as the working directory. This repo's entire
+  existing CodeDeploy story (`deploy/appspec.yml`'s `destination:
+  /opt/zamboni`, `deploy/iam_policy.json`, `deploy/setup_ec2.sh`,
+  `docs/zamboni-direct-setup.md`) already standardizes on `/opt/zamboni`.
+  Introducing a second, parallel app-root convention for just the new
+  service would leave one EC2 instance with two different "where does
+  Zamboni live" answers depending on which service you asked. Overrode
+  the brief's literal path to `/opt/zamboni` for `deploy/systemd/
+  zamboni-api.service` (and the new `zamboni-streamlit.service`
+  alternative) to keep one convention stack-wide — same class of call as
+  Phase 1b's "CRITICAL OVERRIDE applied" precedent. The brief's own
+  wording ("Phase 7 adjusts if org differs") already treats the path as
+  adjustable, not load-bearing.
+- `deploy/systemd/zamboni-api.service` (new): uvicorn unit, `--workers 2`,
+  `EnvironmentFile=/opt/zamboni/.env`, `Restart=on-failure`. Runs out of a
+  **venv** (`/opt/zamboni/.venv/bin/uvicorn`), not the system-wide pip
+  install the legacy Streamlit service uses — keeps the new API service's
+  dependency set isolated from Streamlit's. `deploy/systemd/
+  zamboni-streamlit.service` (new): a venv-based reference alternative to
+  the heredoc-generated `zamboni-app.service` in `after_install.sh` (not
+  wired in yet — provided for a future cutover that moves Streamlit onto
+  the same venv convention as the API service).
+- `deploy/scripts/before_install.sh`/`after_install.sh`/`app_start.sh`
+  extended (additive — the existing Streamlit heredoc-service path is
+  byte-for-byte untouched, contracts §8: "Streamlit unit untouched until
+  cutover sign-off"): `before_install.sh` now also stops `zamboni-api` if
+  running; `after_install.sh` creates/updates the `.venv` and installs
+  `deploy/systemd/zamboni-api.service`; `app_start.sh` starts
+  `zamboni-api` and polls `GET /api/system/mode` the same way it already
+  polled Streamlit's `/_stcore/health`. `deploy/appspec.yml`'s
+  `AfterInstall`/`ApplicationStart` timeouts bumped 300→600 / 120→180 to
+  cover the added venv-install and second service start.
+- `deploy/buildspec.yml`: `install` phase gained `nodejs: 20` alongside
+  `python: 3.11` + `cd ui && npm ci`; `pre_build` gained `pytest tests/api/`
+  (documented as its own invocation, matching the `.claude/CLAUDE.md`
+  Phase 2 convention) and `npx tsc --noEmit`; `build` gained `npm run
+  build`; `post_build` asserts `ui/dist/index.html` exists before calling
+  the artifact packaged; `artifacts.exclude-paths` gained `ui/node_modules/**`
+  and `node_modules/**` so the multi-hundred-MB dependency trees never
+  ship in the deploy artifact (contracts §6 D6: "No Node in production" —
+  only the built `ui/dist/` output travels, never Node itself).
+- `scripts/aws_smoke_test.py` (new, closes the Phase 0-era backlog item):
+  per-mode checks — `local` reports all 7 checks `SKIPPED` with one clear
+  reason string (no AWS calls happen at all); `aws_local`/`aws_ec2` run
+  real `sts:GetCallerIdentity`, `glue:GetDatabases`, an Athena `SELECT 1`
+  in the `app` workgroup (hand-rolled polling loop, not
+  `athena_client.run_query()`, since the smoke test needs to force the
+  `aws_local` SSO-profile session via `get_boto3_session()` rather than
+  `athena_client.py`'s module-level default-credential-chain client), an
+  S3 put+delete against `ATHENA_RESULTS_BUCKET`, `sns:GetTopicAttributes`
+  on `SNS_ALERT_TOPIC_ARN`, `dynamodb:DescribeTable` on `DDB_LOCK_TABLE`
+  (creates it via `scripts/create_lock_table.py` if missing and
+  `--create-lock-table` was passed), and one live `glue:GetTableOptimizer`
+  probe (compaction/retention/orphan_file_deletion) against the first row
+  of `STREAM_REGISTRY_TABLE` — `EntityNotFoundException` (optimizer never
+  configured) counts as the API call succeeding, not a failure. `--json`
+  for machine-readable output; exits non-zero iff any check hard-FAILs
+  (SKIPPED never fails the run). Verified in `mode=local` — see the
+  "Local full-stack proof" note below.
+- `run_aws_local.ps1` (new): `aws sts get-caller-identity --profile
+  $env:AWS_SSO_PROFILE` (default `prod-toolsgenai-sso`), `aws sso login`
+  on failure, loads `.env.aws_local` into the process environment, builds
+  `ui/dist` if missing, starts uvicorn on :8000, opens the browser via a
+  2-second-delayed background job (so it doesn't race uvicorn's startup),
+  `try/finally` cleans up that job on Ctrl+C. `run_ui_dev.ps1` (new):
+  `-Mode local|aws_local` param, starts `uvicorn --reload` as a
+  `Start-Job` and `npm run dev` in the foreground, `Stop-Job`/`Remove-Job`
+  in `finally` on Ctrl+C. `run_local_api.bat` (new): Windows-batch parity
+  with the existing `run_local.bat` (Streamlit) pattern, but for the
+  replatformed stack — seeds the DB and builds `ui/dist` if either is
+  missing, sets `ZAMBONI_MODE=local`, opens :8000.
+- `.env.aws_local.example` (new): full contracts §2 template plus the
+  bucket/SNS vars, `ZAMBONI_MODE=aws_local`, `AWS_SSO_PROFILE`,
+  `DRY_RUN_DEFAULT=true`, `APP_ENV=dev`, and the 8 Workstream A safety
+  constants (§2) shown explicitly with their defaults so a demo operator
+  can see what's tunable without reading `config/settings.py`.
+  `.gitignore` gained `.env.aws_local` (the `.example` file itself is
+  intentionally NOT ignored — confirmed via `git status` that it tracks
+  cleanly, same as the existing `.env.example`).
+- `docs/demo/showcase_runbook.md` (new): the July-17 click path, 7 steps
+  (Home → Health/Governance dual-optimizer report + incident narrative →
+  Policy Config Gate 0 override → Dry Run Viewer → Live Activity locks
+  strip → `recover_metadata.py --dry-run` transcript + the "72h floor =
+  guaranteed rollback window" line → Control-M Integration CSV Workflow),
+  each with its exact current route path (`/health`, `/policies`,
+  `/dryrun`, `/activity`, `/controlm` — cross-checked against
+  `ui/src/routes.tsx` rather than assumed, since Control-M Integration
+  moved to its own top-level route during the UX Hardening wave and a
+  runbook written against the old "Bulk Control-M tab inside Table
+  Registration" location would have sent Sujith to a dead click on demo
+  day). A `ZAMBONI_MODE=local` fallback variant sits directly under every
+  step, plus a Streamlit-:8501 last-resort tier and a timing table
+  (~21 min walkthrough).
+- `docs/deployment/ec2_api_deploy.md` (new): explicit delta against
+  `docs/zamboni-direct-setup.md` and `deploy/pipeline_config.md` (does not
+  repeat their unchanged IAM/Athena/S3/SNS/EC2 sections) — what's new
+  (API service, :8000, `ui/dist` build artifact, DynamoDB lock table, the
+  2 new IAM statement blocks), a CloudFormation path (preferred,
+  parameter list + `cfn-lint` gate) and a manual path (matches the
+  existing docx's command-by-command style) side by side, post-deploy
+  validation via `aws_smoke_test.py`, and the post-showcase cutover
+  checklist the phase brief asked for (confirm 1-week parity → stop/
+  disable `zamboni-app` → remove the :8501 SG rule → archive `app/` to
+  `app_legacy_streamlit/` with a README pointer, deliberately phrased as
+  a checklist of judgment calls rather than a script, since "does the
+  React app actually match" isn't something a command can assert).
+- `docs/ORG_DROP.md` extended (not rewritten — the existing 4-section
+  1-pager from Phase 0 was accurate, just abstract; this phase's edit
+  only adds a concrete "Phase 7 checklist" section that names the actual
+  files Phase 6 produced): branch → adapt `zamboni-cfn.yaml` params
+  (naming the exact parameters) → `cfn-lint` re-gate → deploy → `python
+  scripts/aws_smoke_test.py --create-lock-table` as the "did the
+  adaptation actually work" gate → no-merge reminder.
+- **Local full-stack proof** (mode=local, fresh `uvicorn api.main:app`
+  against the existing seeded `zamboni_local.db`, previous session's
+  server confirmed stopped first): `GET /` → 200, `text/html` (React app
+  shell, confirming `_SPAStaticFiles` serves `ui/dist/index.html`);
+  `GET /health` → 200 (same shell via the SPA-fallback path, proving a
+  direct hit on a client-side route doesn't 404 in prod-serve — the exact
+  bug class Phase 3 found and fixed); `GET /api/system/mode` →
+  `{"mode":"local","app_env":"dev","dry_run_default":true,"user":
+  "local-dev","gate0_override_max_hours":24}`; `GET /api/health/kpis` →
+  real seeded-fleet data (`total_registered:18`, `coverage_by_domain` all
+  4 domains, `fleet_health: {healthy:3, needs_attention:9, at_risk:1}`
+  with the same `fin_payment_master`/`AWS optimizer conflict` row Phase
+  4/5 verifications also found, `storage_savings`, 3-row
+  `dry_run_adoption`) — this is the data Home and Health Dashboard render
+  from, confirming both pages have real content to show without needing a
+  browser screenshot for this infra-focused phase.
+- **`aws_smoke_test.py` mode=local output** (pasted verbatim, `EXIT: 0`):
+  ```
+  Zamboni AWS Smoke Test  (mode=local)
+  Check                      Status     Detail
+  sts_identity                SKIPPED   ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  glue_list_databases         SKIPPED   ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  athena_select_1             SKIPPED   ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  s3_put_delete                SKIPPED  ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  sns_get_topic_attributes     SKIPPED  ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  dynamodb_lock_table          SKIPPED  ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  glue_get_table_optimizer     SKIPPED  ZAMBONI_MODE=local -- no AWS calls are made in local mode
+  All checks PASSED or SKIPPED cleanly.
+  ```
+  The `aws_local`/`aws_ec2` expected output (not runnable in this
+  environment — no AWS credentials here) is documented in
+  `docs/deployment/ec2_api_deploy.md`'s "Post-deploy validation" section:
+  all 7 rows PASS with real account/bucket/topic/table detail instead of
+  the SKIPPED reason string.
+- Pre-existing uncommitted diffs on `config/policy_templates.json` and
+  `zamboni_local.db` (present at this phase's start, unrelated to Phase
+  6 — a leftover from Sujith's own local testing between sessions) were
+  left untouched and excluded from this phase's commit; confirmed via
+  `git diff --stat` that neither file's diff grew during this phase's own
+  read-only verification calls.
+- No changes to `engine/`, `api/` (source), or `ui/` (source) this
+  phase — Phase 6 is deploy/scripts/docs only, per the phase brief's
+  scope. `vacuum.py`, orchestrator, and gate logic untouched.
+- **Program complete personal-side — demo-ready; org drop pending
+  (Phase 7).**

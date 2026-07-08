@@ -1,0 +1,18 @@
+[Unit]
+Description=Zamboni Streamlit App (fallback UI -- kept alive until cutover sign-off, see contracts.md §8)
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/zamboni
+EnvironmentFile=/opt/zamboni/.env
+Environment=PYTHONPATH=/opt/zamboni
+ExecStart=/opt/zamboni/.venv/bin/streamlit run app/Home.py --server.port 8501 --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

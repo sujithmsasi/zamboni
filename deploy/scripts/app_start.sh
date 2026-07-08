@@ -85,7 +85,34 @@ until curl -sf http://localhost:8501/_stcore/health > /dev/null 2>&1; do
     sleep 5
 done
 
-# ── 5. Log deploy event ───────────────────────────────────────────────────────
+# ── 5. Start + health-check zamboni-api (Phase 6 -- new, additive) ───────────
+echo "[app_start] Starting zamboni-api service..." | tee -a "$LOG"
+systemctl start zamboni-api
+sleep 3
+
+if systemctl is-active --quiet zamboni-api; then
+    echo "[app_start] zamboni-api is running ✓" | tee -a "$LOG"
+else
+    echo "[app_start] ERROR: zamboni-api failed to start." | tee -a "$LOG"
+    journalctl -u zamboni-api -n 20 | tee -a "$LOG"
+    exit 1
+fi
+
+echo "[app_start] Checking zamboni-api on port 8000..." | tee -a "$LOG"
+RETRY=0
+MAX_RETRIES=6
+until curl -sf http://localhost:8000/api/system/mode > /dev/null 2>&1; do
+    RETRY=$((RETRY + 1))
+    if [ $RETRY -ge $MAX_RETRIES ]; then
+        echo "[app_start] WARNING: zamboni-api health check timed out after ${MAX_RETRIES} retries." | tee -a "$LOG"
+        echo "[app_start] Service is running but may still be loading." | tee -a "$LOG"
+        break
+    fi
+    echo "[app_start] Waiting for zamboni-api... attempt $RETRY/$MAX_RETRIES" | tee -a "$LOG"
+    sleep 5
+done
+
+# ── 6. Log deploy event ───────────────────────────────────────────────────────
 DEPLOY_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 HOSTNAME=$(hostname)
 echo "[app_start] Deploy completed successfully at $DEPLOY_TIME on $HOSTNAME" | tee -a "$LOG"

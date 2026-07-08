@@ -1,0 +1,611 @@
+# =============================================================================
+# Zamboni — Standalone CloudFormation Stack (Phase 6, contracts.md §10 R10.3)
+#
+# Authored FRESH here — no prior deploy/zamboni-cfn.yaml exists in this repo
+# (confirmed by Phase 0's repo-wide glob; see contracts.md §8 REALITY note).
+# This template is deliberately self-contained: it references no org file,
+# no org account IDs, no org VPC. Every environment-specific value is a
+# Parameter below.
+#
+# Org-side (Phase 7): set NamePrefix/tags/VpcId/SubnetId/SourceCidr and the
+# bucket-name / SNS-ARN / GitHub parameters to org conventions before deploy.
+# See docs/ORG_DROP.md for the full adaptation checklist.
+#
+# Provisions:
+#   - DynamoDB maintenance-lock table (contracts.md §3.1, verbatim)
+#   - EC2 instance role + instance profile (Athena/Glue incl.
+#     GetTableOptimizer, S3, SNS, CloudWatch Logs/Metrics, DynamoDB on the
+#     lock table — contracts.md §3.4)
+#   - Security group: :8000 (FastAPI) and :8501 (Streamlit fallback) open
+#     ONLY to SourceCidr — never 0.0.0.0/0
+#   - One EC2 instance (AL2023, encrypted gp3 root volume)
+#   - CloudWatch log group
+#   - CodePipeline/CodeDeploy/CodeBuild skeleton (GitHub source via a
+#     CodeStar/CodeConnections ARN — the pipeline_config.md-documented
+#     manual pieces this stack formalizes as CFN resources)
+# =============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Zamboni — Iceberg table governance framework. Standalone deploy stack:
+  EC2 + IAM + DynamoDB lock table + security group + CodePipeline/CodeBuild/
+  CodeDeploy. Parameterized for org adaptation (see docs/ORG_DROP.md).
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: zamboni
+    Description: >-
+      Prefix applied to every named resource and tag (org naming adaptation
+      point — Phase 7 changes this to the org convention).
+    AllowedPattern: "^[a-z][a-z0-9-]{1,20}$"
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to launch the Zamboni EC2 instance into.
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet (within VpcId) to launch the Zamboni EC2 instance into.
+
+  SourceCidr:
+    Type: String
+    Description: >-
+      CIDR block allowed to reach the app on :8000/:8501 (and :22 for SSH).
+      Never set this to 0.0.0.0/0 — scope it to your VPN/office/VPC range.
+    Default: 10.0.0.0/8
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$"
+
+  KeyName:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional EC2 key pair name for SSH access. Leave blank to launch
+      without a key pair (SSM Session Manager is the preferred access path
+      once the instance role's SSM permissions are attached org-side).
+
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues: [t3.medium, t3.large, t3.xlarge, m6i.large, m6i.xlarge]
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 AMI, resolved via the public SSM parameter.
+
+  RootVolumeSizeGiB:
+    Type: Number
+    Default: 30
+    MinValue: 20
+    MaxValue: 500
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 180, 365, 400, 545, 731, 1827, 3653]
+
+  AthenaResultsBucketName:
+    Type: String
+    Description: Existing S3 bucket for Athena query results (bucket name only, no s3:// prefix).
+
+  StagingBucketName:
+    Type: String
+    Description: Existing S3 bucket for staging-layer partitions.
+
+  ArchiveBucketName:
+    Type: String
+    Description: Existing S3 bucket the Archival Engine writes cold partitions to.
+
+  MetadataBucketName:
+    Type: String
+    Description: Existing S3 bucket for Zamboni's own Iceberg metadata tables (vacuum_audit, etc.).
+
+  SnsAlertTopicArn:
+    Type: String
+    Description: Existing SNS topic ARN for engine failure / circuit-breaker alerts.
+
+  SnsGreenzoneTopicArn:
+    Type: String
+    Description: Existing SNS topic ARN for non-prod GREENZONE notifications.
+
+  GitHubConnectionArn:
+    Type: String
+    Default: ""
+    Description: >-
+      CodeStar/CodeConnections ARN authorized against the GitHub repo (create
+      once, manually, in Developer Tools → Connections — CFN cannot complete
+      the OAuth handshake). Leave blank to provision the pipeline without a
+      Source stage wired up yet.
+
+  GitHubOwner:
+    Type: String
+    Default: your-github-org
+    Description: GitHub organization/user that owns the Zamboni repo.
+
+  GitHubRepo:
+    Type: String
+    Default: zamboni
+    Description: GitHub repository name.
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: Branch CodePipeline deploys from.
+
+Conditions:
+  HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+  HasGitHubConnection: !Not [!Equals [!Ref GitHubConnectionArn, ""]]
+
+Resources:
+  # ── DynamoDB — maintenance locks (contracts.md §3.1, verbatim) ─────────────
+  ZamboniMaintenanceLocks:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: zamboni_maintenance_locks
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: table_fqn
+          AttributeType: S
+      KeySchema:
+        - AttributeName: table_fqn
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-maintenance-locks"
+
+  # ── IAM — EC2 instance role (contracts.md §3.4) ────────────────────────────
+  ZamboniInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AthenaQueryExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AthenaWorkgroups
+                Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                  - athena:ListQueryExecutions
+                  - athena:BatchGetQueryExecution
+                  - athena:GetWorkGroup
+                  - athena:ListWorkGroups
+                Resource: "*"
+        - PolicyName: GlueCatalogAndOptimizer
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: GlueCatalogRead
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:UpdateTable
+                Resource: "*"
+              - Sid: GlueTableOptimizer
+                Effect: Allow
+                Action:
+                  - glue:GetTableOptimizer
+                  - glue:BatchGetTableOptimizer
+                  - glue:ListTableOptimizerRuns
+                Resource: "*"
+              - Sid: GlueDropTableNonProdOnly
+                Effect: Allow
+                Action:
+                  - glue:DeleteTable
+                Condition:
+                  StringLike:
+                    glue:database:
+                      - "*_preprod"
+                      - "*_dev"
+                      - "*_test"
+                      - "*_uat"
+                Resource: "*"
+        - PolicyName: S3DataBuckets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: S3ReadWrite
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:ListBucketMultipartUploads
+                  - s3:AbortMultipartUpload
+                  - s3:PutObjectTagging
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${AthenaResultsBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${AthenaResultsBucketName}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${StagingBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${StagingBucketName}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ArchiveBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ArchiveBucketName}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${MetadataBucketName}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${MetadataBucketName}/*"
+        - PolicyName: SnsPublish
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource:
+                  - !Ref SnsAlertTopicArn
+                  - !Ref SnsGreenzoneTopicArn
+        - PolicyName: DynamoDbLockTable
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:DescribeTable
+                  - dynamodb:Scan
+                Resource: !GetAtt ZamboniMaintenanceLocks.Arn
+        - PolicyName: CloudWatchLogsAndMetrics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !GetAtt ZamboniLogGroup.Arn
+                  - !Sub "${ZamboniLogGroup.Arn}:*"
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: Zamboni
+        - PolicyName: CodeDeployAgentAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:${AWS::Partition}:s3:::aws-codedeploy-${AWS::Region}/*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-ec2-role"
+
+  ZamboniInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${NamePrefix}-ec2-profile"
+      Roles:
+        - !Ref ZamboniInstanceRole
+
+  # ── Security group — :8000/:8501 (and :22) from SourceCidr ONLY ───────────
+  ZamboniSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${NamePrefix}-sg"
+      GroupDescription: !Sub "${NamePrefix} EC2 access - FastAPI 8000, Streamlit fallback 8501, SSH 22"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: !Ref SourceCidr
+          Description: FastAPI (api.main:app)
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: !Ref SourceCidr
+          Description: Streamlit fallback app
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SourceCidr
+          Description: SSH admin access
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Unrestricted egress (AWS API calls, package installs)
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-sg"
+
+  # ── CloudWatch log group ────────────────────────────────────────────────────
+  ZamboniLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${NamePrefix}/app"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ── EC2 instance ─────────────────────────────────────────────────────────
+  ZamboniInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      IamInstanceProfile: !Ref ZamboniInstanceProfile
+      SecurityGroupIds:
+        - !Ref ZamboniSecurityGroup
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref "AWS::NoValue"]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref RootVolumeSizeGiB
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-app"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf update -y --quiet
+          dnf install -y python3.11 python3.11-pip python3.11-devel git gcc ruby wget --quiet
+          mkdir -p /opt/zamboni
+          chown ec2-user:ec2-user /opt/zamboni
+          cd /home/ec2-user
+          wget -q https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+          chmod +x install
+          ./install auto
+          systemctl enable codedeploy-agent --now
+          mkdir -p /var/log/zamboni
+          chown ec2-user:ec2-user /var/log/zamboni
+          echo "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh." > /var/log/zamboni/bootstrap.log
+
+  # ── CodeBuild ────────────────────────────────────────────────────────────
+  ZamboniCodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-codebuild-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildLogsAndArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt ZamboniArtifactBucket.Arn
+                  - !Sub "${ZamboniArtifactBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/*"
+
+  ZamboniCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${NamePrefix}-build"
+      ServiceRole: !GetAtt ZamboniCodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: deploy/buildspec.yml
+      TimeoutInMinutes: 30
+
+  # ── CodeDeploy ───────────────────────────────────────────────────────────
+  ZamboniCodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-codedeploy-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSCodeDeployRole"
+
+  ZamboniCodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub "${NamePrefix}"
+      ComputePlatform: Server
+
+  ZamboniCodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref ZamboniCodeDeployApplication
+      DeploymentGroupName: !Sub "${NamePrefix}-app"
+      ServiceRoleArn: !GetAtt ZamboniCodeDeployServiceRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-app"
+          Type: KEY_AND_VALUE
+
+  # ── CodePipeline ─────────────────────────────────────────────────────────
+  ZamboniArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${NamePrefix}-pipeline-artifacts-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ZamboniPipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-pipeline-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PipelineOrchestration
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ZamboniArtifactBucket.Arn
+                  - !Sub "${ZamboniArtifactBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt ZamboniCodeBuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:RegisterApplicationRevision
+                Resource: "*"
+              - Effect: Allow
+                Action: codestar-connections:UseConnection
+                Resource: "*"
+
+  ZamboniPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Condition: HasGitHubConnection
+    Properties:
+      Name: !Sub "${NamePrefix}-pipeline"
+      RoleArn: !GetAtt ZamboniPipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ZamboniArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: Build
+          Actions:
+            - Name: BuildAndTest
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref ZamboniCodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        - Name: Deploy
+          Actions:
+            - Name: DeployToEc2
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: "1"
+              Configuration:
+                ApplicationName: !Ref ZamboniCodeDeployApplication
+                DeploymentGroupName: !Ref ZamboniCodeDeployDeploymentGroup
+              InputArtifacts:
+                - Name: BuildOutput
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID running the Zamboni app.
+    Value: !Ref ZamboniInstance
+
+  InstancePrivateIp:
+    Description: Private IP of the Zamboni EC2 instance.
+    Value: !GetAtt ZamboniInstance.PrivateIp
+
+  SecurityGroupId:
+    Description: Security group gating :8000/:8501/:22 access.
+    Value: !Ref ZamboniSecurityGroup
+
+  LockTableName:
+    Description: DynamoDB maintenance-lock table name.
+    Value: !Ref ZamboniMaintenanceLocks
+
+  InstanceRoleArn:
+    Description: IAM role ARN attached to the EC2 instance.
+    Value: !GetAtt ZamboniInstanceRole.Arn
+
+  CodeDeployApplicationName:
+    Description: CodeDeploy application name.
+    Value: !Ref ZamboniCodeDeployApplication
+
+  PipelineArtifactBucket:
+    Description: S3 bucket CodePipeline stores build artifacts in.
+    Value: !Ref ZamboniArtifactBucket

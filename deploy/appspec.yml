@@ -23,11 +23,16 @@ hooks:
       runas: root
 
   AfterInstall:
+    # Phase 6: bumped from 300s -- now also creates/updates a venv and
+    # installs requirements.txt into it for zamboni-api.service, on top of
+    # the existing system-wide pip install for the Streamlit service.
     - location: deploy/scripts/after_install.sh
-      timeout: 300
+      timeout: 600
       runas: root
 
   ApplicationStart:
+    # Phase 6: bumped from 120s -- now starts and health-checks both
+    # zamboni-app (Streamlit, :8501) and zamboni-api (FastAPI, :8000).
     - location: deploy/scripts/app_start.sh
-      timeout: 120
+      timeout: 180
       runas: root

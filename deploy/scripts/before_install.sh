@@ -17,13 +17,21 @@ LOG="/var/log/zamboni-deploy.log"
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === BeforeInstall START ===" | tee -a "$LOG"
 
-# ── 1. Stop Streamlit service ──────────────────────────────────────────────────
+# ── 1. Stop Streamlit + API services ───────────────────────────────────────────
 if systemctl is-active --quiet zamboni-app 2>/dev/null; then
     echo "[before_install] Stopping zamboni-app service..." | tee -a "$LOG"
     systemctl stop zamboni-app
     echo "[before_install] zamboni-app stopped." | tee -a "$LOG"
 else
     echo "[before_install] zamboni-app service not running — skipping stop." | tee -a "$LOG"
+fi
+
+if systemctl is-active --quiet zamboni-api 2>/dev/null; then
+    echo "[before_install] Stopping zamboni-api service..." | tee -a "$LOG"
+    systemctl stop zamboni-api
+    echo "[before_install] zamboni-api stopped." | tee -a "$LOG"
+else
+    echo "[before_install] zamboni-api service not running (first deploy?) — skipping stop." | tee -a "$LOG"
 fi
 
 # ── 2. Backup .env ────────────────────────────────────────────────────────────
