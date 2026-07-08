@@ -14,6 +14,17 @@ def test_list_jobs_search(client):
     assert all("INGEST" in j["job_name"] for j in resp.json()["data"])
 
 
+def test_list_jobs_includes_tables_mapped_count(client):
+    """ACE-DA-FIN-APS-INGEST-PRD is seeded as controlm_pipeline_job on
+    fin_aps_payment_stg -- tables_mapped should reflect real references,
+    not just exist as a zeroed placeholder column."""
+    resp = client.get("/api/jobs?search=ACE-DA-FIN-APS-INGEST-PRD")
+    assert resp.status_code == 200
+    jobs = resp.json()["data"]
+    assert len(jobs) == 1
+    assert jobs[0]["tables_mapped"] >= 1
+
+
 def test_upsert_job(client):
     resp = client.post("/api/jobs", json={"job_name": "ACE-DA-TEST-NEW-PRD", "job_type": "controlm"})
     assert resp.status_code == 200

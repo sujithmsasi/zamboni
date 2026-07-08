@@ -55,6 +55,17 @@ export function ManualApply() {
 
   const jobOptions = useMemo(() => (jobs.data ?? []).map((j) => ({ value: j.job_name })), [jobs.data]);
 
+  const handleSelectExistingJob = (value: string) => {
+    const match = jobs.data?.find((j) => j.job_name === value);
+    if (!match) return;
+    // Only autofill from the job's OWN registry record when picking an
+    // existing job -- not on every keystroke, so typing a new job name
+    // doesn't flicker other fields based on a partial-match guess.
+    if (match.expected_start_time) setStartTime(match.expected_start_time);
+    setDuration(match.expected_duration_min ?? 0);
+    if (match.job_frequency) setJobFrequency(match.job_frequency);
+  };
+
   const handleOpenPreview = () => {
     setPreviewOpen(true);
     matches.refetch().then((r) => setModalSelectedFqns((r.data?.data ?? []).map((t) => t.table_fqn)));
@@ -93,9 +104,22 @@ export function ManualApply() {
       {
         onSuccess: (r) => {
           message.success(`✅ Applied to ${r.affected} table(s) (audit: ${r.audit_id}).`);
-          setConfirmed(false);
-          setConfirmedRows([]);
-          setSelectedFqns([]);
+          // Deliberately NOT resetting confirmed/confirmedRows/selectedFqns --
+          // that selection is still valid, and clearing it immediately after
+          // a successful apply used to flash the "Select target tables above
+          // first" warning right after success, which reads like something
+          // went wrong. Only the Job Details fields (what was just applied)
+          // get cleared, ready for a different job on the same or a new
+          // selection.
+          setPipelineJob('');
+          setStartTime('02:00');
+          setDuration(0);
+          setHkJob('');
+          setGate1Job('');
+          setJobType('controlm');
+          setJobFrequency(undefined);
+          setCiNumber('');
+          setShowMore(false);
         },
         onError: (err) => message.error(err instanceof Error ? err.message : 'Bulk apply failed.'),
       },
@@ -174,6 +198,7 @@ export function ManualApply() {
               options={jobOptions}
               value={pipelineJob}
               onChange={setPipelineJob}
+              onSelect={handleSelectExistingJob}
               filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
               placeholder="Search an existing job, or type a new job name"
             />
@@ -214,21 +239,23 @@ export function ManualApply() {
           </Col>
         </Row>
 
-        <Button type="link" style={{ padding: 0, marginBottom: showMore ? 12 : 0 }} onClick={() => setShowMore((v) => !v)}>
-          {showMore ? '− Fewer options' : '+ More options'}
-        </Button>
-        {showMore && (
-          <Row gutter={16} style={{ marginBottom: 12 }}>
-            <Col span={12}>
-              <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>CI Number (optional — blank keeps existing)</div>
-              <Input value={ciNumber} onChange={(e) => setCiNumber(e.target.value)} placeholder="CI-10300" />
-            </Col>
-          </Row>
-        )}
+        <div style={{ marginBottom: 24 }}>
+          <Button type="link" style={{ padding: 0, marginBottom: showMore ? 12 : 0 }} onClick={() => setShowMore((v) => !v)}>
+            {showMore ? '− Fewer options' : '+ More options'}
+          </Button>
+          {showMore && (
+            <Row gutter={16}>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>CI Number (optional — blank keeps existing)</div>
+                <Input value={ciNumber} onChange={(e) => setCiNumber(e.target.value)} placeholder="CI-10300" />
+              </Col>
+            </Row>
+          )}
+        </div>
 
         <Button
           type="primary" disabled={!confirmed || selectedFqns.length === 0 || !pipelineJob.trim()}
-          loading={bulk.isPending} onClick={handleApply} style={{ marginTop: showMore ? 0 : 12 }}
+          loading={bulk.isPending} onClick={handleApply}
         >
           🔗 Apply to {selectedFqns.length || 0} Table(s)
         </Button>

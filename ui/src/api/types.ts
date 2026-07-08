@@ -279,6 +279,7 @@ export interface JobRow {
   expected_duration_min: number;
   job_frequency: string;
   active: boolean;
+  tables_mapped: number;
   [key: string]: unknown;
 }
 

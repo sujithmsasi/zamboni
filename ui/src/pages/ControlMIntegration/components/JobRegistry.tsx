@@ -45,10 +45,12 @@ function JobListTab() {
       .map((n) => ({ value: n }));
   }, [jobs.data, search]);
 
-  const handleDelete = (jobName: string) => {
+  const handleDelete = (jobName: string, tablesMapped: number) => {
     Modal.confirm({
       title: `Remove "${jobName}" from the Control-M Job Registry?`,
-      content: 'This only removes the registry entry -- it does not touch the real Control-M job or any table currently referencing it.',
+      content: tablesMapped > 0
+        ? `This job is currently referenced by ${tablesMapped} table(s). Removing it only deletes the registry entry -- those tables will keep showing "${jobName}" as their Control-M job until edited individually.`
+        : 'This only removes the registry entry -- it does not touch the real Control-M job or any table currently referencing it.',
       okText: 'Remove', okType: 'danger',
       onOk: () =>
         deleteJob.mutate(jobName, {
@@ -116,13 +118,18 @@ function JobListTab() {
           { title: 'Start', dataIndex: 'expected_start_time', key: 'expected_start_time' },
           { title: 'Duration (min)', dataIndex: 'expected_duration_min', key: 'expected_duration_min' },
           {
+            title: 'Tables Mapped', dataIndex: 'tables_mapped', key: 'tables_mapped',
+            sorter: (a: JobRow, b: JobRow) => a.tables_mapped - b.tables_mapped,
+            render: (v: number) => (v > 0 ? <Tag color="blue">{v}</Tag> : <span style={{ color: '#98A2B3' }}>0</span>),
+          },
+          {
             title: 'Active', dataIndex: 'active', key: 'active',
             render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>),
           },
           {
             title: '', key: 'actions', width: 80,
             render: (_: unknown, row: JobRow) => (
-              <Button size="small" danger type="text" onClick={() => handleDelete(row.job_name)}>
+              <Button size="small" danger type="text" onClick={() => handleDelete(row.job_name, row.tables_mapped)}>
                 Remove
               </Button>
             ),

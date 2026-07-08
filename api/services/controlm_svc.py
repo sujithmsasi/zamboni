@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
+from config.settings import STREAM_REGISTRY_TABLE
 from engine.utils.athena_client import read_sql, run_query
 
 _CTRLM_JOBS_TABLE = "controlm_jobs"
@@ -25,12 +26,16 @@ def _now() -> str:
 
 
 def list_jobs(search: str | None = None) -> list[dict]:
-    where = f"WHERE job_name LIKE '%{_esc(search)}%'" if search else ""
+    where = f"WHERE j.job_name LIKE '%{_esc(search)}%'" if search else ""
     sql = f"""
-        SELECT job_name, job_type, domain, description,
-               expected_start_time, expected_duration_min, job_frequency, active
-        FROM {_CTRLM_JOBS_TABLE} {where}
-        ORDER BY job_name
+        SELECT j.job_name, j.job_type, j.domain, j.description,
+               j.expected_start_time, j.expected_duration_min, j.job_frequency, j.active,
+               (SELECT COUNT(*) FROM {STREAM_REGISTRY_TABLE} s
+                WHERE s.controlm_pipeline_job = j.job_name
+                   OR s.controlm_hk_job = j.job_name
+                   OR s.dependent_on_controlm_job = j.job_name) AS tables_mapped
+        FROM {_CTRLM_JOBS_TABLE} j {where}
+        ORDER BY j.job_name
     """
     return read_sql(sql, workgroup="app").to_dict(orient="records")
 

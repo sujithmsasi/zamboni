@@ -93,57 +93,67 @@ export function CSVWorkflow() {
 
   return (
     <div>
-      <Card size="small" title="Step 1 — Download Template" style={{ marginBottom: 16 }}>
-        <Alert
-          style={{ marginBottom: 16 }} type="info" showIcon
-          message="Export a pre-filled CSV showing all unique domain/layer/database combinations."
-          description="Share with domain teams — they fill in the job names and return the file for Step 2 below."
-        />
-
-        {exportQuery.isFetching && <div>Loading…</div>}
-
-        {previewRows.length > 0 && (
-          <Card size="small" type="inner" title={`${previewRows.length} domain/layer/database row(s)`} style={{ marginBottom: 16 }}>
-            <Table
-              size="small"
-              dataSource={previewRows}
-              columns={header.map((h) => ({ title: h, dataIndex: h, key: h }))}
-              pagination={previewRows.length > 15 ? { pageSize: 15 } : false}
-              scroll={{ x: 'max-content' }}
-            />
-          </Card>
-        )}
-
-        <Button
-          icon={<DownloadSimple size={14} />}
-          disabled={!csvText}
-          onClick={() => downloadRawCsv(csvText, 'zamboni_job_mapping_template.csv')}
-          style={{ marginBottom: 16 }}
-        >
-          Download Job Mapping Template CSV
-        </Button>
-
-        <Collapse
-          items={[{
-            key: 'guide',
-            label: 'CSV column guide for domain teams',
-            children: (
-              <Table
-                size="small"
-                dataSource={COLUMN_GUIDE}
-                rowKey="column"
-                pagination={false}
-                columns={[
-                  { title: 'Column', dataIndex: 'column', key: 'column' },
-                  { title: 'Required', dataIndex: 'required', key: 'required' },
-                  { title: 'Example', dataIndex: 'example', key: 'example' },
-                  { title: 'Notes', dataIndex: 'notes', key: 'notes' },
-                ]}
+      <Collapse
+        defaultActiveKey={['step1']}
+        style={{ marginBottom: 16 }}
+        items={[{
+          key: 'step1',
+          label: 'Step 1 — Download Template',
+          children: (
+            <>
+              <Alert
+                style={{ marginBottom: 16 }} type="info" showIcon
+                message="Export a pre-filled CSV showing all unique domain/layer/database combinations."
+                description="Share with domain teams — they fill in the job names and return the file for Step 2 below."
               />
-            ),
-          }]}
-        />
-      </Card>
+
+              {exportQuery.isFetching && <div>Loading…</div>}
+
+              {previewRows.length > 0 && (
+                <Card size="small" type="inner" title={`${previewRows.length} domain/layer/database row(s)`} style={{ marginBottom: 16 }}>
+                  <Table
+                    size="small"
+                    dataSource={previewRows}
+                    columns={header.map((h) => ({ title: h, dataIndex: h, key: h }))}
+                    pagination={previewRows.length > 15 ? { pageSize: 15 } : false}
+                    scroll={{ x: 'max-content' }}
+                  />
+                </Card>
+              )}
+
+              <Button
+                icon={<DownloadSimple size={14} />}
+                disabled={!csvText}
+                onClick={() => downloadRawCsv(csvText, 'zamboni_job_mapping_template.csv')}
+                style={{ marginBottom: 16 }}
+              >
+                Download Job Mapping Template CSV
+              </Button>
+
+              <Collapse
+                items={[{
+                  key: 'guide',
+                  label: 'CSV column guide for domain teams',
+                  children: (
+                    <Table
+                      size="small"
+                      dataSource={COLUMN_GUIDE}
+                      rowKey="column"
+                      pagination={false}
+                      columns={[
+                        { title: 'Column', dataIndex: 'column', key: 'column' },
+                        { title: 'Required', dataIndex: 'required', key: 'required' },
+                        { title: 'Example', dataIndex: 'example', key: 'example' },
+                        { title: 'Notes', dataIndex: 'notes', key: 'notes' },
+                      ]}
+                    />
+                  ),
+                }]}
+              />
+            </>
+          ),
+        }]}
+      />
 
       <Card size="small" title="Step 2 — Upload Completed Mapping">
         <Alert

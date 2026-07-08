@@ -1138,3 +1138,40 @@ same via the CSV Workflow's re-exported template).
   (`.ant-col:has-text('Control-M Job Name')`) and
   `.ant-select-selection-search-input`, not by placeholder.
 - No changes to engine core, orchestrator, gate logic, or vacuum.py.
+
+2026-07-08 Control-M Integration follow-up fixes, per Sujith's live testing
+of the page shipped above. 562 unit + 84 api tests passing (+1 regression
+test), ruff/tsc/build/lint clean, live-verified via Playwright (including
+against a throwaway job created through the real API to get a
+deterministic non-default start-time/duration/frequency to autofill from).
+- **Job List: "Tables Mapped" column** — `controlm_svc.list_jobs()` gained
+  a correlated-subquery count against `stream_registry` (`controlm_pipeline_job
+  = j.job_name OR controlm_hk_job = j.job_name OR dependent_on_controlm_job
+  = j.job_name`), surfaced as a new sortable column. Answers Sujith's "is
+  that expected?" about removed jobs' names lingering on tables: yes —
+  `controlm_jobs` is a catalog, not a foreign key, so `DELETE`ing a
+  registry entry was never going to cascade into `stream_registry`. Made
+  the consequence visible instead of just accepting it silently: the
+  Remove confirm dialog now reads the row's `tables_mapped` count and, if
+  >0, warns explicitly that those tables will keep showing the job name
+  until edited individually.
+- **Manual Bulk Apply, three real fixes**:
+  1. Selecting an *existing* job from the Control-M Job Name AutoComplete
+     now autofills Job run start time / Expected duration / Job Frequency
+     from that job's own registry record (`onSelect`, not `onChange` --
+     deliberately not firing on every keystroke while typing a brand-new
+     name, only on an actual pick).
+  2. Apply's `onSuccess` no longer resets `confirmed`/`selectedFqns`/
+     `confirmedRows` — it used to, which flashed the "Select target tables
+     above first" warning tag immediately after a successful apply
+     (reads like something broke). Only the Job Details fields reset now;
+     the confirmed table selection is still valid and stays shown.
+  3. Spacing tightened complaint ("More Option and Apply button close
+     together") — wrapped the toggle + CI Number block in its own
+     `marginBottom: 24` container instead of the previous
+     conditionally-zero margin that collapsed to nothing when collapsed.
+- **CSV Workflow**: "Step 1 — Download Template" is now a `Collapse`
+  (open by default, matching prior behavior, but collapsible) instead of
+  a plain `Card` — repeat visitors who already know the format can
+  collapse it out of the way.
+- No changes to engine core, orchestrator, gate logic, or vacuum.py.
