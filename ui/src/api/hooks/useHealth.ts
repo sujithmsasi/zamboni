@@ -9,28 +9,28 @@ export function useHealthKpis(env = 'prod') {
   });
 }
 
-export function useRecentExecutions(size = 10) {
+export function useRecentExecutions(page = 1, size = 10) {
   return useQuery({
-    queryKey: ['executions', 'list', { page: 1, size }],
-    queryFn: () => requestPaged<ExecutionRow[]>(`/executions${qs({ page: 1, size })}`),
+    queryKey: ['executions', 'list', { page, size }],
+    queryFn: () => requestPaged<ExecutionRow[]>(`/executions${qs({ page, size })}`),
   });
 }
 
-export function useExecutionsToday(size = 50) {
+export function useExecutionsToday(page = 1, size = 50) {
   const today = new Date().toISOString().slice(0, 10);
   return useQuery({
-    queryKey: ['executions', 'today', today, size],
+    queryKey: ['executions', 'today', today, page, size],
     queryFn: () =>
-      requestPaged<ExecutionRow[]>(`/executions${qs({ page: 1, size, from: today, to: today })}`),
+      requestPaged<ExecutionRow[]>(`/executions${qs({ page, size, from: today, to: today })}`),
   });
 }
 
-export function useFailures7d(size = 50) {
+export function useFailures7d(page = 1, size = 50) {
   const to = new Date().toISOString().slice(0, 10);
   const from = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
   return useQuery({
-    queryKey: ['executions', 'failures7d', from, to, size],
+    queryKey: ['executions', 'failures7d', from, to, page, size],
     queryFn: () =>
-      requestPaged<ExecutionRow[]>(`/executions${qs({ page: 1, size, from, to, status: 'FAILURE' })}`),
+      requestPaged<ExecutionRow[]>(`/executions${qs({ page, size, from, to, status: 'FAILURE' })}`),
   });
 }

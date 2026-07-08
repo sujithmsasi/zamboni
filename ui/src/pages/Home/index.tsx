@@ -35,7 +35,12 @@ const KPI_MODAL_TARGETS = ['coverage', 'coverage', 'coverage', 'execToday', 'fai
 type KpiModal = (typeof KPI_MODAL_TARGETS)[number] | null;
 
 export default function HomePage() {
-  const { kpis, executionsToday, recentExecutions, locks, failures7d } = useHomeData();
+  const {
+    kpis, locks,
+    recentExecutions, onRecentPageChange,
+    executionsToday, onExecutionsTodayPageChange,
+    failures7d, onFailures7dPageChange,
+  } = useHomeData();
   const [openModal, setOpenModal] = useState<KpiModal>(null);
 
   if (kpis.isError) {
@@ -158,6 +163,7 @@ export default function HomePage() {
           queryResult={recentExecutions}
           rowKey="execution_id"
           emptyText="No engine activity yet."
+          onPageChange={onRecentPageChange}
         />
       </Card>
 
@@ -173,6 +179,7 @@ export default function HomePage() {
         title="Executions — Today"
         queryResult={executionsToday}
         emptyText="No executions yet today."
+        onPageChange={onExecutionsTodayPageChange}
       />
       <ExecutionsDetailModal
         open={openModal === 'failures'}
@@ -180,6 +187,7 @@ export default function HomePage() {
         title="Failures — Last 7 Days"
         queryResult={failures7d}
         emptyText="No failures in the last 7 days."
+        onPageChange={onFailures7dPageChange}
       />
     </div>
   );

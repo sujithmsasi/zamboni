@@ -124,12 +124,22 @@ Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 ## Test Baseline (2026-07-06, updated through 2026-07-08 Control-M Integration)
 ```
 python -m pytest tests/unit -q   → 562 passed
-python -m pytest tests/api -q    → 86 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/api -q    → 88 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
 cd ui && npm run lint            → clean (oxlint)
 ```
+
+## Deferred Work
+- **Help doc / user guide generation**: intentionally not started. Sujith
+  wants this done as a pass at the end of the project (once the page/feature
+  set stabilizes), not incrementally alongside each wave — do not
+  proactively draft help docs, in-app tooltips-as-documentation, or a user
+  guide until asked. When that pass starts, the per-phase "Parity
+  checklists" and `> ADDED` notes throughout Migration Progress below are
+  the source material for what shipped and where it deviated from the
+  Streamlit twin.
 
 ## Migration Progress
 2026-07-05 Phase 0: baseline 494 tests (ruff clean), delta report done,
@@ -1264,3 +1274,84 @@ indefinitely, not just across a single render.
   missed, since without the tab-switch step the reset alone looks
   sufficient).
 - No changes to engine core, orchestrator, gate logic, or vacuum.py.
+
+2026-07-08 Home page modal width + fleet-wide pagination size-changer audit.
+Sujith reported the Home page's "Executions — Today" and "Failures — Last 7
+Days" popups needed a horizontal scrollbar workaround, plus a broader
+complaint that page-size selection ("15/page" etc.) "is not working... only
+the select 50/page only possible" across the app. TypeScript/build/lint all
+clean; frontend-only, no backend files touched.
+- **Root cause of the pagination complaint**: `components/DataGrid.tsx` is
+  the single shared pagination control for every grid in the app (confirmed
+  via a repo-wide grep for `showSizeChanger`/`pageSizeOptions` — DataGrid is
+  the only place either appears), but several call sites hardcoded
+  `page`/`size` into the query params with no `onPageChange` wired back
+  (or wired only `page`, not `size`) — same class of controlled-component
+  bug as the Manual Bulk Apply entries above, just on read-only grids
+  instead of a form. AntD's `<Table pagination={{...}}>` is fully
+  controlled: since the parent's `size` prop never changed, selecting
+  "15 / page" visually flashed then reverted to whatever was hardcoded
+  (50 in most of these — hence "only 50/page possible"). Audited every
+  `<DataGrid>` usage in the app (12 files); found broken: Home's Recent
+  Activity grid + both KPI-card drill-down modals (Executions Today,
+  Failures 7d — `useHealth.ts`'s `useRecentExecutions`/`useExecutionsToday`/
+  `useFailures7d` took a `size` param but no `page`, and callers passed no
+  `onPageChange` at all), Live Activity's Currently Running + Recent
+  Operations grids (`hooks.ts` hardcoded `page: 1, size: 50/100` inline,
+  no state), Health Dashboard's Governance section (the conflicts grid
+  wired `onPageChange={setPage}` — page only, size still fixed at 25 — and
+  the integrity-failures grid had no wiring at all, fixed size 50).
+  Execution Log, Audit Log, Table Registration's Registered Tables tab, and
+  Policy Configuration's View Configs tab were already correct (state
+  lives in the page's `index.tsx`, `onPageChange={(p,s)=>{setPage(p);
+  setSize(s);}}`, same pattern `ExecutionLog/index.tsx` established) — used
+  as the template for every fix here.
+- **Fixed** by giving each broken grid real page+size state and wiring
+  `onPageChange`, matching the established pattern exactly: `useHealth.ts`'s
+  three hooks now take `(page, size)`; `Home/hooks.ts` owns three
+  independent page/size pairs (Recent Activity, Executions Today, Failures
+  7d — independent because paging one modal must not move another's page
+  underneath it) and returns an `onXPageChange` setter per grid, wired in
+  `Home/index.tsx`; `LiveActivity/hooks.ts` likewise for its two grids,
+  plus a `useEffect` resetting Recent Operations' page to 1 when the
+  engine/status filter changes (a second latent bug in the same code path
+  — paging to page 5 under one filter then switching filters would have
+  landed on a now-out-of-range page); `GovernanceSection.tsx` added a
+  `size` state for the conflicts grid and a full page/size pair for the
+  failures grid, plus a domain-filter-change page reset (same
+  filter-changes-should-reset-page reasoning).
+- **Home page modal width fix** (the originally reported issue):
+  `ExecutionsDetailModal.tsx`'s `Table` column had no explicit width, so
+  AntD's `scroll:{x:'max-content'}` (set in DataGrid for every grid,
+  needed elsewhere for wide tables) sized it to the longest unellipsized
+  `glue_catalog.db.table` string in the result set, overflowing the
+  modal's 800px width. Fixed with an explicit `width: 340` on the Table
+  column (so `ellipsis: true` actually truncates instead of being
+  overridden by max-content) and widened the modal itself from 800 to
+  960px for breathing room. Verified via a headless DOM query for any
+  element inside `.ant-modal-content` where `scrollWidth > clientWidth`
+  — empty result (no overflow) after the fix, screenshot-confirmed
+  alongside.
+- Verified live via Playwright end-to-end, not just tsc/build: opened
+  Executions Today → selected "15 / page" → pagination footer updated to
+  "33 total · 1 2 3 · 15 / page" (was stuck at a single fixed page of 50);
+  same for Failures — Last 7 Days ("12 total · 15 / page"); Home's inline
+  Recent Activity grid re-paginated to 25/page; Live Activity's Recent
+  Operations grid (Currently Running has 0 rows in this seed, so AntD
+  correctly renders no pagination bar for it — not a bug) re-paginated to
+  15/page; Health Dashboard's Conflicts grid (1 seeded conflicted table)
+  size-changer confirmed functional the same way — its FAILED-integrity
+  grid has 0 matching rows in the seed data so, like Live Activity's
+  Currently Running, no pagination bar renders there either. Zero browser
+  console errors across all of the above.
+- **Found, not fixed** (pre-existing, unrelated, out of scope): Home's
+  "Failures (7d)" KPI card shows 39 but the drill-down modal backing it
+  (`useFailures7d`, `status=FAILURE` over the last 7 days) shows 12 total
+  — the KPI card's count comes from `health_kpis()`'s server-side
+  `failures_7d` field, which apparently uses different criteria than the
+  modal's own `/executions?status=FAILURE&from=...&to=...` query. This
+  predates this pass (neither number's computation was touched here) and
+  wasn't part of what was reported — flagging for awareness, not fixing
+  as a drive-by.
+- No changes to engine core, orchestrator, gate logic, or vacuum.py — this
+  pass is frontend-only.

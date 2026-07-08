@@ -17,13 +17,14 @@ interface ExecutionsDetailModalProps {
     refetch: () => void;
   };
   emptyText: string;
+  onPageChange?: (page: number, size: number) => void;
 }
 
 const COLUMNS = [
   { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 170 },
   { title: 'Engine', dataIndex: 'engine', key: 'engine', width: 90 },
-  { title: 'Operation', dataIndex: 'operation', key: 'operation', width: 120 },
-  { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn', ellipsis: true },
+  { title: 'Operation', dataIndex: 'operation', key: 'operation', width: 130 },
+  { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn', width: 340, ellipsis: true },
   {
     title: 'Status',
     dataIndex: 'status',
@@ -34,14 +35,17 @@ const COLUMNS = [
 ];
 
 /** Drill-down for the Executions Today / Failures (7d) KPI cards. */
-export function ExecutionsDetailModal({ open, onClose, title, queryResult, emptyText }: ExecutionsDetailModalProps) {
+export function ExecutionsDetailModal({
+  open, onClose, title, queryResult, emptyText, onPageChange,
+}: ExecutionsDetailModalProps) {
   return (
-    <Modal open={open} onCancel={onClose} onOk={onClose} title={title} width={800} footer={null}>
+    <Modal open={open} onCancel={onClose} onOk={onClose} title={title} width={960} footer={null}>
       <DataGrid<ExecutionRow>
         columns={COLUMNS}
         queryResult={queryResult}
         rowKey="execution_id"
         emptyText={emptyText}
+        onPageChange={onPageChange}
       />
       <div style={{ marginTop: 12, textAlign: 'right' }}>
         <Link to="/executions" onClick={onClose} style={{ fontSize: 13 }}>

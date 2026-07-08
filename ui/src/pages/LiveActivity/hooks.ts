@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useExecutionsList } from '../../api/hooks/useExecutions';
 import { useLocks } from '../../api/hooks/useSystem';
 
@@ -13,11 +14,26 @@ interface LiveActivityFilters {
 }
 
 export function useLiveActivityData(filters: LiveActivityFilters) {
-  const running = useExecutionsList({ page: 1, size: 50, status: 'RUNNING' }, REFRESH_MS);
-  const recent = useExecutionsList(
-    { page: 1, size: 100, engine: filters.engine, status: filters.status },
+  const [runningPage, setRunningPage] = useState(1);
+  const [runningSize, setRunningSize] = useState(50);
+  const running = useExecutionsList(
+    { page: runningPage, size: runningSize, status: 'RUNNING' },
     REFRESH_MS,
   );
+  const onRunningPageChange = (page: number, size: number) => { setRunningPage(page); setRunningSize(size); };
+
+  const [recentPage, setRecentPage] = useState(1);
+  const [recentSize, setRecentSize] = useState(100);
+  // A changed filter can leave `recentPage` pointing past the new result set
+  // (e.g. paged to 5 under "hk", then switching to "archival") -- reset to 1
+  // whenever the filters themselves change, same convention as ExecutionLog.
+  useEffect(() => { setRecentPage(1); }, [filters.engine, filters.status]);
+  const recent = useExecutionsList(
+    { page: recentPage, size: recentSize, engine: filters.engine, status: filters.status },
+    REFRESH_MS,
+  );
+  const onRecentPageChange = (page: number, size: number) => { setRecentPage(page); setRecentSize(size); };
+
   const locks = useLocks(REFRESH_MS);
-  return { running, recent, locks };
+  return { running, onRunningPageChange, recent, onRecentPageChange, locks };
 }
