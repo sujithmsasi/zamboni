@@ -10,9 +10,9 @@ const COLUMN_GUIDE = [
   { column: 'database_name', required: 'optional', example: 'finance_staging_db', notes: 'Leave blank = all databases' },
   { column: 'table_pattern', required: 'optional', example: 'aps_%', notes: 'SQL LIKE wildcard' },
   { column: 'controlm_job_name', required: '✅', example: 'ACE-DA-FIN-APS-INGEST-PRD', notes: 'Control-M job that loads data' },
-  { column: 'job_type', required: 'optional', example: 'controlm', notes: 'Defaults to controlm' },
   { column: 'hk_controlm_job', required: 'optional', example: 'ACE-DA-FIN-HK-PRD', notes: 'Control-M job that runs Zamboni HK' },
   { column: 'aws_gate1_job', required: 'optional', example: '—', notes: 'AWS job for Gate 1. Blank = use controlm_job_name' },
+  { column: 'job_type', required: 'optional', example: 'controlm', notes: "AWS service type for aws_gate1_job's Gate 1 completion check -- not controlm_job_name's type. Defaults to controlm" },
   { column: 'job_start_time', required: 'optional', example: '02:00', notes: '24h HH:MM' },
   { column: 'expected_duration_min', required: 'optional', example: '45', notes: 'Typical job run time' },
 ];

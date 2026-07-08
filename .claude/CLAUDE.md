@@ -992,3 +992,60 @@ ruff/tsc/build/lint all clean.
     (confirmed gone from the list after the confirm-modal click).
 - No engine *logic* changed (vacuum.py, gates, orchestration sequencing
   all untouched) — this pass is schema/field removal plus UI layout only.
+
+2026-07-07 Bug fix: Bulk Control-M job-mapping CSV round-trip was
+producing "0 table(s) will be updated" for every row when re-uploading an
+unmodified Export Mapping Template — reported by Sujith after driving the
+real flow. Root cause found via direct reproduction (export then
+re-import the same CSV in a Python REPL), not guesswork. 562 unit + 81 api
+tests passing (+1 regression test), ruff/tsc/build/lint clean.
+- **Root cause**: `table_pattern` is always present in the exported CSV
+  but blank on every row. A column that's blank on *every* row reads back
+  via `pandas.read_csv` as all-NaN `float64`, not `object` dtype — but
+  both `tables_svc.py::import_job_mapping` and `controlm_svc.py::
+  import_jobs` (and their Streamlit-legacy twins in `2_Table_Registration.
+  py`, `bc_tab_import`/`bc_tab_jobs`) only ran their NaN→`""` string
+  cleanup over `df.select_dtypes(include="object").columns` — silently
+  skipping any all-blank column. The raw `NaN` then stringified as the
+  literal text `"nan"`, which got used as a `table_fqn LIKE '%.nan%'`
+  filter that matches no real table — every row's `tables_matched` came
+  back `0`. The one existing test for this path
+  (`test_job_mapping_import_round_trip`) never caught it because it only
+  ever sent `domain,controlm_job_name` with `table_pattern` *absent*
+  entirely, which takes the separate "fill missing column with a default"
+  branch and never NaN-round-trips through pandas at all — an absent
+  column and an all-blank column are not the same bug surface.
+  Fixed all four spots with one `df = df.fillna("")` immediately after the
+  header lowercase-rename, before the per-column string cleanup, so blank
+  cells are `""` regardless of the column's inferred dtype.
+- Added `tests/api/test_tables.py::
+  test_job_mapping_import_blank_table_pattern_column_still_matches` — a
+  present-but-blank `table_pattern` column against a real seeded
+  domain/layer/database combo, asserting `tables_matched > 0`. This is the
+  regression guard the original test's "column absent" shape couldn't
+  provide.
+- **Second, independent issue from the same report**: the exported CSV's
+  column order put `job_type` immediately after `controlm_job_name` (and
+  the column guide table showed them adjacent too), which reads as "the
+  type of controlm_job_name" — but `job_type`/`dependent_job_type` is
+  actually the AWS service type for the *Gate 1* completion check
+  (`aws_gate1_job`/`dependent_on_controlm_job`), unrelated to
+  `controlm_job_name`'s own type. Fixed by reordering `job_type` to sit
+  immediately after `aws_gate1_job` in `export_job_mapping()`'s SELECT
+  (and the Streamlit twin's matching SQL + `_EXPECTED_COLS` + uploader
+  help text) — a pure column-order change, safe because both import paths
+  are column-name-driven, not positional. Also reworded the CSV column
+  guide's `job_type` row notes to say explicitly which field it describes,
+  and relabeled Import Job Mapping's preview grid column from generic
+  "Type" to "Gate 1 Job Type" (that grid has no adjacent `aws_gate1_job`
+  column to visually anchor next to, unlike the export guide/preview,
+  so the ambiguity had to be resolved by wording instead of position).
+- Verified live end-to-end via Playwright against the real flow that
+  triggered the report: downloaded the actual template through
+  `GET /api/tables/job-mapping/export`, re-uploaded it unmodified through
+  the Import Job Mapping tab, confirmed the header order
+  (`...,aws_gate1_job,job_type,job_start_time,...`) and the preview
+  banner reading "39 table(s) will be updated across all rows" instead of
+  0.
+- No changes to engine core, orchestrator, or gate logic — this is a CSV
+  parsing bug fix plus a labeling/ordering clarification only.

@@ -1364,15 +1364,16 @@ with tab_bulk_ctrlm:
 
         _EXPECTED_COLS = [
             "domain", "layer", "database_name", "table_pattern",
-            "controlm_job_name", "job_type", "hk_controlm_job",
-            "aws_gate1_job", "job_start_time", "expected_duration_min",
+            "controlm_job_name", "hk_controlm_job", "aws_gate1_job",
+            "job_type", "job_start_time", "expected_duration_min",
         ]
 
         uploaded = st.file_uploader(
             "Upload Job Mapping CSV",
             type=["csv"],
             key="bulk_ctrlm_upload",
-            help="CSV columns: domain, layer, database_name, table_pattern, controlm_job_name, job_type, hk_controlm_job, aws_gate1_job, job_start_time, expected_duration_min",
+            help="CSV columns: domain, layer, database_name, table_pattern, controlm_job_name, hk_controlm_job, aws_gate1_job, job_type, job_start_time, expected_duration_min. "
+                 "job_type describes aws_gate1_job (the AWS service Gate 1 calls to check completion), not controlm_job_name.",
         )
 
         if uploaded:
@@ -1386,6 +1387,11 @@ with tab_bulk_ctrlm:
                 _map_df.dropna(how="all", inplace=True)
                 _map_df.reset_index(drop=True, inplace=True)
                 _map_df.columns = [c.strip().lower() for c in _map_df.columns]
+                # An all-blank column (e.g. table_pattern) reads as all-NaN
+                # float64, which the object-dtype-only loop below would skip
+                # -- leaving a raw NaN to later stringify as literal "nan"
+                # and get used as a LIKE pattern that matches no tables.
+                _map_df = _map_df.fillna("")
                 for _sc in _map_df.select_dtypes(include="object").columns:
                     _map_df[_sc] = _map_df[_sc].astype(str).str.strip().replace({"nan":"","None":""})
                 # Drop rows with empty domain
@@ -1542,9 +1548,9 @@ with tab_bulk_ctrlm:
                     domain, layer, database_name,
                     '' AS table_pattern,
                     COALESCE(controlm_pipeline_job, '')         AS controlm_job_name,
-                    COALESCE(dependent_job_type, 'controlm')   AS job_type,
                     COALESCE(controlm_hk_job, '')               AS hk_controlm_job,
                     COALESCE(dependent_on_controlm_job, '')    AS aws_gate1_job,
+                    COALESCE(dependent_job_type, 'controlm')   AS job_type,
                     COALESCE(controlm_job_start_time, '02:00') AS job_start_time,
                     COALESCE(controlm_expected_duration_min, 0)  AS expected_duration_min
                 FROM {STREAM_REGISTRY_TABLE}
@@ -1724,6 +1730,9 @@ with tab_bulk_ctrlm:
                                              skip_blank_lines=True)
                     _jdf.dropna(how="all", inplace=True)
                     _jdf.columns = [c.strip().lower() for c in _jdf.columns]
+                    # Same all-blank-column NaN fix as the job mapping import
+                    # above -- see the comment there.
+                    _jdf = _jdf.fillna("")
                     for _jsc in _jdf.select_dtypes(include="object").columns:
                         _jdf[_jsc] = _jdf[_jsc].astype(str).str.strip().replace(
                             {"nan":"","None":""}

@@ -98,6 +98,30 @@ def test_job_mapping_import_round_trip(client):
     assert rows[0]["domain"] == "finance"
 
 
+def test_job_mapping_import_blank_table_pattern_column_still_matches(client):
+    """
+    Regression test: a table_pattern column that's PRESENT but blank on every
+    row reads back from pandas as all-NaN float64 rather than empty strings
+    -- unlike an entirely absent column, which goes through the "fill missing
+    column with a default" path instead. This is exactly what a real
+    Export Mapping Template download looks like (table_pattern is always
+    present, always blank, for domain teams to optionally fill in), so a
+    naive re-upload of the template with no edits must still match real
+    tables, not silently produce tables_matched=0 for every row.
+    """
+    csv_bytes = (
+        b"domain,layer,database_name,table_pattern,controlm_job_name\n"
+        b"finance,staging,finance_staging_db,,ACE-DA-FIN-APS-TEST-PRD\n"
+    )
+    files = {"file": ("mapping.csv", io.BytesIO(csv_bytes), "text/csv")}
+    resp = client.post("/api/tables/job-mapping/import?dry_run=true", files=files)
+    assert resp.status_code == 200
+    rows = resp.json()["data"]["rows"]
+    assert len(rows) == 1
+    assert rows[0]["table_pattern"] == ""
+    assert rows[0]["tables_matched"] > 0
+
+
 def test_glue_databases(client):
     resp = client.get("/api/glue/databases")
     assert resp.status_code == 200

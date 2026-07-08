@@ -54,6 +54,10 @@ def import_jobs(csv_bytes: bytes, registered_by: str) -> dict:
     df = pd.read_csv(io.BytesIO(csv_bytes), skip_blank_lines=True)
     df.dropna(how="all", inplace=True)
     df.columns = [c.strip().lower() for c in df.columns]
+    # See the identical fillna("") note in tables_svc.py::import_job_mapping --
+    # an all-blank optional column reads as all-NaN float64 and would
+    # otherwise bypass the object-dtype-only string cleanup below.
+    df = df.fillna("")
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip().replace({"nan": "", "None": ""})
     if "job_name" not in df.columns:

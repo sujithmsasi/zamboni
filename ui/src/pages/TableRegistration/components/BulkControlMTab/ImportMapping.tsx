@@ -7,11 +7,14 @@ import type { JobMappingRow } from '../../../../api/types';
 
 const COLUMNS = [
   { title: 'Job', dataIndex: 'job', key: 'job' },
-  { title: 'Type', dataIndex: 'job_type', key: 'job_type' },
   { title: 'Domain', dataIndex: 'domain', key: 'domain' },
   { title: 'Layer', dataIndex: 'layer', key: 'layer' },
   { title: 'DB', dataIndex: 'database_name', key: 'database_name' },
   { title: 'Pattern', dataIndex: 'table_pattern', key: 'table_pattern' },
+  // "Type" here is job_type from the CSV -- the AWS service type for the
+  // Gate 1 completion check, not the type of the Job column above it. Label
+  // it explicitly so it doesn't read as qualifying "Job".
+  { title: 'Gate 1 Job Type', dataIndex: 'job_type', key: 'job_type' },
   { title: 'Tables Matched', dataIndex: 'tables_matched', key: 'tables_matched' },
 ];
 

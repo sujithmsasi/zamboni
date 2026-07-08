@@ -218,6 +218,11 @@ def import_job_mapping(csv_bytes: bytes, dry_run: bool) -> list[dict]:
     df.dropna(how="all", inplace=True)
     df.reset_index(drop=True, inplace=True)
     df.columns = [c.strip().lower() for c in df.columns]
+    # A column left entirely blank in the CSV (e.g. table_pattern) is read by
+    # pandas as all-NaN float64, not object dtype -- the object-dtype-only
+    # loop below would skip it, leaving the raw NaN to later stringify as the
+    # literal text "nan" and get used as a LIKE pattern that matches nothing.
+    df = df.fillna("")
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip().replace({"nan": "", "None": ""})
     if "domain" in df.columns:
@@ -286,9 +291,9 @@ def export_job_mapping() -> str:
             domain, layer, database_name,
             '' AS table_pattern,
             COALESCE(controlm_pipeline_job, '')        AS controlm_job_name,
-            COALESCE(dependent_job_type, 'controlm')   AS job_type,
             COALESCE(controlm_hk_job, '')               AS hk_controlm_job,
             COALESCE(dependent_on_controlm_job, '')    AS aws_gate1_job,
+            COALESCE(dependent_job_type, 'controlm')   AS job_type,
             COALESCE(controlm_job_start_time, '02:00') AS job_start_time,
             COALESCE(controlm_expected_duration_min, 0)  AS expected_duration_min
         FROM {STREAM_REGISTRY_TABLE}
