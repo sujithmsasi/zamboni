@@ -25,8 +25,10 @@ import ExecutionLogPage from './pages/ExecutionLog';
 import HealthDashboardPage from './pages/HealthDashboard';
 import HomePage from './pages/Home';
 import LiveActivityPage from './pages/LiveActivity';
-import { PlaceholderPage } from './pages/PlaceholderPage';
+import NonProdLifecyclePage from './pages/NonProdLifecycle';
 import PolicyConfigPage from './pages/PolicyConfig';
+import SettingsPage from './pages/Settings';
+import StaleResourcesPage from './pages/StaleResources';
 import TableRegistrationPage from './pages/TableRegistration';
 
 export interface RouteMeta {
@@ -42,11 +44,11 @@ export interface RouteCategory {
   routes: RouteMeta[];
 }
 
-// All 13 routes per contracts.md §7, grouped into sidebar sections. Home is
-// fully built; the rest render a PlaceholderPage until their own Wave 1-2
-// phase replicates the Home pattern. Icons: Phosphor duotone
-// (.claude/ui_design.md). `color` tints the icon per category (one hue per
-// section, not per-icon) — see App.tsx for how it's applied.
+// All 13 routes per contracts.md §7, grouped into sidebar sections. All 13
+// are fully built as of Phase 5b -- UI is feature-complete, Streamlit is
+// fallback-only. Icons: Phosphor duotone (.claude/ui_design.md). `color`
+// tints the icon per category (one hue per section, not per-icon) — see
+// App.tsx for how it's applied.
 export const ROUTE_CATEGORIES: RouteCategory[] = [
   {
     label: 'Overview',
@@ -133,14 +135,14 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Non-Prod Lifecycle',
         icon: ArrowsClockwise,
         color: '#6FCF97',
-        element: <PlaceholderPage title="Non-Prod Lifecycle" />,
+        element: <NonProdLifecyclePage />,
       },
       {
         path: '/stale',
         label: 'Stale Resources',
         icon: Trash,
         color: '#6FCF97',
-        element: <PlaceholderPage title="Stale Resources" />,
+        element: <StaleResourcesPage />,
       },
     ],
   },
@@ -152,7 +154,7 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         label: 'Settings',
         icon: Gear,
         color: '#B197FC',
-        element: <PlaceholderPage title="Settings" />,
+        element: <SettingsPage />,
       },
       {
         path: '/audit',

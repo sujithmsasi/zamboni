@@ -439,21 +439,27 @@ def costs(group_by: str = "domain", from_days: int = 30) -> dict:
 
 # ── stale resources ───────────────────────────────────────────────────────────
 
-def stale(kind: str, domain: str | None = None, days: int = 30, threshold: int = 0) -> list[dict]:
+def stale(
+    kind: str, domain: str | None = None, days: int = 30, threshold: int = 0,
+    environment: str = "prod", prefix: str | None = None,
+) -> list[dict]:
     domain_clause = f"AND domain = '{_esc(domain)}'" if domain else ""
 
     if kind == "hk":
         sql = f"""
             SELECT
                 r.table_fqn, r.domain, r.layer, r.tier, r.environment, r.hk_enabled,
-                MAX(l.completed_at) AS last_successful_hk
+                MAX(l.completed_at) AS last_successful_hk,
+                DATE_DIFF('day', MAX(l.completed_at), NOW()) AS days_since_hk
             FROM {STREAM_REGISTRY_TABLE} r
             LEFT JOIN {EXECUTION_LOG_TABLE} l
                 ON r.table_fqn = l.table_fqn AND l.status = 'SUCCESS'
-            WHERE r.environment = 'prod' AND r.table_format = 'iceberg' {domain_clause.replace("domain", "r.domain")}
+            WHERE r.environment = '{_esc(environment)}' AND r.table_format = 'iceberg'
+                {domain_clause.replace("domain", "r.domain")}
             GROUP BY r.table_fqn, r.domain, r.layer, r.tier, r.environment, r.hk_enabled
             HAVING MAX(l.completed_at) IS NULL
-            ORDER BY r.table_fqn
+                OR DATE_DIFF('day', MAX(l.completed_at), NOW()) > {int(days)}
+            ORDER BY days_since_hk DESC NULLS FIRST
             LIMIT 200
         """
         return read_sql(sql, workgroup="app").to_dict(orient="records")
@@ -486,8 +492,26 @@ def stale(kind: str, domain: str | None = None, days: int = 30, threshold: int =
 
     if kind == "orphan":
         # Orphaned S3 prefixes requires a live bucket scan (no query-based
-        # equivalent) -- CloudTrail-backed cross-reference is a Phase 2+
-        # follow-up per 10_Stale_Resources.py's own caption. Empty here.
-        return []
+        # equivalent) -- CloudTrail-backed cross-reference remains a Phase 2+
+        # follow-up per 10_Stale_Resources.py's own caption ("requires
+        # CloudTrail integration"), but the one-level list_objects_v2 scan
+        # the twin does today is straightforward to replicate. No prefix ==
+        # nothing to scan yet (matches the twin's disabled-scan-button gate).
+        if not prefix:
+            return []
+        try:
+            from engine.utils.s3_client import parse_s3_uri
+            bucket, s3_prefix = parse_s3_uri(prefix)
+            import boto3
+
+            from config.settings import AWS_REGION
+            s3 = boto3.client("s3", region_name=AWS_REGION)
+            res = s3.list_objects_v2(Bucket=bucket, Prefix=s3_prefix, Delimiter="/")
+        except Exception as e:
+            raise ValueError(f"S3 scan failed: {e}") from e
+        return [
+            {"s3_prefix": cp.get("Prefix", ""), "status": "Check manually — cross-reference with Glue required"}
+            for cp in res.get("CommonPrefixes", [])
+        ]
 
     raise ValueError(f"Unknown stale kind '{kind}'. Must be one of: hk, orphan, zero_row, nonprod.")

@@ -69,6 +69,19 @@ def claim(fqns: list[str], reason: str, actor: str, dry_run: bool) -> int:
     return count
 
 
+def get_config() -> dict:
+    from engine.engines.lifecycle_engine import (
+        DEFAULT_GREENZONE_DAYS,
+        DEFAULT_PENDING_DROP_DAYS,
+        DEFAULT_STALE_DAYS,
+    )
+    return {
+        "stale_days": DEFAULT_STALE_DAYS,
+        "greenzone_days": DEFAULT_GREENZONE_DAYS,
+        "pending_drop_days": DEFAULT_PENDING_DROP_DAYS,
+    }
+
+
 def list_deletions(env: str, page: int, size: int) -> tuple[list[dict], int]:
     where = f"WHERE environment = '{_esc(env)}' AND lifecycle_state = 'DROPPED'"
     total_df = read_sql(f"SELECT COUNT(*) AS cnt FROM {NONPROD_REGISTRY_TABLE} {where}", workgroup="app")

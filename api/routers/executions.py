@@ -50,9 +50,14 @@ def costs(group_by: str = "domain", from_: int = Query(30, alias="from"), to: st
 
 
 @router.get("/api/stale")
-def stale(kind: str = "hk", domain: str | None = None, days: int = 30, threshold: int = 0):
+def stale(
+    kind: str = "hk", domain: str | None = None, days: int = 30, threshold: int = 0,
+    environment: str = "prod", prefix: str | None = None,
+):
     try:
-        rows = executions_svc.stale(kind, domain=domain, days=days, threshold=threshold)
+        rows = executions_svc.stale(
+            kind, domain=domain, days=days, threshold=threshold, environment=environment, prefix=prefix,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return envelope(rows)

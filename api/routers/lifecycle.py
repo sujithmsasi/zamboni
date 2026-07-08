@@ -10,6 +10,11 @@ from engine.core.audit import AuditAction, AuditEvent, audit
 router = APIRouter(tags=["lifecycle"])
 
 
+@router.get("/api/lifecycle/config")
+def get_config():
+    return envelope(lifecycle_svc.get_config())
+
+
 @router.get("/api/nonprod")
 def list_nonprod(page_params: PageParams = Depends(), env: str = "preprod", state: str | None = None):
     rows, total = lifecycle_svc.list_nonprod(env, state, page_params.page, page_params.size)

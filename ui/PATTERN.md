@@ -58,3 +58,25 @@ surfaces `audit_id`.
 
 Deviating from any of the above in a Wave 1-2 page requires a note in
 `.claude/decisions.md` and Sujith's sign-off — see contracts.md §7.
+
+## Page inventory (all 13 routes, as of Phase 5b)
+
+| Route | Page | Key endpoints used |
+|---|---|---|
+| `/` | Home | `GET /api/health/kpis`, `GET /api/executions` |
+| `/domains` | Domain Management | `GET/POST/PUT /api/domains` |
+| `/tables` | Table Registration | `GET/POST/PUT /api/tables`, `/api/glue/*`, `/api/tables/bulk-controlm`, `/api/tables/job-mapping/*` |
+| `/controlm` | Control-M Integration | `GET/POST/DELETE /api/jobs`, `GET /api/jobs/{name}/tables` |
+| `/policies` | Policy Configuration | `GET/PUT /api/policies`, `GET/PUT /api/gates`, `GET/POST/PUT/DELETE /api/templates` |
+| `/health` | Health Dashboard | `GET /api/health/kpis`, `GET /api/conflicts`, `POST /api/conflicts/rescan` |
+| `/activity` | Live Activity | `GET /api/executions` (polled), `GET/DELETE /api/locks` |
+| `/executions` | Execution Log | `GET /api/executions`, `GET /api/executions/{id}` |
+| `/costs` | Cost Report | `GET /api/costs` |
+| `/dryrun` | Dry Run Viewer | `GET /api/tables?search=`, `GET /api/dryrun/{fqn}` |
+| `/nonprod` | Non-Prod Lifecycle | `GET /api/lifecycle/config`, `GET /api/nonprod`, `POST /api/nonprod/exempt\|claim`, `GET /api/nonprod/deletions` |
+| `/stale` | Stale Resources | `GET /api/stale?kind=hk\|orphan\|zero_row\|nonprod` |
+| `/settings` | Settings | `GET/PUT /api/settings`, `GET/POST/PUT/DELETE /api/escalation`, `GET/DELETE /api/locks` |
+| `/audit` | Audit Log | `GET /api/audit` |
+
+All 13 routes are real pages — no `PlaceholderPage` usages remain (the
+component itself was deleted in Phase 5b, not just its call sites).

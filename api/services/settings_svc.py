@@ -17,7 +17,11 @@ from engine.core.escalation import delete_entry, list_matrix, upsert_entry
 
 
 def get_settings() -> dict:
-    return _get_settings()
+    settings = dict(_get_settings())
+    if settings.get("teams_webhook_url"):
+        from engine.core.teams_notifier import mask_webhook_url
+        settings["teams_webhook_url"] = mask_webhook_url(settings["teams_webhook_url"])
+    return settings
 
 
 def update_settings(new_settings: dict, actor: str, dry_run: bool) -> str:
