@@ -1848,3 +1848,25 @@ warnings.
   scope. `vacuum.py`, orchestrator, and gate logic untouched.
 - **Program complete personal-side — demo-ready; org drop pending
   (Phase 7).**
+
+2026-07-08 Ad-hoc commit: cleared the `config/policy_templates.json` diff
+Phase 6 found pre-existing and deliberately left uncommitted (see the
+bullet above). `STAGING_DEFAULT`'s `window_config` had been edited live
+through the Policy Configuration → Templates tab at some point before
+Phase 6 started (both the React and Streamlit Templates tabs write
+straight to this tracked file on Save — there's no draft/staging step)
+and never committed: `post_batch` (30min-after-upstream, 4h window,
+blackout 6–9/18–21) → `scheduled` (fixed 02:00 start, 4h window, blackout
+6–18, a 9-hour daytime window). Gate flags also normalized `0/1` → `false/
+true` in the same edit (same values, JSON type only, no behavior change).
+Confirmed no impact before committing: `tests/unit/test_config_templates.py`
+and `tests/api/test_policies.py` (30 tests) only assert the template's
+existence/description/apply-mechanics, never specific `window_config`/gate
+field values, and both suites pass unchanged with the new file staged;
+already-registered tables that had `STAGING_DEFAULT` applied in the past
+are unaffected either way since `apply_template()` copies the template's
+values into `hk_config` at apply-time — `hk_config` rows are a snapshot,
+not a live reference back to `policy_templates.json`. Committed as
+`11c628d`, pushed. `zamboni_local.db`'s own pre-existing diff (unrelated
+binary SQLite content, not further investigated) is still sitting
+uncommitted in the working tree as of this entry.
