@@ -1203,3 +1203,36 @@ ruff/tsc/build/lint clean, live-verified via Playwright.
 - Two new regression tests: `test_get_job_mapped_tables` (real seeded
   mapping resolves), `test_get_job_mapped_tables_empty_for_unknown_job`.
 - No changes to engine core, orchestrator, gate logic, or vacuum.py.
+
+2026-07-08 Control-M Integration, third follow-up: Bulk Upload CSV gained
+a dry-run preview + row-selection step before saving (Sujith: "when
+uploading I need to show the list in a table and ask for saving, now its
+saving without any prompt... rows selectable... too much?" — agreed it
+wasn't, since Import Job Mapping already has this exact pattern and
+`upsert_job` is a full overwrite with no undo). Deliberately no inline
+cell editing, only select/exclude -- same scope call as Manual Bulk
+Apply's preview modal. 562 unit + 88 api tests passing (+2 regression
+tests), ruff/tsc/build/lint clean, live-verified end-to-end (confirmed
+zero jobs registered between upload and Save, confirmed a deselected row
+is genuinely excluded from what gets written).
+- `controlm_svc.import_jobs()` gained `dry_run` and `exclude_job_names`
+  params -- dry_run parses/validates/defaults exactly like a real import
+  but returns the parsed rows instead of writing; exclude_job_names drops
+  specific rows before either the preview or the real apply. Same
+  two-phase shape as `tables_svc.py::import_job_mapping`, which already
+  had this pattern -- Bulk Upload CSV was the one CSV import in the app
+  that skipped it.
+- `POST /api/jobs/import` gained `dry_run` and `exclude` query params
+  (comma-separated job names -- the endpoint is `multipart/form-data`, so
+  a JSON body alongside the file isn't an option). No audit event is
+  written for dry-run calls (nothing happened yet); the real apply's
+  audit event is unchanged.
+- `BulkUploadJobs` (`ui/src/pages/ControlMIntegration/components/
+  JobRegistry.tsx`): upload now triggers a dry-run call, rendering the
+  parsed rows in a `<Table>` with `rowSelection` (all rows selected by
+  default) and an inline "N will be saved · M excluded" tag, matching
+  Manual Bulk Apply's preview-modal wording. "Save N Job(s)" re-submits
+  the same `File` with `dryRun: false` and the deselected rows'
+  `job_name`s as `excludeJobNames` -- no file re-upload or client-side
+  CSV re-parsing needed, the already-open file object is reused.
+- No changes to engine core, orchestrator, gate logic, or vacuum.py.

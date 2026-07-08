@@ -83,7 +83,18 @@ def register_job_if_missing(
     )
 
 
-def import_jobs(csv_bytes: bytes, registered_by: str) -> dict:
+def import_jobs(
+    csv_bytes: bytes, registered_by: str, dry_run: bool = False, exclude_job_names: list[str] | None = None,
+) -> dict:
+    """
+    dry_run=True parses and validates the CSV (same defaulting/cleanup as a
+    real import) without writing anything, returning the parsed rows for a
+    preview -- the Bulk Upload CSV tab used to upsert immediately on
+    upload with no review step, unlike every other CSV import in this app.
+    exclude_job_names drops specific rows before applying (or before the
+    dry-run preview reflects what a follow-up real apply would do) -- the
+    preview's row-selection grid's "exclude" action, not a full re-upload.
+    """
     df = pd.read_csv(io.BytesIO(csv_bytes), skip_blank_lines=True)
     df.dropna(how="all", inplace=True)
     df.columns = [c.strip().lower() for c in df.columns]
@@ -105,14 +116,23 @@ def import_jobs(csv_bytes: bytes, registered_by: str) -> dict:
             df[col] = default
     df["expected_duration_min"] = pd.to_numeric(df["expected_duration_min"], errors="coerce").fillna(0).astype(int)
 
+    if exclude_job_names:
+        df = df[~df["job_name"].isin(exclude_job_names)]
+
+    keep_cols = ["job_name", "job_type", "domain", "description", "expected_start_time", "expected_duration_min", "job_frequency"]
+    rows = df[keep_cols].to_dict(orient="records")
+
+    if dry_run:
+        return {"imported": 0, "failed": 0, "rows": rows}
+
     ok = fail = 0
-    for _, row in df.iterrows():
+    for row in rows:
         try:
-            upsert_job(row.to_dict(), registered_by)
+            upsert_job(row, registered_by)
             ok += 1
         except Exception:
             fail += 1
-    return {"imported": ok, "failed": fail}
+    return {"imported": ok, "failed": fail, "rows": []}
 
 
 def delete_job(job_name: str) -> bool:

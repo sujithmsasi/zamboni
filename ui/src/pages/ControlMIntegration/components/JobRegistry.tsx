@@ -1,7 +1,8 @@
 import { UploadSimple } from '@phosphor-icons/react';
-import { Alert, AutoComplete, Button, Col, Input, InputNumber, message, Modal, Row, Select, Table, Tabs, Tag, Upload } from 'antd';
+import { Alert, AutoComplete, Button, Card, Col, Input, InputNumber, message, Modal, Row, Select, Table, Tabs, Tag, Upload } from 'antd';
 import type { UploadRequestOption } from 'rc-upload/lib/interface';
 import { useEffect, useMemo, useState } from 'react';
+import type { JobImportRow } from '../../../api/hooks/useControlm';
 import { useDeleteJob, useImportJobs, useJobMappedTables, useJobs, useUpsertJob } from '../../../api/hooks/useControlm';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import type { JobRow } from '../../../api/types';
@@ -357,20 +358,53 @@ const SAMPLE_CSV = [
   'ACE-DA-FIN-APS-HK-PRD,controlm,finance,Zamboni HK trigger for APS,03:00,15,daily',
 ].join('\n');
 
+/**
+ * Bulk Upload CSV used to upsert immediately on upload with no review step
+ * -- unlike every other CSV import in this app (Import Job Mapping already
+ * has a dry-run preview). Now: upload -> dry-run preview in a table with
+ * row selection -> Save only the selected rows. Deliberately no inline
+ * cell editing -- if a row is wrong, exclude it and fix+re-upload the CSV,
+ * same as Manual Bulk Apply's preview modal only supports select/exclude.
+ */
 function BulkUploadJobs() {
+  const [file, setFile] = useState<File | null>(null);
+  const [previewRows, setPreviewRows] = useState<JobImportRow[] | null>(null);
+  const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const importJobs = useImportJobs();
 
   const customRequest = (options: UploadRequestOption) => {
-    importJobs.mutate(options.file as File, {
-      onSuccess: (r) => {
-        message.success(`✅ Imported ${r.imported} job(s)${r.failed ? `, ${r.failed} failed` : ''} (audit: ${r.audit_id}).`);
-        options.onSuccess?.({});
+    const f = options.file as File;
+    setFile(f);
+    importJobs.mutate(
+      { file: f, dryRun: true },
+      {
+        onSuccess: (r) => {
+          setPreviewRows(r.rows);
+          setSelectedNames(r.rows.map((row) => row.job_name));
+          options.onSuccess?.({});
+        },
+        onError: (err) => {
+          message.error(err instanceof Error ? err.message : 'CSV parsing failed.');
+          options.onError?.(err as Error);
+        },
       },
-      onError: (err) => {
-        message.error(err instanceof Error ? err.message : 'Import failed.');
-        options.onError?.(err as Error);
+    );
+  };
+
+  const handleConfirm = () => {
+    if (!file || !previewRows) return;
+    const excludeJobNames = previewRows.filter((r) => !selectedNames.includes(r.job_name)).map((r) => r.job_name);
+    importJobs.mutate(
+      { file, dryRun: false, excludeJobNames },
+      {
+        onSuccess: (r) => {
+          message.success(`✅ Imported ${r.imported} job(s)${r.failed ? `, ${r.failed} failed` : ''} (audit: ${r.audit_id}).`);
+          setPreviewRows(null);
+          setFile(null);
+        },
+        onError: (err) => message.error(err instanceof Error ? err.message : 'Import failed.'),
       },
-    });
+    );
   };
 
   return (
@@ -380,10 +414,10 @@ function BulkUploadJobs() {
         message="Upload a CSV with your full Control-M job list. Existing jobs are updated (upsert)."
         description="Required column: job_name. Optional: job_type, domain, description, expected_start_time, expected_duration_min, job_frequency."
       />
-      <Row gutter={12}>
+      <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col>
           <Upload accept=".csv" showUploadList={false} customRequest={customRequest}>
-            <Button icon={<UploadSimple size={14} />} loading={importJobs.isPending}>Upload Control-M Jobs CSV</Button>
+            <Button icon={<UploadSimple size={14} />} loading={importJobs.isPending && !previewRows}>Upload Control-M Jobs CSV</Button>
           </Upload>
         </Col>
         <Col>
@@ -392,6 +426,36 @@ function BulkUploadJobs() {
           </Button>
         </Col>
       </Row>
+
+      {previewRows && (
+        <Card size="small" title={`${previewRows.length} job(s) parsed — review before saving`}>
+          <Table<JobImportRow>
+            size="small"
+            dataSource={previewRows}
+            rowKey="job_name"
+            rowSelection={{ selectedRowKeys: selectedNames, onChange: (keys) => setSelectedNames(keys as string[]) }}
+            pagination={previewRows.length > 10 ? { pageSize: 10 } : false}
+            columns={[
+              { title: 'Job Name', dataIndex: 'job_name', key: 'job_name' },
+              { title: 'Type', dataIndex: 'job_type', key: 'job_type' },
+              { title: 'Domain', dataIndex: 'domain', key: 'domain' },
+              { title: 'Frequency', dataIndex: 'job_frequency', key: 'job_frequency', render: (v: string) => v || '—' },
+              { title: 'Start', dataIndex: 'expected_start_time', key: 'expected_start_time' },
+              { title: 'Duration (min)', dataIndex: 'expected_duration_min', key: 'expected_duration_min' },
+            ]}
+          />
+          <div style={{ margin: '12px 0' }}>
+            {selectedNames.length < previewRows.length ? (
+              <Tag color="gold">✅ {selectedNames.length} will be saved · ⛔ {previewRows.length - selectedNames.length} excluded</Tag>
+            ) : (
+              <Tag color="green">✅ All {selectedNames.length} job(s) will be saved</Tag>
+            )}
+          </div>
+          <Button type="primary" disabled={selectedNames.length === 0} loading={importJobs.isPending} onClick={handleConfirm}>
+            💾 Save {selectedNames.length} Job(s)
+          </Button>
+        </Card>
+      )}
     </div>
   );
 }

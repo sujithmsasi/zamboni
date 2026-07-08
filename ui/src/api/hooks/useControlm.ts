@@ -26,13 +26,31 @@ export function useUpsertJob() {
   });
 }
 
+export interface JobImportRow {
+  job_name: string;
+  job_type: string;
+  domain: string;
+  description: string;
+  expected_start_time: string;
+  expected_duration_min: number;
+  job_frequency: string;
+}
+
+export interface JobImportResult {
+  imported: number;
+  failed: number;
+  rows: JobImportRow[];
+  audit_id?: string;
+}
+
 export function useImportJobs() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: ({ file, dryRun, excludeJobNames }: { file: File; dryRun: boolean; excludeJobNames?: string[] }) => {
       const formData = new FormData();
       formData.append('file', file);
-      return requestMultipart<{ imported: number; failed: number; audit_id: string }>('/jobs/import', formData);
+      const query = qs({ dry_run: dryRun, exclude: excludeJobNames?.length ? excludeJobNames.join(',') : undefined });
+      return requestMultipart<JobImportResult>(`/jobs/import${query}`, formData);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });

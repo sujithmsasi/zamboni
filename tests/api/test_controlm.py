@@ -63,6 +63,31 @@ def test_import_jobs_round_trip(client):
     assert resp.json()["data"]["imported"] == 1
 
 
+def test_import_jobs_dry_run_previews_without_saving(client):
+    csv_bytes = b"job_name,domain\nACE-DA-TEST-PREVIEW-PRD,finance\n"
+    files = {"file": ("jobs.csv", io.BytesIO(csv_bytes), "text/csv")}
+    resp = client.post("/api/jobs/import?dry_run=true", files=files)
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["imported"] == 0
+    assert body["rows"][0]["job_name"] == "ACE-DA-TEST-PREVIEW-PRD"
+
+    listed = client.get("/api/jobs?search=TEST-PREVIEW").json()["data"]
+    assert listed == []
+
+
+def test_import_jobs_real_apply_excludes_deselected_rows(client):
+    csv_bytes = b"job_name\nACE-DA-TEST-KEEP-PRD\nACE-DA-TEST-DROP-PRD\n"
+    files = {"file": ("jobs.csv", io.BytesIO(csv_bytes), "text/csv")}
+    resp = client.post("/api/jobs/import?dry_run=false&exclude=ACE-DA-TEST-DROP-PRD", files=files)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["imported"] == 1
+
+    names = [j["job_name"] for j in client.get("/api/jobs?search=ACE-DA-TEST-").json()["data"]]
+    assert "ACE-DA-TEST-KEEP-PRD" in names
+    assert "ACE-DA-TEST-DROP-PRD" not in names
+
+
 def test_delete_job(client):
     client.post("/api/jobs", json={"job_name": "ACE-DA-TEST-DELETE-PRD"})
     resp = client.delete("/api/jobs/ACE-DA-TEST-DELETE-PRD")
