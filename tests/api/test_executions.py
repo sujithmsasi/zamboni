@@ -67,7 +67,48 @@ def test_costs(client):
 def test_stale_hk(client):
     resp = client.get("/api/stale?kind=hk")
     assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert isinstance(data, list)
+    if data:
+        assert "days_since_hk" in data[0]
+
+
+def test_stale_hk_days_threshold_filters_rows(client):
+    """> ADDED (Phase 5b): kind=hk previously ignored `days` entirely and only
+    ever returned never-housekept rows -- a real gap found while wiring the
+    Stale Resources page's threshold InputNumber to this endpoint."""
+    permissive = client.get("/api/stale?kind=hk&days=0").json()["data"]
+    strict = client.get("/api/stale?kind=hk&days=100000").json()["data"]
+    assert len(strict) <= len(permissive)
+
+
+def test_stale_hk_environment_filter(client):
+    resp = client.get("/api/stale?kind=hk&environment=dev")
+    assert resp.status_code == 200
+    assert all(row["environment"] == "dev" for row in resp.json()["data"])
+
+
+def test_stale_zero_row(client):
+    resp = client.get("/api/stale?kind=zero_row&threshold=0")
+    assert resp.status_code == 200
     assert isinstance(resp.json()["data"], list)
+
+
+def test_stale_nonprod(client):
+    resp = client.get("/api/stale?kind=nonprod")
+    assert resp.status_code == 200
+    assert isinstance(resp.json()["data"], list)
+
+
+def test_stale_orphan_no_prefix_returns_empty(client):
+    resp = client.get("/api/stale?kind=orphan")
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
+
+
+def test_stale_orphan_invalid_prefix_400(client):
+    resp = client.get("/api/stale?kind=orphan&prefix=not-an-s3-uri")
+    assert resp.status_code == 400
 
 
 def test_stale_invalid_kind(client):

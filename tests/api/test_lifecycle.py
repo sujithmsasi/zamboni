@@ -44,3 +44,12 @@ def test_list_deletions(client):
     resp = client.get("/api/nonprod/deletions?env=preprod&page=1&size=10")
     assert resp.status_code == 200
     assert resp.json()["pagination"]["page"] == 1
+
+
+def test_lifecycle_config(client):
+    """> ADDED (Phase 5b): thresholds sourced from lifecycle_engine constants,
+    not hardcoded client-side."""
+    resp = client.get("/api/lifecycle/config")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data == {"stale_days": 60, "greenzone_days": 14, "pending_drop_days": 2}

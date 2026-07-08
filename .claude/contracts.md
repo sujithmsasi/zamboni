@@ -393,6 +393,12 @@ POST   /api/nonprod/exempt             {fqns:[...], reason, dry_run}
 POST   /api/nonprod/claim              {fqns:[...], reason, dry_run}
 GET    /api/nonprod/deletions          paged deletion history
 ```
+> ADDED (Phase 5b): `GET /api/lifecycle/config` -- backs the State Overview
+> tab's "How are stale tables identified?" explainer with the engine's real
+> DEFAULT_STALE_DAYS/DEFAULT_GREENZONE_DAYS/DEFAULT_PENDING_DROP_DAYS
+> constants (engine/engines/lifecycle_engine.py) instead of hardcoding the
+> numbers client-side, where they could silently drift. Same precedent as
+> every other additive route in this file.
 
 ### routers/executions.py
 ```

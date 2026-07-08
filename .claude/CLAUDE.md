@@ -36,15 +36,14 @@ deploy/              CodeDeploy/CodeBuild pieces — NO CloudFormation template
 api/                 FastAPI app (Phase 2) — main.py, deps.py, models.py,
                      routers/ (8, one per contracts §6 section), services/
                      (8, lift SQL from the matching Streamlit page)
-ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5a) — Home,
-                     Health Dashboard, Domain Management, Live Activity,
-                     Execution Log, Cost Report, Dry Run Viewer, Audit Log,
-                     Table Registration, and Policy Configuration complete;
-                     3 routes still PlaceholderPage (Non-Prod Lifecycle,
-                     Stale Resources, Settings — Wave 2b); see ui/PATTERN.md
-                     for the canonical page structure Wave 2 replicates
+ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5b) — all
+                     13 contracts §7 routes are real pages, no
+                     PlaceholderPage remains; UI is feature-complete,
+                     Streamlit is fallback-only; see ui/PATTERN.md for the
+                     canonical page structure and the page/endpoint
+                     inventory table
 tests/unit/          562 tests, all passing
-tests/api/           80 tests — run as its own `pytest tests/api`
+tests/api/           97 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
 ```
@@ -121,10 +120,10 @@ tests/api/           80 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-08 UX Hardening close-out)
+## Test Baseline (2026-07-06, updated through 2026-07-08 Phase 5b close-out)
 ```
 python -m pytest tests/unit -q   → 562 passed
-python -m pytest tests/api -q    → 88 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/api -q    → 97 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
@@ -1508,3 +1507,132 @@ what shipped (full detail in each dated entry above, not repeated here):
   a field, not add behavior). Wave 2b (Non-Prod Lifecycle, Stale
   Resources, Settings — still `PlaceholderPage`) is the next open wave
   whenever Sujith picks it back up.
+
+2026-07-08 Phase 5b: Wave 2b — Non-Prod Lifecycle, Stale Resources,
+Settings shipped. **UI feature-complete; Streamlit = fallback.** All 13
+contracts §7 routes are now real pages; `PlaceholderPage.tsx` deleted
+outright (zero remaining call sites, confirmed via grep before deleting —
+same "delete, don't stub" convention as `DryRunBanner`'s removal). 562
+unit + 97 api tests passing (88 + 9 new), ruff/tsc/build/lint all clean.
+Feature inventories for all three Streamlit twins produced and checked
+before any code was written (see the phase's own chat transcript — not
+persisted as a repo doc, per the "don't create docs unless asked"
+convention; the per-tab parity notes below are the durable record).
+
+- **Mandatory-first-step feature inventories** surfaced 3 real backend
+  gaps, fixed as part of this wave (required for the tabs the phase brief
+  explicitly asked for, not drive-by scope creep):
+  1. `executions_svc.stale(kind="hk")` **ignored the `days` param
+     entirely** and hardcoded `environment='prod'` — the twin's own
+     threshold/env filters did nothing. Fixed to compute `days_since_hk`
+     via `DATE_DIFF` and filter on it (mirrors
+     `10_Stale_Resources.py`'s `stale_sql` exactly), plus an `environment`
+     param.
+  2. `stale(kind="orphan")` always returned `[]` — the twin's live
+     `list_objects_v2` S3 scan was never implemented server-side. Added a
+     real one-level scan (`prefix` param, `parse_s3_uri` + boto3
+     `Delimiter='/'`), same "requires CloudTrail integration" caveat the
+     twin itself carries for real orphan *detection* (this only lists
+     sub-prefixes for manual cross-reference, same as the twin). Router
+     failures surface as 400 via the existing `ValueError` → `HTTPException`
+     path (S3 exceptions caught and re-raised as `ValueError`).
+  3. `GET /api/settings` returned `teams_webhook_url` in the clear — the
+     twin masks it before render (`mask_webhook_url`). Masked server-side
+     in `settings_svc.get_settings()` now; `update_settings()`'s own
+     `before`/audit-trail read still uses the raw unmasked accessor
+     (unaffected, audit_log is an internal trail not exposed via GET). The
+     Advanced tab's Teams-settings Save sends `teams_webhook_url` only
+     when the user actually typed a new one (blank = omit the field
+     entirely, relying on `update_settings`'s `{**before, **new}` merge to
+     keep the real on-disk value) — resubmitting the masked placeholder
+     back to the server was the failure mode this exists to avoid.
+- `> ADDED (Phase 5b)`: `GET /api/lifecycle/config` (thresholds sourced
+  live from `engine/engines/lifecycle_engine.py`'s
+  `DEFAULT_STALE_DAYS`/`DEFAULT_GREENZONE_DAYS`/`DEFAULT_PENDING_DROP_DAYS`
+  constants, not hardcoded client-side where they could drift) — same
+  precedent as every other additive route in contracts.md §6.
+  Contract-smoke route count 51→52.
+- **NonProdLifecycle** (`ui/src/pages/NonProdLifecycle/`, 4 tabs): State
+  Overview (per-state count KPIs via 4 parallel lightweight
+  `GET /api/nonprod?state=X&size=1` calls read for `pagination.total` —
+  more accurate than the twin's own `LIMIT 300`-then-`value_counts()`
+  client-side approximation — explainer `Collapse` rendering real
+  thresholds from the new config endpoint, filterable `<DataGrid>`), Bulk
+  Exemption/Claim (3 actionable states fetched in parallel and merged
+  client-side with the twin's exact priority sort — PENDING_DROP first —
+  since `GET /api/nonprod` only filters one state at a time; rowSelection
+  grid, shared reason, Exempt/Claim buttons, one audit-id toast per
+  batch), Single Table Action (search-and-select over the full non-DROPPED
+  list, client-filtered — matches the twin's own approach, which is also
+  a full list feeding a plain `st.selectbox`, not a server search; **both**
+  exempt and claim actions here per the phase brief, though the twin only
+  had claim), Deletion History (90d grid, storage-reclaimed KPI, CSV
+  export).
+- **StaleResources** (`ui/src/pages/StaleResources/`, 4 tabs: Stale HK |
+  S3 Orphans | Zero-Row | NonProd Stale — the phase brief's explicit tab
+  list, not a 1:1 port of the twin's 4 tabs). **Not ported**: the twin's
+  "Unregistered Tables" tab (live Glue scan + bulk-register flow) — no
+  `kind=unregistered` in contracts, the phase brief's tab list omits it,
+  and it duplicates Table Registration's Browse & Register (Wave 2a);
+  documented here rather than silently dropped. The twin's inline
+  "Non-Prod Stale" sub-section (originally nested inside its Stale Tables
+  tab) is promoted to its own top-level tab, matching `kind=nonprod`.
+  Each tab is a bare-array `<Table>` (not `<DataGrid>` — `GET /api/stale`
+  has no pagination envelope, same documented exception as
+  CostReport/DomainManagement) with domain/env/threshold filters mapped
+  to the fixed gaps above.
+- **Settings** (`ui/src/pages/Settings/`, 4 tabs): General/Enforcement/
+  Advanced are `GET/PUT /api/settings` forms — each Save sends only the
+  field subset its own tab owns (not a full fetch-then-merge round-trip),
+  relying on `update_settings`'s server-side shallow merge; this is also
+  what keeps the masked webhook URL from ever being resubmitted verbatim.
+  Escalation Matrix: `<Table>` + `Drawer` add/edit (key disabled on edit —
+  PK) + `Modal`-confirmed delete, full CRUD already existed
+  (`api/services/settings_svc.py`, unchanged this phase) — TanStack
+  Query's mutation `onSuccess` + query invalidation gives instant grid
+  refresh for free, so the twin's `st.session_state["esc_flash"]` +
+  `st.rerun()` flash-message dance has no equivalent bug surface here, not
+  just a fix (confirmed live: 3 distinct audit IDs — add, edit, delete —
+  stacked and visible in one screenshot). Advanced: backup-pattern
+  patterns, Teams enable/webhook (masked, see above; **"Send Test
+  Message" not ported** — a live notification-send action, not a settings
+  field, no contract endpoint, same class of decision as DryRunViewer's
+  "Promote to Live" in Wave 1), Cost Explorer config, SSO/LDAP as a static
+  `Alert` (matches the twin — it's just a caption there too, no real
+  control). **Active Maintenance Locks**: reused `LiveActivity`'s
+  `LocksStrip` component directly rather than linking out or duplicating
+  it — it already takes a decoupled `queryResult` prop, and
+  Settings/Administration is a natural home for an admin force-release
+  action; noting the choice here per the phase brief's "your call."
+- `ui/PATTERN.md`: appended the "page inventory" table (all 13 routes →
+  key endpoints), per the closure task.
+- Swept `ui/src` for `any`/`TODO`/`console.log` — zero matches, nothing to
+  clean up or justify.
+- **Found, not fixed** (pre-existing, out of scope — confirmed via live
+  verification, not guessed): `stale(kind="zero_row")`'s SQL selects
+  `partition_date`, a column that does not exist in the local SQLite
+  `execution_log` table (Phase 1b's Migration Progress entry already
+  documents this exact table's local/Athena column mismatch). `local_db.py`
+  catches the resulting SQL error and returns an empty DataFrame rather
+  than raising, so the Zero-Row tab always renders "No low-row tables
+  found" locally regardless of threshold — not a regression from this
+  phase, and not something a new page should silently paper over by
+  papering over the underlying schema drift as a drive-by.
+- Verified live end-to-end against the seeded local DB (fresh `uvicorn`
+  serving the rebuilt `ui/dist`, a stale orphaned worker from an earlier
+  session killed first — see `context_hints.md`) via Playwright, per the
+  phase's acceptance criteria: bulk-exempted 2 real GREENZONE/
+  STALE_CANDIDATE preprod tables with a reason → toast
+  `✅ Exempted 2 table(s) (audit: …)` → State Overview's ACTIVE count and
+  grid both reflected the change immediately; escalation entry
+  add→edit→delete round-trip produced 3 distinct audit IDs and the grid
+  returned to its exact pre-add row count; Stale HK (env=prod, days=30 →
+  accurately empty, since the seeded fleet's actual `days_since_hk` values
+  are all single-digit) and NonProd Stale (3 real seeded rows, correct
+  state badges/dates) both confirmed against real data. Zero console
+  errors across all three pages. `config/zamboni_settings.json` picked up
+  a content-identical CRLF→LF normalization from the live write path
+  (`json.dump` writes `\n`) — reverted via `git checkout` so no spurious
+  diff was left behind, same care as Phase 5a's template cleanup.
+- No changes to `vacuum.py`, orchestrator, gate logic, or any Streamlit
+  file this phase.

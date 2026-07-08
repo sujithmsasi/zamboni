@@ -4,6 +4,26 @@ def test_get_settings(client):
     assert "execution_log_retention_days" in resp.json()["data"]
 
 
+def test_get_settings_no_webhook_url_unchanged(client):
+    assert client.get("/api/settings").json()["data"].get("teams_webhook_url", "") == ""
+
+
+def test_get_settings_masks_teams_webhook_url(client, monkeypatch):
+    """> ADDED (Phase 5b): the twin masks the webhook URL before it ever
+    reaches the browser (11_Settings.py::mask_webhook_url) -- GET
+    /api/settings returned it in the clear until this fix."""
+    import api.services.settings_svc as settings_svc
+
+    raw = "https://outlook.office.com/webhook/abc123xyz456"
+    monkeypatch.setattr(settings_svc, "_get_settings", lambda: {"teams_webhook_url": raw, "teams_enabled": True})
+
+    resp = client.get("/api/settings")
+    assert resp.status_code == 200
+    masked = resp.json()["data"]["teams_webhook_url"]
+    assert masked != raw
+    assert masked.endswith("abc123xyz456")
+
+
 def test_update_settings_dry_run(client):
     settings = client.get("/api/settings").json()["data"]
     resp = client.put("/api/settings", json={

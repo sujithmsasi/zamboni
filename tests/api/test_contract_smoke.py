@@ -32,6 +32,9 @@ CONTRACT_ROUTES = [
     ("POST", "/api/nonprod/exempt"),
     ("POST", "/api/nonprod/claim"),
     ("GET", "/api/nonprod/deletions"),
+    # > ADDED (Phase 5b): lifecycle-threshold explainer -- see contracts.md's
+    # note under routers/lifecycle.py.
+    ("GET", "/api/lifecycle/config"),
     ("GET", "/api/executions"),
     ("GET", "/api/executions/{id}"),
     ("GET", "/api/dryrun/{fqn}"),
@@ -87,7 +90,8 @@ def test_every_contract_route_exists(client):
 
 
 def test_route_count_matches_contract():
-    """Belt-and-braces: total method+path count should match the 50 defined here
-    (44 from contracts.md §6 + 4 domains routes added in Phase 4 + 2 template
-    routes added in Phase 5a)."""
-    assert len(CONTRACT_ROUTES) == 51
+    """Belt-and-braces: total method+path count should match the routes defined
+    here (44 from contracts.md §6 + 4 domains routes added in Phase 4 + 2
+    template routes added in Phase 5a + the jobs/{name}/tables drill-in +
+    lifecycle/config added in Phase 5b)."""
+    assert len(CONTRACT_ROUTES) == 52

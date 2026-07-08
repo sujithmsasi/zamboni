@@ -375,6 +375,102 @@ export type TemplatesMap = Record<string, PolicyTemplate>;
 
 // ── domains ───────────────────────────────────────────────────────────────────
 
+// ── nonprod lifecycle ─────────────────────────────────────────────────────────
+
+export interface NonprodRow {
+  table_fqn: string;
+  domain: string;
+  environment: string;
+  lifecycle_state: string;
+  days_since_activity: number | null;
+  last_query_at: string | null;
+  last_write_at: string | null;
+  created_at: string | null;
+  greenzone_expires_at: string | null;
+  pending_drop_expires_at: string | null;
+  owner_exempted: boolean | null;
+  owner_email: string | null;
+  is_backup_pattern: boolean | null;
+  pattern_matched: string | null;
+  first_seen_at: string | null;
+  [key: string]: unknown;
+}
+
+export interface DeletionRow {
+  table_fqn: string;
+  domain: string;
+  dropped_at: string;
+  bytes_reclaimed: number | null;
+  s3_cleaned: boolean | null;
+  catalog_dropped: boolean | null;
+  previous_state: string | null;
+  [key: string]: unknown;
+}
+
+export interface LifecycleConfig {
+  stale_days: number;
+  greenzone_days: number;
+  pending_drop_days: number;
+}
+
+// ── stale resources ───────────────────────────────────────────────────────────
+
+export interface StaleHkRow {
+  table_fqn: string;
+  domain: string;
+  layer: string;
+  tier: string;
+  environment: string;
+  hk_enabled: boolean | null;
+  last_successful_hk: string | null;
+  days_since_hk: number | null;
+  [key: string]: unknown;
+}
+
+export interface StaleZeroRowRow {
+  table_fqn: string;
+  domain: string;
+  layer: string;
+  last_rows_archived: number | null;
+  last_partition_archived: string | null;
+  [key: string]: unknown;
+}
+
+export interface StaleOrphanRow {
+  s3_prefix: string;
+  status: string;
+}
+
+// ── settings / escalation ─────────────────────────────────────────────────────
+
+export interface PlatformSettings {
+  execution_log_retention_days: number;
+  audit_log_retention_days: number;
+  live_activity_refresh_interval_seconds: number;
+  budget_alert_threshold_usd_monthly: number;
+  default_dry_run: Record<string, boolean>;
+  require_reason_in_preprod: boolean;
+  require_reason_in_dev: boolean;
+  require_ticket_in_prod: boolean;
+  approval_required_for: Record<string, boolean>;
+  backup_stale_name_patterns: string[];
+  teams_enabled: boolean;
+  teams_webhook_url: string;
+  cost_explorer_enabled: boolean;
+  cost_explorer_tag_key: string;
+  cost_explorer_tag_value: string;
+  [key: string]: unknown;
+}
+
+export interface EscalationEntry {
+  _key: string;
+  primary_owner_email: string;
+  escalation_email: string;
+  zamboni_owner_email: string;
+  notify_sns_topic: string;
+  [key: string]: unknown;
+}
+
 export interface DomainRow {
   domain_name: string;
   display_name: string;
