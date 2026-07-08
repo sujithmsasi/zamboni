@@ -12,6 +12,7 @@ export function GeneralTab() {
 
   const [execRetention, setExecRetention] = useState(90);
   const [auditRetention, setAuditRetention] = useState(365);
+  const [rampDays, setRampDays] = useState(14);
   const [refreshInterval, setRefreshInterval] = useState(30);
   const [budgetThreshold, setBudgetThreshold] = useState(0);
   const [dryRunByEnv, setDryRunByEnv] = useState<Record<string, boolean>>({});
@@ -25,6 +26,7 @@ export function GeneralTab() {
     applied.current = true;
     setExecRetention(Number(settings.data.execution_log_retention_days ?? 90));
     setAuditRetention(Number(settings.data.audit_log_retention_days ?? 365));
+    setRampDays(Number(settings.data.default_dry_run_ramp_days ?? 14));
     setRefreshInterval(Number(settings.data.live_activity_refresh_interval_seconds ?? 30));
     setBudgetThreshold(Number(settings.data.budget_alert_threshold_usd_monthly ?? 0));
     setDryRunByEnv({ prod: true, preprod: true, dev: true, test: true, ...settings.data.default_dry_run });
@@ -36,6 +38,7 @@ export function GeneralTab() {
         settings: {
           execution_log_retention_days: execRetention,
           audit_log_retention_days: auditRetention,
+          default_dry_run_ramp_days: rampDays,
           live_activity_refresh_interval_seconds: refreshInterval,
           budget_alert_threshold_usd_monthly: budgetThreshold,
           default_dry_run: dryRunByEnv,
@@ -80,7 +83,22 @@ export function GeneralTab() {
       </div>
 
       <Divider />
-      <div style={{ fontWeight: 600, marginBottom: 12 }}>Default Dry-Run Mode per Environment</div>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>New Table Dry-Run Ramp-Up</div>
+      <div style={{ fontSize: 12, color: '#667085', marginBottom: 8 }}>
+        Newly registered tables (hk_enabled=false) automatically get a{' '}
+        <code>dry_run_until</code> window this many days out — the HK Engine
+        evaluates their gates for real but only logs what it would do,
+        instead of executing, until that date passes. Set to 0 to disable
+        (new tables then stay fully unevaluated until enabled manually).
+      </div>
+      <InputNumber style={{ width: 200, marginBottom: 24 }} min={0} max={90} value={rampDays} onChange={(v) => setRampDays(v ?? 0)} addonAfter="days" />
+
+      <Divider />
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>Default Dry-Run Mode per Environment</div>
+      <div style={{ fontSize: 12, color: '#667085', marginBottom: 8 }}>
+        Intended default for the per-action dry-run flag on writes in this
+        environment.
+      </div>
       <Row gutter={16} style={{ marginBottom: 24 }}>
         {ENVS.map((env) => (
           <Col span={6} key={env}>

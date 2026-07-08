@@ -147,6 +147,38 @@ def test_glue_databases(client):
     assert isinstance(resp.json()["data"], list)
 
 
+def test_register_table_sets_dry_run_ramp_by_default(client):
+    """register_table() seeds dry_run_until = today + default_dry_run_ramp_days
+    when hk_enabled is left at its False default -- previously a freshly
+    registered table sat fully unevaluated until someone ran
+    `enable.py --dry-run-until` by hand; see Settings > General's new
+    'New Table Dry-Run Ramp-Up' field."""
+    payload = {
+        "table_fqn": "glue_catalog.finance_staging_db.zamboni_api_test_ramp",
+        "domain": "finance", "layer": "staging", "tier": "standard",
+        "dry_run": False,
+    }
+    resp = client.post("/api/tables/register", json=payload)
+    assert resp.status_code == 200
+    detail = client.get(f"/api/tables/{payload['table_fqn']}").json()["data"]
+    assert detail["dry_run_until"] is not None
+
+
+def test_register_table_hk_enabled_true_skips_ramp(client):
+    """A caller that explicitly registers hk_enabled=True is treated as
+    intentionally skipping ramp-up, not silently overridden into dry-run."""
+    payload = {
+        "table_fqn": "glue_catalog.finance_staging_db.zamboni_api_test_noramp",
+        "domain": "finance", "layer": "staging", "tier": "standard",
+        "hk_enabled": True,
+        "dry_run": False,
+    }
+    resp = client.post("/api/tables/register", json=payload)
+    assert resp.status_code == 200
+    detail = client.get(f"/api/tables/{payload['table_fqn']}").json()["data"]
+    assert detail["dry_run_until"] is None
+
+
 def test_register_table_auto_applies_template(client):
     """Browse & Register tab parity: registering infers + applies a policy
     template in the same call (2_Table_Registration.py calls both

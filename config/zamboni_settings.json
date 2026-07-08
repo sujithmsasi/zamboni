@@ -2,6 +2,7 @@
   "_comment": "Zamboni Platform Settings. Edited via the Settings page (app/pages/11_Settings.py). Do not edit manually in production -- use the UI or CLI to ensure audit trail is maintained.",
   "execution_log_retention_days": 90,
   "audit_log_retention_days": 365,
+  "default_dry_run_ramp_days": 5,
   "default_dry_run": {
     "prod": true,
     "preprod": true,
@@ -9,14 +10,14 @@
     "test": true
   },
   "live_activity_refresh_interval_seconds": 30,
-  "budget_alert_threshold_usd_monthly": 0,
+  "budget_alert_threshold_usd_monthly": 100,
   "require_reason_in_preprod": true,
-  "require_reason_in_dev": false,
-  "require_ticket_in_prod": false,
+  "require_reason_in_dev": true,
+  "require_ticket_in_prod": true,
   "approval_required_for": {
-    "drop_table": false,
-    "bulk_hk_enable": false,
-    "promote_to_live": false
+    "drop_table": true,
+    "bulk_hk_enable": true,
+    "promote_to_live": true
   },
   "backup_stale_name_patterns": [
     "_bkp",
@@ -28,6 +29,7 @@
     "_old",
     "_v\\d+$",
     "_\\d{8}$",
+    "_\\d{4}_\\d{2}_\\d{2}$",
     "_\\d{4}_\\d{2}_\\d{2}$"
   ],
   "notification_defaults": {
@@ -39,17 +41,11 @@
     "digest_sender_status": "phase_2_2_pending"
   },
   "escalation_matrix": {
-    "default": {
-      "primary_owner_email": "",
-      "escalation_email": "",
-      "zamboni_owner_email": "",
-      "notify_sns_topic": "",
-      "severity_rules": {
-        "FAILURE_TIMEOUT": "high",
-        "FAILURE_BACKPRESSURE": "medium",
-        "FAILURE_SAFETY_BLOCKED": "critical",
-        "SKIP_CIRCUIT_OPEN": "high"
-      }
+    "domain:finance|tier:critical|env:preprod": {
+      "primary_owner_email": "rasna.kokkadan@gmail.com",
+      "escalation_email": "rasna.kokkadan@gmail.com",
+      "zamboni_owner_email": "sujith@sujith.com",
+      "notify_sns_topic": ""
     }
   },
   "teams_enabled": false,

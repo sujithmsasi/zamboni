@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from config.settings import NONPROD_REGISTRY_TABLE
-from engine.core import execution_log, notifier
+from engine.core import execution_log, notifier, registry
 from engine.core.execution_log import LogEntry
 from engine.engines.base import BaseEngine
 from engine.monitoring.activity_scanner import get_activity_signals
@@ -340,6 +340,7 @@ class LifecycleEngine(BaseEngine):
             SELECT * FROM {NONPROD_REGISTRY_TABLE}
             WHERE environment   = '{environment}'
               AND lifecycle_state != 'DROPPED'
+              AND {registry.domain_active_filter_sql()}
             ORDER BY lifecycle_state, days_since_activity DESC
         """
         df = read_sql(sql, workgroup="nonprod")
@@ -350,6 +351,7 @@ class LifecycleEngine(BaseEngine):
             SELECT * FROM {NONPROD_REGISTRY_TABLE}
             WHERE environment   = '{environment}'
               AND lifecycle_state = 'PENDING_DROP'
+              AND {registry.domain_active_filter_sql()}
         """
         df = read_sql(sql, workgroup="nonprod")
         return df.to_dict(orient="records")

@@ -52,11 +52,20 @@ export function AdvancedTab() {
   };
 
   const saveTeams = () => {
+    const trimmedUrl = teamsUrl.trim();
+    if (trimmedUrl && !/^https?:\/\/.+/i.test(trimmedUrl)) {
+      message.error('Webhook URL must start with http:// or https://');
+      return;
+    }
+    if (teamsEnabled && !trimmedUrl && !settings.data?.teams_webhook_url) {
+      message.error('Enter a webhook URL before enabling Teams notifications.');
+      return;
+    }
     const body: Record<string, unknown> = { teams_enabled: teamsEnabled };
     // Leave blank to keep the existing URL -- the value we read back is
     // masked (settings_svc.get_settings), so re-submitting it unmodified
     // would overwrite the real webhook with masked garbage.
-    if (teamsUrl.trim()) body.teams_webhook_url = teamsUrl.trim();
+    if (trimmedUrl) body.teams_webhook_url = trimmedUrl;
     updateSettings.mutate(
       { settings: body, dry_run: false },
       {
@@ -70,8 +79,12 @@ export function AdvancedTab() {
   };
 
   const saveCostExplorer = () => {
+    if (ceEnabled && (!tagKey.trim() || !tagValue.trim())) {
+      message.error('Cost allocation tag key and value are required when Cost Explorer is enabled.');
+      return;
+    }
     updateSettings.mutate(
-      { settings: { cost_explorer_enabled: ceEnabled, cost_explorer_tag_key: tagKey, cost_explorer_tag_value: tagValue }, dry_run: false },
+      { settings: { cost_explorer_enabled: ceEnabled, cost_explorer_tag_key: tagKey.trim(), cost_explorer_tag_value: tagValue.trim() }, dry_run: false },
       {
         onSuccess: (r) => message.success(`✅ Cost Explorer settings saved (audit: ${r.audit_id}).`),
         onError: (err) => message.error(err instanceof Error ? err.message : 'Save failed.'),

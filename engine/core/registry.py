@@ -5,7 +5,7 @@ All queries go through athena_client — no direct boto3 calls here.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from config.settings import (
     DOMAIN_REGISTRY_TABLE,
@@ -48,6 +48,26 @@ def get_domain(domain_name: str) -> dict | None:
 def domain_exists(domain_name: str) -> bool:
     """Return True if domain is already registered."""
     return get_domain(domain_name) is not None
+
+
+def domain_active_filter_sql(column: str = "domain") -> str:
+    """
+    SQL fragment (for a WHERE/HAVING AND-clause) that excludes rows whose
+    domain has been explicitly deactivated via Domain Management's
+    is_active toggle -- the real enforcement point that toggle previously
+    had no effect on (get_enabled_tables/get_archivable_tables and the
+    lifecycle engine's table-selection queries all ignored it).
+
+    Deliberately NOT `domain IN (SELECT ... WHERE is_active=true)`: domain
+    isn't a validated foreign key anywhere in this codebase (register_table
+    takes a free-text string), so an `IN` form would also silently exclude
+    any table whose domain has no matching domain_registry row at all --
+    a different, unintended behavior change. `NOT IN (... WHERE
+    is_active=false)` only blocks domains someone explicitly deactivated,
+    and the `column IS NULL OR` guard keeps a NULL domain passing through
+    rather than being silently dropped by NOT IN's NULL semantics.
+    """
+    return f"({column} IS NULL OR {column} NOT IN (SELECT domain_name FROM {DOMAIN_REGISTRY_TABLE} WHERE is_active = false))"
 
 
 def register_domain(
@@ -204,6 +224,7 @@ def get_enabled_tables(
         "table_format = 'iceberg'",
         # Include both: fully enabled tables OR active dry_run_until ramp-up
         "(hk_enabled = true OR (dry_run_until IS NOT NULL AND dry_run_until >= CURRENT_DATE))",
+        domain_active_filter_sql(),
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")
@@ -298,6 +319,19 @@ def register_table(
 
     hk_int      = 1 if hk_enabled else 0
     archive_int = 1 if archive_enabled else 0
+    # New tables default to hk_enabled=False and ramp up through a dry-run
+    # window before going live (see is_in_dry_run_ramp()) -- previously that
+    # window was never set automatically, so a freshly registered table sat
+    # fully unevaluated until someone ran `enable.py --dry-run-until` by
+    # hand. default_dry_run_ramp_days (Settings > General) now seeds it at
+    # registration time; a caller that explicitly registers hk_enabled=True
+    # is treated as intentionally skipping ramp-up, not overridden.
+    dry_run_until_sql = "NULL"
+    if not hk_enabled:
+        from config.platform_settings import get_setting
+        ramp_days = int(get_setting("default_dry_run_ramp_days", 14) or 0)
+        if ramp_days > 0:
+            dry_run_until_sql = f"DATE '{(date.today() + timedelta(days=ramp_days)).isoformat()}'"
     sql = f"""
         INSERT INTO {STREAM_REGISTRY_TABLE} (
             table_fqn, domain, layer, tier,
@@ -321,7 +355,7 @@ def register_table(
             '{_esc(owner_email)}',
             '{_esc(ci_number)}',
             {hk_int},
-            NULL,
+            {dry_run_until_sql},
             0,
             NULL,
             '{dependent_job_type}',
@@ -397,6 +431,7 @@ def get_archivable_tables(domain: str | None = None) -> list[dict]:
         "layer = 'staging'",
         "table_format = 'iceberg'",
         "environment = 'prod'",
+        domain_active_filter_sql(),
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")

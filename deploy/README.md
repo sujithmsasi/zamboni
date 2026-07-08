@@ -1,18 +1,30 @@
 # Deploy
 
-CI/CD configuration files — generated in Phase 2.
+CI/CD configuration files — generated in Phase 2, extended in Phase 6 with
+the FastAPI/React service and a complete standalone CloudFormation stack.
 
 ## Files (Phase 2)
 
 | File | Purpose |
 |---|---|
-| `buildspec.yml` | CodeBuild — install, test, package |
+| `buildspec.yml` | CodeBuild — install, test, build UI, package |
 | `appspec.yml` | CodeDeploy — lifecycle hooks |
-| `scripts/before_install.sh` | Stop Streamlit service, backup .env |
-| `scripts/after_install.sh` | Restore .env, pip install, permissions |
-| `scripts/app_start.sh` | Restart Streamlit, validate connectivity |
-| `iam_policy.json` | EC2 instance role — hand to DO team |
-| `pipeline_config.md` | DO team setup instructions |
+| `scripts/before_install.sh` | Stop Streamlit + API services, backup .env |
+| `scripts/after_install.sh` | Restore .env, pip install (+ venv for the API service), install both systemd units, permissions |
+| `scripts/app_start.sh` | Restart Streamlit + API, validate connectivity |
+| `iam_policy.json` | EC2 instance role (legacy Streamlit-only) — superseded by `zamboni-cfn.yaml`'s inline role for new deploys |
+| `pipeline_config.md` | Manual DO-team setup instructions (superseded by `zamboni-cfn.yaml` — kept for reference/comparison) |
+
+## Files (Phase 6 — contracts.md §10 R10.3)
+
+| File | Purpose |
+|---|---|
+| `zamboni-cfn.yaml` | Complete standalone CFN stack: EC2 + IAM + DynamoDB lock table + security group + CodePipeline/CodeBuild/CodeDeploy skeleton. Parameterized for org adaptation. |
+| `systemd/zamboni-api.service` | FastAPI/uvicorn unit (:8000), installed by `after_install.sh` |
+| `systemd/zamboni-streamlit.service` | Reference Streamlit unit (venv-based alternative to the heredoc-generated `zamboni-app.service`) |
+
+Run `cfn-lint deploy/zamboni-cfn.yaml` before any deploy — CI gate, zero
+errors required (warnings reported).
 
 ## SQL Setup (one-time)
 
