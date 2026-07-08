@@ -121,7 +121,7 @@ tests/api/           80 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-08 Control-M Integration)
+## Test Baseline (2026-07-06, updated through 2026-07-08 UX Hardening close-out)
 ```
 python -m pytest tests/unit -q   → 562 passed
 python -m pytest tests/api -q    → 88 passed   (separate invocation — see Phase 2 entry)
@@ -1465,3 +1465,46 @@ Frontend-only, tsc/build/lint clean, live-verified.
   treatment as every other documented REALITY-note deviation in this
   file, not something to rewrite after the fact.
 - No engine, API, or other backend changes.
+
+2026-07-08 **UX Hardening wave CLOSED** — tagged `ui-ux-hardening-v1`.
+This wave ran from the 2026-07-07 stream_id removal through today's Fleet
+Health banner swap: all driven by Sujith's live testing of the pages Wave
+1/2a already shipped, rather than new-page construction. 562 unit + 88 api
+tests passing throughout (unchanged all wave — every change in this wave
+was frontend-only), ruff/tsc/build/lint clean at every commit. Summary of
+what shipped (full detail in each dated entry above, not repeated here):
+- **Control-M Integration**: split out of Table Registration into its own
+  page and rebuilt across five rounds of live feedback (Job Registry
+  Edit/mapped-tables-popup/sample-CSV, Manual Bulk Apply's
+  preview-modal + autofill + reset fixes, CSV Workflow's dry-run preview
+  step, the job-mapping CSV blank-column bug, the jobs-not-registering
+  bug).
+- **`stream_id` removed fleet-wide** (org isn't adopting the
+  pipeline-stream-grouping model) — engine, API, schema, and Streamlit
+  legacy page all cleaned in one pass.
+- **Policy Configuration**'s Edit Single Table restructured to an
+  accordion + sticky save footer.
+- **App-wide pagination**: audited and fixed every `<DataGrid>`/plain-
+  `<Table>` instance that had a non-functional or inconsistent page-size
+  changer (Home, Live Activity, Health Dashboard's Governance section),
+  then swept every table's default down to a uniform 15/page.
+- **Home page modals** (Executions Today, Failures 7d) widened to fix a
+  horizontal-scroll bug.
+- **Demo login page** (`ui/src/pages/Login/`, `ui/src/auth.ts`) — a
+  client-side-only gate (static credentials, shown openly on the page
+  itself) in front of the whole dashboard, using the real
+  `zamboni-logo-badge.png` crop of the product logo. "Log out" in the
+  sidebar now does something real (clears the gate) instead of the
+  "not wired up" stub message it was before this wave.
+- **Top banner**: the always-on DRY RUN disclaimer replaced with a Fleet
+  Health status strip (`FleetHealthBanner`, reuses the existing
+  `health_kpis` query).
+- **`[[project_replatform_state]]`** and this session's memory are updated
+  to match as of this close-out — see that file for the current
+  route/page inventory rather than re-deriving it here.
+- Nothing engine-, orchestrator-, gate-, or vacuum.py-related changed at
+  any point in this wave — it is exclusively `ui/` (plus the one-time
+  `stream_id` cleanup, which touched `engine/` and `api/` only to *remove*
+  a field, not add behavior). Wave 2b (Non-Prod Lifecycle, Stale
+  Resources, Settings — still `PlaceholderPage`) is the next open wave
+  whenever Sujith picks it back up.
