@@ -1418,3 +1418,50 @@ Playwright; frontend-only.
 - No changes to engine core, orchestrator, gate logic, vacuum.py, or any
   backend file — this pass is frontend-only, and the login gate has no
   server-side counterpart by design.
+
+2026-07-08 Global top banner swapped: DryRunBanner → FleetHealthBanner.
+Sujith: the always-on "DRY RUN mode — no writes will be executed" banner
+(contracts.md §7, `.claude/prompts/03_react_foundation.md`'s original
+Phase 3 spec) wasn't useful once you already know you're in dry-run —
+wanted the top-of-every-page slot to show something actionable instead.
+Frontend-only, tsc/build/lint clean, live-verified.
+- `components/DryRunBanner.tsx` deleted outright (confirmed zero
+  remaining references first) — not deprecated in place, since it had
+  exactly one call site (`App.tsx`) and no reason to keep a dead
+  component around per the repo's usual "delete, don't stub" convention.
+- `components/FleetHealthBanner.tsx` (new): reuses `useHealthKpis()`
+  (already the Home/Health Dashboard query, so this doesn't add a new
+  endpoint) and its existing `fleet_health.{healthy,needs_attention,
+  at_risk}` counts. Renders nothing while loading or if the fleet has zero
+  registered tables (same null-while-empty convention the old banner
+  used for `dry_run_default`). Tone (mint/amber/red) and exact hex values
+  are pulled from `colors.ts`'s existing `statusTagStyles` AT_RISK/
+  NEEDS_ATTENTION/SUCCESS entries rather than new ones, so it matches the
+  Health Dashboard's own Fleet Health Scorecard colors exactly. Includes
+  a "View report →" link to `/health`, same pattern as Home's Governance
+  card.
+  - **Not currently reflecting the DRY_RUN mode signal at all** — a
+    deliberate scope call, not an oversight: Sujith's ask was to replace
+    it, not fold dry-run status into it. If dry-run visibility turns out
+    to still be wanted somewhere, `DryRunViewer`'s page already covers
+    per-table dry-run status, and `useSystemMode().dry_run_default` is
+    still fetched (env `DEV · LOCAL` tag in the header) — nothing about
+    that signal was removed from the API layer, only the standalone
+    global banner.
+- `App.tsx`: one-line swap in `AppShell` (`<DryRunBanner />` →
+  `<FleetHealthBanner />`), same position (directly under the Header, hides
+  above `<Content>`) — this is a true content swap, not a new banner
+  stacked alongside the old one.
+- Verified live via Playwright against the seeded local DB (fleet_health:
+  3 healthy / 8 needs_attention / 1 at_risk): banner renders red-toned
+  ("1 at risk" wins the tone-priority check), reads "Fleet Health — 3
+  healthy · 8 needs attention · 1 at risk · View report →", and is
+  present identically on both Home and a non-Home page (Table
+  Registration) confirming it's the shared App-level banner, not
+  something Home-specific.
+- `.claude/contracts.md` / `decisions.md` / `prompts/03_react_foundation.md`
+  / `ui_design.md` deliberately left untouched — they're frozen records of
+  the original Phase 3 spec this banner has now diverged from, same
+  treatment as every other documented REALITY-note deviation in this
+  file, not something to rewrite after the fact.
+- No engine, API, or other backend changes.

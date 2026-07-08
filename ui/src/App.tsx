@@ -4,7 +4,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { useSystemMode } from './api/hooks/useSystem';
 import zamboniLogo from './assets/zamboni-logo.png';
 import { isAuthenticated } from './auth';
-import { DryRunBanner } from './components/DryRunBanner';
+import { FleetHealthBanner } from './components/FleetHealthBanner';
 import { UserMenu } from './components/UserMenu';
 import LoginPage from './pages/Login';
 import { ROUTE_CATEGORIES, ROUTES } from './routes';
@@ -126,7 +126,7 @@ function AppShell() {
             </Tag>
           )}
         </Header>
-        <DryRunBanner />
+        <FleetHealthBanner />
         <Content style={{ padding: 16, maxWidth: 'none' }}>
           <Routes>
             {ROUTES.map((r) => (
