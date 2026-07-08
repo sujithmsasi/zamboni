@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Checkbox, Col, Form, Input, message, Row, Select, Skeleton } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Divider, Form, Input, message, Row, Select, Skeleton } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import { useTableDetail, useTablesSearch, useUpdateTable } from '../../../api/hooks/useTables';
@@ -93,7 +93,9 @@ export function EditTableTab() {
                 <Form.Item name="ci_number" label="CI Number"><Input /></Form.Item>
               </Col>
             </Row>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>⚙️ Engine Flags</div>
+            <Divider orientation="left" style={{ margin: '8px 0 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>⚙️ Engine Flags</span>
+            </Divider>
             <Row gutter={16}>
               <Col span={6}>
                 <Form.Item name="hk_enabled" valuePropName="checked" label=" ">
@@ -116,7 +118,9 @@ export function EditTableTab() {
                 </Form.Item>
               </Col>
             </Row>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>🔗 Control-M Integration</div>
+            <Divider orientation="left" style={{ margin: '8px 0 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>🔗 Control-M Integration</span>
+            </Divider>
             <ControlMFields jobNameRequired />
             <Button type="primary" onClick={handleSave} loading={update.isPending}>💾 Save Changes</Button>
           </Form>
