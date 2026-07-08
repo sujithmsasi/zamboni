@@ -5,13 +5,13 @@ import type { ExecutionRow } from '../../api/types';
 import { kpiCardPalette } from '../../colors';
 import { DataGrid } from '../../components/DataGrid';
 import { GovernanceChip } from '../../components/GovernanceChip';
+import { KpiCard } from '../../components/KpiCard';
 import { PageHeader } from '../../components/PageHeader';
 import { StateBadge } from '../../components/StateBadge';
 import { CoverageByDomainChart } from './components/CoverageByDomainChart';
 import { CoverageDetailModal } from './components/CoverageDetailModal';
 import { ExecutionsDetailModal } from './components/ExecutionsDetailModal';
 import { ExecutionTrendChart } from './components/ExecutionTrendChart';
-import { KpiCard } from './components/KpiCard';
 import './home.css';
 import { useHomeData } from './hooks';
 

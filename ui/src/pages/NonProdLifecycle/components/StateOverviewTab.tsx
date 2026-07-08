@@ -1,16 +1,15 @@
 import { useQueries } from '@tanstack/react-query';
-import { Card, Col, Collapse, Row, Select, Skeleton, Statistic } from 'antd';
+import { Col, Collapse, Row, Select, Skeleton } from 'antd';
 import { useState } from 'react';
 import { qs, requestPaged } from '../../../api/client';
 import { useLifecycleConfig, useNonprodList } from '../../../api/hooks/useLifecycle';
 import type { NonprodRow } from '../../../api/types';
+import { nonprodStatePalette } from '../../../colors';
 import { DataGrid } from '../../../components/DataGrid';
+import { KpiCard } from '../../../components/KpiCard';
 import { StateBadge } from '../../../components/StateBadge';
 
 const STATES = ['ACTIVE', 'STALE_CANDIDATE', 'GREENZONE', 'PENDING_DROP'] as const;
-const STATE_ICONS: Record<string, string> = {
-  ACTIVE: '🟢', STALE_CANDIDATE: '🟡', GREENZONE: '🟠', PENDING_DROP: '🔴',
-};
 
 function ThresholdsExplainer() {
   const config = useLifecycleConfig();
@@ -100,13 +99,12 @@ export function StateOverviewTab({ env }: { env: string }) {
       <Row gutter={16} style={{ marginBottom: 16 }}>
         {STATES.map((state, i) => (
           <Col span={6} key={state}>
-            <Card size="small">
-              <Statistic
-                title={`${STATE_ICONS[state]} ${state}`}
-                value={counts[i]?.data?.pagination?.total ?? 0}
-                loading={counts[i]?.isLoading}
-              />
-            </Card>
+            <KpiCard
+              palette={nonprodStatePalette[i]}
+              value={counts[i]?.data?.pagination?.total ?? 0}
+              loading={counts[i]?.isLoading}
+              onClick={() => { setStateFilter(stateFilter === state ? undefined : state); setPage(1); }}
+            />
           </Col>
         ))}
       </Row>

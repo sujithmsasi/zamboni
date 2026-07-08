@@ -39,7 +39,7 @@ export default function DryRunViewerPage() {
           onSearch={setSearch}
           onChange={setFqn}
           options={options}
-          notFoundContent={tables.isLoading ? 'Searching…' : 'No matching tables'}
+          notFoundContent={tables.isLoading ? 'Searching…' : search ? 'No matching tables' : 'Type to search'}
         />
       </Card>
 

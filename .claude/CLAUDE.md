@@ -1870,3 +1870,53 @@ not a live reference back to `policy_templates.json`. Committed as
 `11c628d`, pushed. `zamboni_local.db`'s own pre-existing diff (unrelated
 binary SQLite content, not further investigated) is still sitting
 uncommitted in the working tree as of this entry.
+
+2026-07-08 Ad-hoc UX fixes: Dry Run Viewer's empty search dropdown +
+Non-Prod Lifecycle KPI cards restyled to match Home. Sujith: the table
+search dropdown showed nothing helpful before typing ("maybe the user
+will get confused"), and asked for the Non-Prod Lifecycle State Overview
+cards to become "home page style cards." `tsc`/build/lint clean,
+live-verified via Playwright.
+- **`DryRunViewer/index.tsx`**: the `Select`'s `notFoundContent` said `'No
+  matching tables'` even on first load before any search — misleading,
+  since it reads like a failed search rather than "you haven't searched
+  yet." Two sibling pages (`TableRegistration/EditTableTab.tsx`,
+  `PolicyConfig/EditTableTab.tsx`) already solve this correctly with
+  `'Type to search'`; fixed here to distinguish the two states
+  (`search ? 'No matching tables' : 'Type to search'`) rather than just
+  copying their unconditional string, since theirs would say "Type to
+  search" even after a real zero-result search too.
+- **`KpiCard` promoted from page-local to shared**: moved
+  `pages/Home/components/KpiCard.tsx` → `components/KpiCard.tsx` (`git mv`,
+  history preserved) — it was already generically shaped (palette/value/
+  suffix/loading/onClick props, no Home-specific state inside), just
+  living in the wrong place for a second page to import it. `colors.ts`
+  gained an exported `KpiPalette` interface (was an inline `typeof
+  kpiCardPalette[number]`) so both `kpiCardPalette` and the new
+  `nonprodStatePalette` share one type.
+- **`nonprodStatePalette`** (new, `colors.ts`): 4 entries for ACTIVE/
+  STALE_CANDIDATE/GREENZONE/PENDING_DROP, same coastal-gradient formula as
+  `kpiCardPalette` but color-staged as an escalation (green → amber →
+  orange → red) rather than Home's arbitrary per-metric variety — GREENZONE
+  needed its own distinct orange tone since `statusTagStyles` gives it the
+  identical amber `STALE_CANDIDATE` already uses, which would have made
+  two of the four cards look the same side by side.
+- **`StateOverviewTab.tsx`**: swapped the plain `Card`+`Statistic` grid for
+  `<KpiCard>`, and — since `KpiCard`'s whole visual identity is "this is
+  clickable" (hover lift + `CaretRight` accent) — wired `onClick` to set
+  (or clear, if already selected) the same `stateFilter` state the
+  existing Lifecycle State `Select` below already drives, resetting to
+  page 1. Not asked for explicitly, but shipping a card that *looks*
+  exactly like Home's interactive cards while doing nothing on click would
+  have been a worse, newly-confusing outcome than the one being fixed;
+  the `Select` filter is untouched as a second way to do the same thing.
+  Dropped the `STATE_ICONS` emoji prefixes (Home's KPI labels are plain
+  text, no emoji) and Title-Cased the labels (`ACTIVE` → "Active") to
+  match Home's label style.
+- Live-verified via Playwright (login → screenshot each page): Home's KPI
+  row unaffected by the component move; Non-Prod Lifecycle's State
+  Overview now shows 4 coastal-gradient cards (green/amber/orange/red)
+  with the same hover-arrow affordance as Home; Dry Run Viewer's dropdown
+  shows "Type to search" on click before any input, confirmed via
+  screenshot not just reading the JSX.
+- No backend/engine changes — this pass is `ui/src` only.

@@ -53,7 +53,15 @@ export const statusTagStyles: Record<string, { bg: string; text: string; border:
   DROPPED: { bg: '#F2F4F7', text: '#475467', border: '#D5DCE5' },
 };
 
-export const kpiCardPalette = [
+export interface KpiPalette {
+  label: string;
+  background: string;
+  border: string;
+  circle: string;
+  valueColor: string;
+}
+
+export const kpiCardPalette: KpiPalette[] = [
   {
     label: 'Tables Registered',
     background: 'linear-gradient(145deg, #F0FBFC 0%, #FFFFFF 72%)',
@@ -89,4 +97,38 @@ export const kpiCardPalette = [
     circle: '#F7C8C1',
     valueColor: '#A33A31',
   },
-] as const;
+];
+
+// Non-Prod Lifecycle's 4 states, same coastal-gradient formula as
+// kpiCardPalette above but color-staged to read as an escalation
+// (green -> amber -> orange -> red), matching statusTagStyles' tones.
+export const nonprodStatePalette: KpiPalette[] = [
+  {
+    label: 'Active',
+    background: 'linear-gradient(145deg, #F0FCF6 0%, #FFFFFF 72%)',
+    border: '#CDEEDB',
+    circle: '#BEEBD0',
+    valueColor: '#237A52',
+  },
+  {
+    label: 'Stale Candidate',
+    background: 'linear-gradient(145deg, #FFF9EE 0%, #FFFFFF 72%)',
+    border: '#F5E2BE',
+    circle: '#F7DEAB',
+    valueColor: '#9A6210',
+  },
+  {
+    label: 'Greenzone',
+    background: 'linear-gradient(145deg, #FFF6EC 0%, #FFFFFF 72%)',
+    border: '#FAD9B6',
+    circle: '#FBCB98',
+    valueColor: '#B5590C',
+  },
+  {
+    label: 'Pending Drop',
+    background: 'linear-gradient(145deg, #FFF4F3 0%, #FFFFFF 72%)',
+    border: '#F5D2CE',
+    circle: '#F7C8C1',
+    valueColor: '#A33A31',
+  },
+];
