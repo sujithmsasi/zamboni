@@ -2,7 +2,7 @@ import { Info, LockKey, ShieldCheck, UserCircle } from '@phosphor-icons/react';
 import { Alert, Button, Form, Input } from 'antd';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import zamboniLogo from '../../assets/zamboni-logo.png';
+import zamboniLogo from '../../assets/zamboni-logo-badge.png';
 import { DEMO_CREDENTIALS, login } from '../../auth';
 import './login.css';
 
