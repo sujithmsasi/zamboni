@@ -5,7 +5,7 @@ All queries go through athena_client — no direct boto3 calls here.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from config.settings import (
     DOMAIN_REGISTRY_TABLE,
@@ -298,6 +298,19 @@ def register_table(
 
     hk_int      = 1 if hk_enabled else 0
     archive_int = 1 if archive_enabled else 0
+    # New tables default to hk_enabled=False and ramp up through a dry-run
+    # window before going live (see is_in_dry_run_ramp()) -- previously that
+    # window was never set automatically, so a freshly registered table sat
+    # fully unevaluated until someone ran `enable.py --dry-run-until` by
+    # hand. default_dry_run_ramp_days (Settings > General) now seeds it at
+    # registration time; a caller that explicitly registers hk_enabled=True
+    # is treated as intentionally skipping ramp-up, not overridden.
+    dry_run_until_sql = "NULL"
+    if not hk_enabled:
+        from config.platform_settings import get_setting
+        ramp_days = int(get_setting("default_dry_run_ramp_days", 14) or 0)
+        if ramp_days > 0:
+            dry_run_until_sql = f"DATE '{(date.today() + timedelta(days=ramp_days)).isoformat()}'"
     sql = f"""
         INSERT INTO {STREAM_REGISTRY_TABLE} (
             table_fqn, domain, layer, tier,
@@ -321,7 +334,7 @@ def register_table(
             '{_esc(owner_email)}',
             '{_esc(ci_number)}',
             {hk_int},
-            NULL,
+            {dry_run_until_sql},
             0,
             NULL,
             '{dependent_job_type}',

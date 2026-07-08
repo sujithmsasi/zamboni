@@ -141,6 +141,7 @@ def _safe_defaults() -> dict[str, Any]:
     return {
         "execution_log_retention_days":          90,
         "audit_log_retention_days":              365,
+        "default_dry_run_ramp_days":              14,
         "default_dry_run":                       {"prod": True, "preprod": True,
                                                   "dev": True, "test": True},
         "live_activity_refresh_interval_seconds": 30,

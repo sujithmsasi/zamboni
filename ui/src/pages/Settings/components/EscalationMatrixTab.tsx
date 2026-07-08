@@ -112,25 +112,44 @@ export function EscalationMatrixTab() {
       />
 
       <Drawer
-        title={editing ? `✏️ Editing: ${editing._key}` : '➕ Add New Entry'}
+        title={editing ? '✏️ Edit Escalation Entry' : '➕ Add New Entry'}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={420}
-        extra={
-          <Button type="primary" loading={create.isPending || update.isPending} onClick={handleSubmit}>
-            {editing ? 'Update Entry' : 'Add Entry'}
-          </Button>
+        width={440}
+        // A button in `extra` sits in the same fixed-height header row as
+        // `title` with no wrap protection -- a long lookup key (the drawer's
+        // previous title) wrapped to a second line and ran underneath the
+        // button instead of pushing it down. Moving Save/Cancel into
+        // `footer` (a separate row below the body) makes this impossible
+        // regardless of title or key length.
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => setDrawerOpen(false)}>Cancel</Button>
+            <Button type="primary" loading={create.isPending || update.isPending} onClick={handleSubmit}>
+              {editing ? 'Update Entry' : 'Add Entry'}
+            </Button>
+          </div>
         }
       >
+        {editing && (
+          <div
+            style={{
+              marginBottom: 20, padding: '8px 12px', background: '#F7F9FC',
+              border: '1px solid #EEF4F8', borderRadius: 6, fontSize: 12.5, wordBreak: 'break-all',
+            }}
+          >
+            Editing <strong>{editing._key}</strong>
+          </div>
+        )}
         <Form form={form} layout="vertical">
           <Form.Item
             name="_key" label="Lookup Key"
             rules={[{ required: true, message: 'Lookup Key is required' }]}
-            help="Examples: domain:finance|tier:critical|env:prod, domain:finance, tier:critical|env:prod, default"
+            extra="Examples: domain:finance|tier:critical|env:prod · domain:finance · tier:critical|env:prod · default"
           >
             <Input disabled={!!editing} placeholder="domain:finance|env:prod" />
           </Form.Item>
-          <Form.Item name="primary_owner_email" label="Primary Owner Email">
+          <Form.Item name="primary_owner_email" label="Primary Owner Email" style={{ marginTop: 8 }}>
             <Input placeholder="team-dl@company.com" />
           </Form.Item>
           <Form.Item name="escalation_email" label="Escalation Email">

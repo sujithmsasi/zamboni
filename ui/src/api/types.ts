@@ -446,6 +446,7 @@ export interface StaleOrphanRow {
 export interface PlatformSettings {
   execution_log_retention_days: number;
   audit_log_retention_days: number;
+  default_dry_run_ramp_days: number;
   live_activity_refresh_interval_seconds: number;
   budget_alert_threshold_usd_monthly: number;
   default_dry_run: Record<string, boolean>;
