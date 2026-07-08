@@ -1,37 +1,49 @@
 import { UploadSimple } from '@phosphor-icons/react';
-import { Alert, Button, Col, Input, InputNumber, message, Modal, Row, Select, Table, Tabs, Tag, Upload } from 'antd';
+import { Alert, AutoComplete, Button, Col, Input, InputNumber, message, Modal, Row, Select, Table, Tabs, Tag, Upload } from 'antd';
 import type { UploadRequestOption } from 'rc-upload/lib/interface';
 import { useMemo, useState } from 'react';
-import { useDeleteJob, useImportJobs, useJobs, useUpsertJob } from '../../../../api/hooks/useControlm';
-import { useDomainsList } from '../../../../api/hooks/useDomains';
-import type { JobRow } from '../../../../api/types';
-import { downloadCsv } from '../../../../utils/csv';
+import { useDeleteJob, useImportJobs, useJobs, useUpsertJob } from '../../../api/hooks/useControlm';
+import { useDomainsList } from '../../../api/hooks/useDomains';
+import type { JobRow } from '../../../api/types';
+import { downloadCsv } from '../../../utils/csv';
 
 const JOB_TYPE_OPTIONS = ['controlm', 'glue', 'lambda', 'step_functions', 'airflow', 'other'];
+const JOB_FREQUENCY_OPTIONS = ['hourly', 'daily', 'weekly', 'monthly', 'every_trigger'];
 
 /**
- * Job List (new -- the registry grid used to sit above the Add/Upload forms
- * with no search, no domain filter, and no way to remove a stale entry even
- * though DELETE /api/jobs/{name} already existed unused). Search is
- * server-side (GET /api/jobs?search=, debounced via onSearch); domain/type
- * filters are client-side over the already-small job list, same pattern as
- * CostReport's plain <Table> for bare-array (non-paginated) endpoints.
+ * Job List -- the registry grid used to sit above the Add/Upload forms with
+ * no search, no domain filter, and no way to remove a stale entry. The job
+ * list is small (dozens, not thousands, of registered jobs), so search and
+ * domain/type filters are all client-side over one already-fetched list --
+ * the search box is an AutoComplete so it doubles as a suggestion dropdown
+ * without a second round trip.
  */
 function JobListTab() {
   const [search, setSearch] = useState('');
   const [domain, setDomain] = useState<string | undefined>();
   const [jobType, setJobType] = useState<string | undefined>();
 
-  const jobs = useJobs(search || undefined);
+  const jobs = useJobs();
   const domains = useDomainsList(true);
   const deleteJob = useDeleteJob();
 
   const rows = useMemo(
     () => (jobs.data ?? []).filter(
-      (j) => (!domain || j.domain === domain) && (!jobType || j.job_type === jobType),
+      (j) =>
+        (!search || j.job_name.toLowerCase().includes(search.toLowerCase())) &&
+        (!domain || j.domain === domain) &&
+        (!jobType || j.job_type === jobType),
     ),
-    [jobs.data, domain, jobType],
+    [jobs.data, search, domain, jobType],
   );
+
+  const suggestions = useMemo(() => {
+    const names = Array.from(new Set((jobs.data ?? []).map((j) => j.job_name)));
+    const needle = search.toLowerCase();
+    return (needle ? names.filter((n) => n.toLowerCase().includes(needle)) : names)
+      .slice(0, 20)
+      .map((n) => ({ value: n }));
+  }, [jobs.data, search]);
 
   const handleDelete = (jobName: string) => {
     Modal.confirm({
@@ -50,11 +62,14 @@ function JobListTab() {
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={8}>
-          <Input.Search
+          <AutoComplete
+            style={{ width: '100%' }}
+            options={suggestions}
+            value={search}
+            onChange={setSearch}
             placeholder="Search by job name"
             allowClear
-            onSearch={setSearch}
-            loading={jobs.isFetching}
+            filterOption={false}
           />
         </Col>
         <Col span={8}>
@@ -96,6 +111,7 @@ function JobListTab() {
           { title: 'Job Name', dataIndex: 'job_name', key: 'job_name' },
           { title: 'Type', dataIndex: 'job_type', key: 'job_type' },
           { title: 'Domain', dataIndex: 'domain', key: 'domain' },
+          { title: 'Frequency', dataIndex: 'job_frequency', key: 'job_frequency', render: (v: string) => v || '—' },
           { title: 'Description', dataIndex: 'description', key: 'description' },
           { title: 'Start', dataIndex: 'expected_start_time', key: 'expected_start_time' },
           { title: 'Duration (min)', dataIndex: 'expected_duration_min', key: 'expected_duration_min' },
@@ -123,6 +139,7 @@ function AddSingleJob() {
   const [domain, setDomain] = useState('');
   const [startTime, setStartTime] = useState('');
   const [duration, setDuration] = useState(0);
+  const [jobFrequency, setJobFrequency] = useState<string | undefined>();
   const [description, setDescription] = useState('');
 
   const domains = useDomainsList(true);
@@ -137,11 +154,12 @@ function AddSingleJob() {
       {
         job_name: jobName.trim(), job_type: jobType, domain, description,
         expected_start_time: startTime, expected_duration_min: duration,
+        job_frequency: jobFrequency ?? '',
       },
       {
         onSuccess: (r) => {
           message.success(`✅ ${jobName.trim()} added to registry (audit: ${r.audit_id}).`);
-          setJobName(''); setDomain(''); setStartTime(''); setDuration(0); setDescription('');
+          setJobName(''); setDomain(''); setStartTime(''); setDuration(0); setDescription(''); setJobFrequency(undefined);
         },
         onError: (err) => message.error(err instanceof Error ? err.message : 'Failed.'),
       },
@@ -163,16 +181,22 @@ function AddSingleJob() {
           options={(domains.data ?? []).map((d) => ({ value: d.domain_name, label: d.domain_name }))}
           style={{ marginBottom: 12, width: '100%' }}
         />
-        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected start time (HH:MM)</div>
-        <Input value={startTime} onChange={(e) => setStartTime(e.target.value)} placeholder="02:00" />
+        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job Frequency (optional)</div>
+        <Select
+          allowClear value={jobFrequency} onChange={setJobFrequency}
+          options={JOB_FREQUENCY_OPTIONS.map((f) => ({ value: f, label: f }))}
+          style={{ width: '100%' }}
+        />
       </Col>
       <Col span={8}>
+        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected start time (HH:MM)</div>
+        <Input value={startTime} onChange={(e) => setStartTime(e.target.value)} placeholder="02:00" style={{ marginBottom: 12 }} />
         <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected duration (min)</div>
-        <InputNumber min={0} max={480} style={{ width: '100%', marginBottom: 12 }} value={duration} onChange={(v) => setDuration(v ?? 0)} />
-        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Description</div>
-        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Finance APS ingest pipeline" />
+        <InputNumber min={0} max={480} style={{ width: '100%' }} value={duration} onChange={(v) => setDuration(v ?? 0)} />
       </Col>
-      <Col span={24} style={{ marginTop: 16 }}>
+      <Col span={24} style={{ marginTop: 12 }}>
+        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Description</div>
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Finance APS ingest pipeline" style={{ marginBottom: 12 }} />
         <Button type="primary" loading={upsert.isPending} onClick={handleAdd}>➕ Add Job</Button>
       </Col>
     </Row>
@@ -200,7 +224,7 @@ function BulkUploadJobs() {
       <Alert
         style={{ marginBottom: 16 }} type="info" showIcon
         message="Upload a CSV with your full Control-M job list. Existing jobs are updated (upsert)."
-        description="Required column: job_name. Optional: job_type, domain, description, expected_start_time, expected_duration_min."
+        description="Required column: job_name. Optional: job_type, domain, description, expected_start_time, expected_duration_min, job_frequency."
       />
       <Upload accept=".csv" showUploadList={false} customRequest={customRequest}>
         <Button icon={<UploadSimple size={14} />} loading={importJobs.isPending}>Upload Control-M Jobs CSV</Button>
@@ -209,7 +233,7 @@ function BulkUploadJobs() {
   );
 }
 
-/** Control-M Job Registry (2_Table_Registration.py bc_tab_jobs). */
+/** Control-M Job Registry -- first tab of the Control-M Integration page. */
 export function JobRegistry() {
   return (
     <Tabs

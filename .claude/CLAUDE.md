@@ -1049,3 +1049,92 @@ tests passing (+1 regression test), ruff/tsc/build/lint clean.
   0.
 - No changes to engine core, orchestrator, or gate logic — this is a CSV
   parsing bug fix plus a labeling/ordering clarification only.
+
+2026-07-08 Control-M Integration page: split out of Table Registration into
+its own top-level route, plus a full revamp per Sujith's live UX review.
+562 unit + 83 api tests passing (+2 regression tests), ruff/tsc/build/lint
+all clean, verified live via Playwright end-to-end (register a job through
+Manual Bulk Apply → confirm it shows up in the Job Registry → confirm the
+same via the CSV Workflow's re-exported template).
+- **New route**: `/controlm` ("Control-M Integration", Registry category,
+  `LinkSimple` icon) — `ui/src/pages/ControlMIntegration/`. Table
+  Registration's 5th tab (Bulk Control-M) is gone; its subtitle no longer
+  claims to "manage Control-M integration." The old `TableRegistration/
+  components/BulkControlMTab/` directory is deleted, not deprecated in
+  place — its 4 files moved and were substantially rewritten, not just
+  relocated.
+- **Page structure, 3 tabs in the order Sujith asked for**: Control-M Job
+  Registry (first — it's reference data, "what jobs exist"), Manual Bulk
+  Apply (second), CSV Workflow (third, new — merges the old Export Mapping
+  Template + Import Job Mapping tabs into one guided "Step 1 — Download
+  Template" / "Step 2 — Upload Completed Mapping" flow, since they were
+  always two alternatives for the same goal, not two unrelated features).
+- **Real bug fixed**: jobs applied via Manual Bulk Apply or Import Job
+  Mapping only ever wrote `controlm_pipeline_job`/`controlm_hk_job` onto
+  matched `stream_registry` rows — neither flow ever touched
+  `controlm_jobs`, so a job assigned through either path silently never
+  appeared in the Control-M Job Registry grid, no matter how many tables
+  referenced it. Fixed with `controlm_svc.register_job_if_missing()`
+  (`INSERT OR IGNORE`, not `upsert_job()`'s `INSERT OR REPLACE` — a
+  bulk-apply side effect must never clobber a curated registry entry's
+  description/start-time/frequency), called from `tables_svc.py`'s
+  `bulk_controlm()` and `import_job_mapping()` whenever a real (non
+  dry-run) apply actually matches ≥1 table. Two new regression tests
+  (`test_bulk_controlm_registers_job_in_registry`,
+  `test_job_mapping_import_real_apply_registers_job_in_registry`) exercise
+  both paths against `GET /api/jobs`. `useBulkControlM`/
+  `useImportJobMapping` also now invalidate the `['jobs']` query key so
+  the UI reflects it without a manual refresh.
+- **`job_frequency` added** (Sujith: "Job freq can also be captured") —
+  new `controlm_jobs.job_frequency` column (schema + idempotent ALTER
+  migration in `seed_local_db.py`, `JobUpsertRequest.job_frequency` in
+  `api/models.py`, threaded through `list_jobs`/`upsert_job`/
+  `import_jobs`/`register_job_if_missing` in `controlm_svc.py`). Surfaced
+  in Add Single Job's form, the Job List grid's new Frequency column, and
+  Manual Bulk Apply's Job Details card — the latter is passed through
+  `set_fields.job_frequency` but deliberately never reaches the
+  `stream_registry` UPDATE (it's not a column there); `bulk_controlm()`
+  pulls it back out solely for the job-registration side effect above.
+- **Manual Bulk Apply reordered and reshaped** (Sujith: "Target Tables can
+  be first, preview before entering the control-m detail, which is
+  better?" → yes): "1. Target Tables" now comes before "2. Job Details".
+  "Preview Matching Tables" opens a `Modal` (Sujith: "preview can be a
+  popup also") with the row-selection grid and a "Confirm N Table(s)"
+  button; confirming closes the modal and replaces it with a compact
+  summary `Alert` ("✅ N selected · ⛔ M excluded" + a "Change selection"
+  button that reopens the modal). Apply stays disabled until a selection
+  is confirmed. Control-M Job Name is now an AntD `AutoComplete` (not a
+  plain `Input`) sourced from the job registry — search/select an existing
+  job, or type an entirely new name, which is exactly what
+  `register_job_if_missing()` above then picks up. CI Number moved behind
+  a "+ More options" toggle (Sujith asked whether the section felt
+  cluttered — at 7-8 fields grouped flat, yes; tucking the one
+  genuinely-skippable field away was the fix, not restructuring further).
+- **Job List search → suggestion dropdown** (Sujith: "search by can be a
+  suggestion drop down") — the plain `Input.Search` became an
+  `AutoComplete` fed by the already-fetched job list (client-side, no
+  extra round trip — the registry is a few dozen rows, same reasoning as
+  the existing client-side domain/type filters).
+- **CSV Workflow's stale-preview bug fixed** (Sujith: "already imported
+  details are still there even after saving and navigating away... clear
+  when coming back") — `runImport`'s success handler now clears
+  `report`/`file` state immediately whenever the apply was real
+  (`!dryRun`), not just on unmount. This also incidentally fixes the
+  navigate-away-and-back case, since AntD Tabs keeps inactive panes
+  mounted (documented gotcha) — there was nothing stale left to persist
+  once the state resets right at save time instead of relying on
+  navigation to reset it.
+- **Focused-input styling** (Sujith: "text boxes, when focused, change the
+  colour") — added a global rule in `ui/src/index.css` strengthening
+  AntD's default focus ring (border + soft glow, `colorPrimary` #167D9A)
+  across `Input`/`Select`/`DatePicker`/`InputNumber` app-wide, not just on
+  this page.
+- **Playwright gotcha hit again**: AntD's `AutoComplete`/`Select` render
+  their placeholder as a sibling `<span class="ant-select-selection-
+  placeholder">`, not a native `<input placeholder="...">` attribute —
+  `input[placeholder*="..."]` selectors silently match zero elements
+  against these components (plain `Input`/`Input.Search` are unaffected).
+  Verification scripts now locate these fields via their label text
+  (`.ant-col:has-text('Control-M Job Name')`) and
+  `.ant-select-selection-search-input`, not by placeholder.
+- No changes to engine core, orchestrator, gate logic, or vacuum.py.

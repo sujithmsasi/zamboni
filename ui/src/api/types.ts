@@ -277,6 +277,7 @@ export interface JobRow {
   description: string;
   expected_start_time: string;
   expected_duration_min: number;
+  job_frequency: string;
   active: boolean;
   [key: string]: unknown;
 }

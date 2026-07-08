@@ -7,6 +7,7 @@ import {
   Heartbeat,
   House,
   Lightning,
+  LinkSimple,
   MagnifyingGlass,
   ShieldCheck,
   SquaresFour,
@@ -16,6 +17,7 @@ import {
 } from '@phosphor-icons/react';
 import type { ReactNode } from 'react';
 import AuditLogPage from './pages/AuditLog';
+import ControlMIntegrationPage from './pages/ControlMIntegration';
 import CostReportPage from './pages/CostReport';
 import DomainManagementPage from './pages/DomainManagement';
 import DryRunViewerPage from './pages/DryRunViewer';
@@ -66,6 +68,13 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         icon: TableIcon,
         color: '#4FD1C5',
         element: <TableRegistrationPage />,
+      },
+      {
+        path: '/controlm',
+        label: 'Control-M Integration',
+        icon: LinkSimple,
+        color: '#4FD1C5',
+        element: <ControlMIntegrationPage />,
       },
       {
         path: '/policies',

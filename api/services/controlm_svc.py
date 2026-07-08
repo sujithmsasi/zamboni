@@ -28,7 +28,7 @@ def list_jobs(search: str | None = None) -> list[dict]:
     where = f"WHERE job_name LIKE '%{_esc(search)}%'" if search else ""
     sql = f"""
         SELECT job_name, job_type, domain, description,
-               expected_start_time, expected_duration_min, active
+               expected_start_time, expected_duration_min, job_frequency, active
         FROM {_CTRLM_JOBS_TABLE} {where}
         ORDER BY job_name
     """
@@ -40,14 +40,42 @@ def upsert_job(req: dict, registered_by: str) -> bool:
     run_query(
         f"INSERT OR REPLACE INTO {_CTRLM_JOBS_TABLE} "
         f"(job_name, job_type, domain, description, expected_start_time, "
-        f"expected_duration_min, active, registered_by, created_at, updated_at) "
+        f"expected_duration_min, job_frequency, active, registered_by, created_at, updated_at) "
         f"VALUES ('{_esc(req['job_name'])}', '{_esc(req.get('job_type', 'controlm'))}', "
         f"'{_esc(req.get('domain', ''))}', '{_esc(req.get('description', ''))}', "
         f"'{_esc(req.get('expected_start_time', ''))}', {int(req.get('expected_duration_min', 0))}, "
+        f"'{_esc(req.get('job_frequency', ''))}', "
         f"1, '{_esc(registered_by)}', '{now}', '{now}')",
         workgroup="app", dry_run=False,
     )
     return True
+
+
+def register_job_if_missing(
+    job_name: str, job_type: str = "controlm", domain: str = "", job_frequency: str = "",
+) -> None:
+    """
+    Ensure a job name referenced by Manual Bulk Apply or Import Job Mapping
+    shows up in the Control-M Job Registry -- those flows write job names
+    onto stream_registry rows directly and never touched controlm_jobs,
+    which is why jobs applied there never appeared in the registry grid.
+    INSERT OR IGNORE (not upsert_job's INSERT OR REPLACE): if the job is
+    already registered, its curated description/start-time/frequency is
+    left untouched -- a bulk-apply side effect should never clobber data
+    someone entered by hand in the Job Registry itself.
+    """
+    job_name = job_name.strip()
+    if not job_name:
+        return
+    now = _now()
+    run_query(
+        f"INSERT OR IGNORE INTO {_CTRLM_JOBS_TABLE} "
+        f"(job_name, job_type, domain, description, expected_start_time, "
+        f"expected_duration_min, job_frequency, active, registered_by, created_at, updated_at) "
+        f"VALUES ('{_esc(job_name)}', '{_esc(job_type)}', '{_esc(domain)}', '', "
+        f"'', 0, '{_esc(job_frequency)}', 1, 'auto:bulk_apply', '{now}', '{now}')",
+        workgroup="app", dry_run=False,
+    )
 
 
 def import_jobs(csv_bytes: bytes, registered_by: str) -> dict:
@@ -66,7 +94,7 @@ def import_jobs(csv_bytes: bytes, registered_by: str) -> dict:
 
     for col, default in [
         ("job_type", "controlm"), ("domain", ""), ("description", ""),
-        ("expected_start_time", ""), ("expected_duration_min", 0),
+        ("expected_start_time", ""), ("expected_duration_min", 0), ("job_frequency", ""),
     ]:
         if col not in df.columns:
             df[col] = default

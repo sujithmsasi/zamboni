@@ -264,6 +264,7 @@ class JobUpsertRequest(BaseModel):
     description: str = ""
     expected_start_time: str = ""
     expected_duration_min: int = 0
+    job_frequency: str = ""
 
 
 # ── settings ──────────────────────────────────────────────────────────────────

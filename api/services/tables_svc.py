@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
+from api.services import controlm_svc
 from config.settings import STREAM_REGISTRY_TABLE
 from engine.core import registry
 from engine.core.config import apply_template, infer_template
@@ -190,6 +191,16 @@ def bulk_controlm(filters: dict, set_fields: dict, dry_run: bool) -> int:
     sets.append(f"updated_at = '{_now()}'")
     sql = f"UPDATE {STREAM_REGISTRY_TABLE} SET {', '.join(sets)} {where}"
     run_query(sql, workgroup="app", dry_run=dry_run)
+
+    if not dry_run:
+        job_type = str(set_fields.get("dependent_job_type", "controlm"))
+        domain = str(filters.get("domain") or "")
+        job_frequency = str(set_fields.get("job_frequency", ""))
+        for job_key in ("controlm_pipeline_job", "controlm_hk_job"):
+            job_name = set_fields.get(job_key)
+            if job_name:
+                controlm_svc.register_job_if_missing(str(job_name), job_type, domain, job_frequency)
+
     return count
 
 
@@ -271,6 +282,11 @@ def import_job_mapping(csv_bytes: bytes, dry_run: bool) -> list[dict]:
                     f"updated_at='{now}' {where}",
                     workgroup="app", dry_run=dry_run,
                 )
+                domain = str(filters.get("domain") or "")
+                if pipeline_job:
+                    controlm_svc.register_job_if_missing(pipeline_job, job_type, domain)
+                if hk_job:
+                    controlm_svc.register_job_if_missing(hk_job, job_type, domain)
         report.append({
             "job": str(row.get("controlm_job_name", "")),
             "job_type": str(row.get("job_type", "controlm")),

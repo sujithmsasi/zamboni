@@ -122,6 +122,25 @@ def test_job_mapping_import_blank_table_pattern_column_still_matches(client):
     assert rows[0]["tables_matched"] > 0
 
 
+def test_job_mapping_import_real_apply_registers_job_in_registry(client):
+    """Same regression as test_bulk_controlm_registers_job_in_registry, for
+    the Import Job Mapping path -- see that test's docstring."""
+    job_name = "ACE-TEST-IMPORT-REGISTRY-PRD"
+    csv_bytes = (
+        f"domain,layer,database_name,table_pattern,controlm_job_name\n"
+        f"finance,staging,finance_staging_db,,{job_name}\n"
+    ).encode()
+    files = {"file": ("mapping.csv", io.BytesIO(csv_bytes), "text/csv")}
+    resp = client.post("/api/tables/job-mapping/import?dry_run=false", files=files)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["rows"][0]["tables_matched"] > 0
+
+    jobs_resp = client.get(f"/api/jobs?search={job_name}")
+    assert jobs_resp.status_code == 200
+    names = [j["job_name"] for j in jobs_resp.json()["data"]]
+    assert job_name in names
+
+
 def test_glue_databases(client):
     resp = client.get("/api/glue/databases")
     assert resp.status_code == 200
@@ -178,3 +197,27 @@ def test_bulk_controlm_exclude_fqns(client, a_table_fqn):
     })
     assert resp_excl.status_code == 200
     assert resp_excl.json()["data"]["affected"] == total - 1
+
+
+def test_bulk_controlm_registers_job_in_registry(client, a_table_fqn):
+    """
+    Regression test: Manual Bulk Apply and Import Job Mapping only ever
+    wrote controlm_pipeline_job/controlm_hk_job onto matched stream_registry
+    rows -- they never touched controlm_jobs, so a job applied through
+    either flow never showed up in the Control-M Job Registry grid. A real
+    (non-dry-run) apply should now auto-register the job name.
+    """
+    job_name = "ACE-TEST-BULK-REGISTRY-PRD"
+    table_pattern = a_table_fqn.split(".")[-1]
+    resp = client.post("/api/tables/bulk-controlm", json={
+        "filters": {"pattern": table_pattern},
+        "set_fields": {"controlm_pipeline_job": job_name, "dependent_job_type": "glue"},
+        "dry_run": False,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["data"]["affected"] >= 1
+
+    jobs_resp = client.get(f"/api/jobs?search={job_name}")
+    assert jobs_resp.status_code == 200
+    names = [j["job_name"] for j in jobs_resp.json()["data"]]
+    assert job_name in names

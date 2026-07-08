@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS controlm_jobs (
     environment           TEXT DEFAULT 'prod',
     expected_start_time   TEXT DEFAULT '',
     expected_duration_min INTEGER DEFAULT 0,
+    job_frequency         TEXT DEFAULT '',
     active                INTEGER DEFAULT 1,
     registered_by         TEXT DEFAULT 'system',
     created_at            TEXT,
@@ -886,6 +887,7 @@ def main():
         # contracts.md's locked Athena DDL -- in real mode the current
         # pointer always comes from live Glue Parameters, never this table.
         ("stream_registry",  "metadata_location",        "TEXT"),
+        ("controlm_jobs",    "job_frequency",             "TEXT DEFAULT ''"),
     ]
     from engine.utils.local_db import get_connection as _gc
     _conn = _gc()
