@@ -50,6 +50,26 @@ def domain_exists(domain_name: str) -> bool:
     return get_domain(domain_name) is not None
 
 
+def domain_active_filter_sql(column: str = "domain") -> str:
+    """
+    SQL fragment (for a WHERE/HAVING AND-clause) that excludes rows whose
+    domain has been explicitly deactivated via Domain Management's
+    is_active toggle -- the real enforcement point that toggle previously
+    had no effect on (get_enabled_tables/get_archivable_tables and the
+    lifecycle engine's table-selection queries all ignored it).
+
+    Deliberately NOT `domain IN (SELECT ... WHERE is_active=true)`: domain
+    isn't a validated foreign key anywhere in this codebase (register_table
+    takes a free-text string), so an `IN` form would also silently exclude
+    any table whose domain has no matching domain_registry row at all --
+    a different, unintended behavior change. `NOT IN (... WHERE
+    is_active=false)` only blocks domains someone explicitly deactivated,
+    and the `column IS NULL OR` guard keeps a NULL domain passing through
+    rather than being silently dropped by NOT IN's NULL semantics.
+    """
+    return f"({column} IS NULL OR {column} NOT IN (SELECT domain_name FROM {DOMAIN_REGISTRY_TABLE} WHERE is_active = false))"
+
+
 def register_domain(
     domain_name: str,
     display_name: str,
@@ -204,6 +224,7 @@ def get_enabled_tables(
         "table_format = 'iceberg'",
         # Include both: fully enabled tables OR active dry_run_until ramp-up
         "(hk_enabled = true OR (dry_run_until IS NOT NULL AND dry_run_until >= CURRENT_DATE))",
+        domain_active_filter_sql(),
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")
@@ -410,6 +431,7 @@ def get_archivable_tables(domain: str | None = None) -> list[dict]:
         "layer = 'staging'",
         "table_format = 'iceberg'",
         "environment = 'prod'",
+        domain_active_filter_sql(),
     ]
     if domain:
         conditions.append(f"domain = '{domain}'")
