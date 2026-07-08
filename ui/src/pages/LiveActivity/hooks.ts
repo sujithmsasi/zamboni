@@ -15,7 +15,7 @@ interface LiveActivityFilters {
 
 export function useLiveActivityData(filters: LiveActivityFilters) {
   const [runningPage, setRunningPage] = useState(1);
-  const [runningSize, setRunningSize] = useState(50);
+  const [runningSize, setRunningSize] = useState(15);
   const running = useExecutionsList(
     { page: runningPage, size: runningSize, status: 'RUNNING' },
     REFRESH_MS,
@@ -23,7 +23,7 @@ export function useLiveActivityData(filters: LiveActivityFilters) {
   const onRunningPageChange = (page: number, size: number) => { setRunningPage(page); setRunningSize(size); };
 
   const [recentPage, setRecentPage] = useState(1);
-  const [recentSize, setRecentSize] = useState(100);
+  const [recentSize, setRecentSize] = useState(15);
   // A changed filter can leave `recentPage` pointing past the new result set
   // (e.g. paged to 5 under "hk", then switching to "archival") -- reset to 1
   // whenever the filters themselves change, same convention as ExecutionLog.

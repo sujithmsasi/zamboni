@@ -43,7 +43,7 @@ export default function ExecutionLogPage() {
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [page, setPage] = useState(1);
-  const [size, setSize] = useState(25);
+  const [size, setSize] = useState(15);
 
   const { list } = useExecutionLogData({
     page, size,

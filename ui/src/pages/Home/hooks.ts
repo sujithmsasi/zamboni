@@ -14,17 +14,17 @@ export function useHomeData() {
   const locks = useLocks();
 
   const [recentPage, setRecentPage] = useState(1);
-  const [recentSize, setRecentSize] = useState(10);
+  const [recentSize, setRecentSize] = useState(15);
   const recentExecutions = useRecentExecutions(recentPage, recentSize);
   const onRecentPageChange = (page: number, size: number) => { setRecentPage(page); setRecentSize(size); };
 
   const [todayPage, setTodayPage] = useState(1);
-  const [todaySize, setTodaySize] = useState(50);
+  const [todaySize, setTodaySize] = useState(15);
   const executionsToday = useExecutionsToday(todayPage, todaySize);
   const onExecutionsTodayPageChange = (page: number, size: number) => { setTodayPage(page); setTodaySize(size); };
 
   const [failuresPage, setFailuresPage] = useState(1);
-  const [failuresSize, setFailuresSize] = useState(50);
+  const [failuresSize, setFailuresSize] = useState(15);
   const failures7d = useFailures7d(failuresPage, failuresSize);
   const onFailures7dPageChange = (page: number, size: number) => { setFailuresPage(page); setFailuresSize(size); };
 

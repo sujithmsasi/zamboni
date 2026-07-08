@@ -55,7 +55,7 @@ interface GovernanceSectionProps {
 export function GovernanceSection({ conflicts }: GovernanceSectionProps) {
   const [domain, setDomain] = useState<string | undefined>(undefined);
   const [page, setPage] = useState(1);
-  const [size, setSize] = useState(25);
+  const [size, setSize] = useState(15);
   const conflictsQuery = useConflicts(page, size, domain);
   const domainsQuery = useDomainsList(true);
   const rescan = useRescanConflicts();
@@ -69,7 +69,7 @@ export function GovernanceSection({ conflicts }: GovernanceSectionProps) {
   const today = new Date().toISOString().slice(0, 10);
   const from7d = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
   const [failuresPage, setFailuresPage] = useState(1);
-  const [failuresSize, setFailuresSize] = useState(50);
+  const [failuresSize, setFailuresSize] = useState(15);
   const failuresQuery = useExecutionsList({
     page: failuresPage, size: failuresSize, integrity_status: 'FAILED', from: from7d, to: today,
   });

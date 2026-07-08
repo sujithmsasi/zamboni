@@ -9,14 +9,14 @@ export function useHealthKpis(env = 'prod') {
   });
 }
 
-export function useRecentExecutions(page = 1, size = 10) {
+export function useRecentExecutions(page = 1, size = 15) {
   return useQuery({
     queryKey: ['executions', 'list', { page, size }],
     queryFn: () => requestPaged<ExecutionRow[]>(`/executions${qs({ page, size })}`),
   });
 }
 
-export function useExecutionsToday(page = 1, size = 50) {
+export function useExecutionsToday(page = 1, size = 15) {
   const today = new Date().toISOString().slice(0, 10);
   return useQuery({
     queryKey: ['executions', 'today', today, page, size],
@@ -25,7 +25,7 @@ export function useExecutionsToday(page = 1, size = 50) {
   });
 }
 
-export function useFailures7d(page = 1, size = 50) {
+export function useFailures7d(page = 1, size = 15) {
   const to = new Date().toISOString().slice(0, 10);
   const from = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
   return useQuery({

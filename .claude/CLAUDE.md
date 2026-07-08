@@ -1355,3 +1355,66 @@ clean; frontend-only, no backend files touched.
   as a drive-by.
 - No changes to engine core, orchestrator, gate logic, or vacuum.py — this
   pass is frontend-only.
+
+2026-07-08 App-wide 15/page default + demo login page. Two asks: (1) make
+every table's default page size 15 instead of the mix of 10/20/25/50/100
+inherited from each page's original build, (2) add a login screen in front
+of the dashboard. TypeScript/build/lint clean, live-verified via
+Playwright; frontend-only.
+- **Page-size default sweep**: every `useState` backing a DataGrid's
+  page/size (`ExecutionLog`, `AuditLog`, `LiveActivity`'s two grids,
+  `GovernanceSection`'s two grids, all three of Home's execution grids) and
+  the corresponding default params on `useHealth.ts`'s three hooks now
+  default to 15. Also swept the plain-`<Table>` client-paginated grids
+  (`BrowseRegisterTab`, `JobRegistry`'s mapped-tables/CSV-preview tables,
+  `ManualApply`'s preview modal, `UnhealthyTablesGrid`) from their
+  assorted 10/20 defaults to 15, for one consistent number everywhere a
+  table renders, not just the server-paginated ones. Left three
+  deliberately-unpaginated spots alone (`TemplatesTab/ViewAll`'s
+  `pagination={false}`, `DomainManagement`/`CostReport`/`LocksStrip`'s
+  bare-array grids that were already 15) — `CostReport` and
+  `DomainManagement` were already at 15 from earlier work, not touched.
+- **Login page** (`ui/src/pages/Login/`, new) + `ui/src/auth.ts` (new): a
+  client-side-only demo gate — `localStorage` flag, one static credential
+  pair (`admin` / `Zamboni@2026`, shown openly on the login screen itself
+  in a "Demo credentials" hint, since there's no real secret to protect
+  here and hiding it would only make the demo harder to hand off). This is
+  **not** real authentication and doesn't touch `api/deps.py::
+  get_current_user()` (still the env-var actor stub audit events use,
+  contracts.md D5's real OIDC seam for later) — it's trivially bypassed
+  from devtools by design, purely to keep the dashboard from being wide
+  open when demoed live.
+  - `App.tsx` restructured: the previous single `App` component (Sider +
+    Header + routed Content) is now `AppShell`; a new top-level `App`
+    routes `/login` to `LoginPage` and everything else through a
+    `RequireAuth` wrapper that redirects to `/login` (remembering the
+    original target via router state) when `isAuthenticated()` is false.
+  - `components/UserMenu.tsx`: "Log out" previously showed a
+    `message.info` explaining real logout wasn't wired up (honest-stub
+    convention, `.claude/decisions.md`) — now that a login gate exists,
+    that message would be actively wrong, so it was replaced with a real
+    `logout()` + redirect to `/login`. The displayed name is still
+    `mode.user` (the backend actor), not the locally-entered login
+    username — the two identities are deliberately kept separate rather
+    than conflated, since only the backend one is what audit events
+    actually record.
+  - Design: full-viewport dark navy→teal gradient with two animated
+    blurred "aurora" blobs (mint + teal) and a faint grid texture, a
+    glassmorphic card (`backdrop-filter: blur`) with the existing
+    `assets/zamboni-logo.png` in a soft glowing ring, AntD `Form` styled to
+    match the dark surface (not the light-theme default), a gradient
+    primary button, and a shake animation + `Alert` on a failed attempt.
+    Deliberately restrained relative to a consumer-app login (no confetti/
+    particle effects) to match the rest of the app's enterprise-governance
+    tone.
+  - Verified live via Playwright: visiting any in-app route unauthenticated
+    redirects to `/login`; a wrong password shows the error alert (shake
+    confirmed via the applied CSS class, not just the alert); the correct
+    static credentials redirect back to the originally requested route
+    (tested via `/health`, not just `/`); Execution Log's default page
+    size reads "15 / page" on first load; Log out returns to `/login` and
+    a subsequent visit to `/health` redirects again, confirming the gate
+    re-locks rather than leaking a stale authenticated state.
+- No changes to engine core, orchestrator, gate logic, vacuum.py, or any
+  backend file — this pass is frontend-only, and the login gate has no
+  server-side counterpart by design.

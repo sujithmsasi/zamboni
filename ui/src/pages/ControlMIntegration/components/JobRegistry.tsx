@@ -23,7 +23,7 @@ function MappedTablesModal({ jobName, onClose }: { jobName: string | null; onClo
         loading={mapped.isLoading}
         dataSource={mapped.data ?? []}
         rowKey="table_fqn"
-        pagination={(mapped.data?.length ?? 0) > 10 ? { pageSize: 10 } : false}
+        pagination={(mapped.data?.length ?? 0) > 15 ? { pageSize: 15 } : false}
         locale={{ emptyText: 'No tables currently reference this job.' }}
         columns={[
           { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn' },
@@ -434,7 +434,7 @@ function BulkUploadJobs() {
             dataSource={previewRows}
             rowKey="job_name"
             rowSelection={{ selectedRowKeys: selectedNames, onChange: (keys) => setSelectedNames(keys as string[]) }}
-            pagination={previewRows.length > 10 ? { pageSize: 10 } : false}
+            pagination={previewRows.length > 15 ? { pageSize: 15 } : false}
             columns={[
               { title: 'Job Name', dataIndex: 'job_name', key: 'job_name' },
               { title: 'Type', dataIndex: 'job_type', key: 'job_type' },

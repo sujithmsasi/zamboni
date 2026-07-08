@@ -196,7 +196,7 @@ export function BrowseRegisterTab() {
             dataSource={tables}
             rowKey="table_fqn"
             rowSelection={{ selectedRowKeys: selectedFqns, onChange: (keys) => setSelectedFqns(keys as string[]) }}
-            pagination={tables.length > 20 ? { pageSize: 20 } : false}
+            pagination={tables.length > 15 ? { pageSize: 15 } : false}
             style={{ marginBottom: 16 }}
           />
 

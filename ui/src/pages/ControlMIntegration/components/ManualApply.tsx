@@ -195,7 +195,7 @@ export function ManualApply() {
             { title: 'Layer', dataIndex: 'layer', key: 'layer' },
             { title: 'Tier', dataIndex: 'tier', key: 'tier' },
           ]}
-          pagination={modalRows.length > 10 ? { pageSize: 10 } : false}
+          pagination={modalRows.length > 15 ? { pageSize: 15 } : false}
         />
       </Modal>
 
