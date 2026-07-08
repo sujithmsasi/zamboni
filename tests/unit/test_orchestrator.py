@@ -17,7 +17,6 @@ TABLE_ROW = {
     "domain":      "finance",
     "layer":       "staging",
     "environment": "prod",
-    "stream_id":   "s1",
 }
 
 # Gates 1-3 disabled + every_trigger frequency -- isolates the tests to the

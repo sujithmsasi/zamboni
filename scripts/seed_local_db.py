@@ -65,7 +65,6 @@ CREATE TABLE IF NOT EXISTS domain_registry (
 "stream_registry": """
 CREATE TABLE IF NOT EXISTS stream_registry (
     table_fqn               TEXT PRIMARY KEY,
-    stream_id               TEXT,
     domain                  TEXT,
     layer                   TEXT,
     tier                    TEXT,
@@ -105,6 +104,7 @@ CREATE TABLE IF NOT EXISTS controlm_jobs (
     environment           TEXT DEFAULT 'prod',
     expected_start_time   TEXT DEFAULT '',
     expected_duration_min INTEGER DEFAULT 0,
+    job_frequency         TEXT DEFAULT '',
     active                INTEGER DEFAULT 1,
     registered_by         TEXT DEFAULT 'system',
     created_at            TEXT,
@@ -140,7 +140,6 @@ CREATE TABLE IF NOT EXISTS execution_log (
     engine                  TEXT,
     operation               TEXT,
     table_fqn               TEXT,
-    stream_id               TEXT,
     domain                  TEXT,
     layer                   TEXT,
     tier                    TEXT,
@@ -366,43 +365,43 @@ def seed_stream_registry() -> list[dict]:
 
     # ── Finance pipeline: APS payment stream ─────────────────────────────────
     fin_aps = [
-        ("glue_catalog.finance_staging_db.fin_aps_payment_stg",  "staging",  "critical", "STR-FIN-APS-0001", "finance_staging_db",  "ACE-DA-FIN-APS-INGEST-PRD",    "ACE-DA-FIN-APS-INGEST-PRD",     "ACE-DA-FIN-APS-HK-PRD",  "daily"),
-        ("glue_catalog.finance_datalake_db.fin_aps_payment_dl",  "datalake", "critical", "STR-FIN-APS-0001", "finance_datalake_db", "ACE-DA-FIN-APS-TRANSFORM-PRD", "ACE-DA-FIN-APS-INGEST-PRD",     "ACE-DA-FIN-APS-HK-PRD",  "daily"),
-        ("glue_catalog.finance_base_db.fin_aps_payment_scd2",    "base",     "critical", "STR-FIN-APS-0001", "finance_base_db",     "ACE-DA-FIN-APS-SCD2-PRD",      "ACE-DA-FIN-APS-TRANSFORM-PRD",  "ACE-DA-FIN-APS-HK-PRD",  "daily"),
-        ("glue_catalog.finance_master_db.fin_payment_master",    "master",   "standard", "STR-FIN-ENT-0001", "finance_master_db",   "ACE-DA-FIN-ENT-MASTER-PRD",    "ACE-DA-FIN-APS-SCD2-PRD",       "ACE-DA-FIN-HK-PRD",      "weekly"),
+        ("glue_catalog.finance_staging_db.fin_aps_payment_stg",  "staging",  "critical", "finance_staging_db",  "ACE-DA-FIN-APS-INGEST-PRD",    "ACE-DA-FIN-APS-INGEST-PRD",     "ACE-DA-FIN-APS-HK-PRD",  "daily"),
+        ("glue_catalog.finance_datalake_db.fin_aps_payment_dl",  "datalake", "critical", "finance_datalake_db", "ACE-DA-FIN-APS-TRANSFORM-PRD", "ACE-DA-FIN-APS-INGEST-PRD",     "ACE-DA-FIN-APS-HK-PRD",  "daily"),
+        ("glue_catalog.finance_base_db.fin_aps_payment_scd2",    "base",     "critical", "finance_base_db",     "ACE-DA-FIN-APS-SCD2-PRD",      "ACE-DA-FIN-APS-TRANSFORM-PRD",  "ACE-DA-FIN-APS-HK-PRD",  "daily"),
+        ("glue_catalog.finance_master_db.fin_payment_master",    "master",   "standard", "finance_master_db",   "ACE-DA-FIN-ENT-MASTER-PRD",    "ACE-DA-FIN-APS-SCD2-PRD",       "ACE-DA-FIN-HK-PRD",      "weekly"),
     ]
 
     # ── Finance: claims stream ────────────────────────────────────────────────
     fin_claims = [
-        ("glue_catalog.finance_staging_db.fin_claims_stg",       "staging",  "standard", "STR-FIN-CLM-0001", "finance_staging_db",  "ACE-DA-FIN-CLM-INGEST-PRD",    "ACE-DA-FIN-CLM-INGEST-PRD",    "ACE-DA-FIN-CLM-HK-PRD",  "daily"),
-        ("glue_catalog.finance_datalake_db.fin_claims_dl",        "datalake", "standard", "STR-FIN-CLM-0001", "finance_datalake_db", "ACE-DA-FIN-CLM-TRANSFORM-PRD", "ACE-DA-FIN-CLM-INGEST-PRD",    "ACE-DA-FIN-CLM-HK-PRD",  "daily"),
-        ("glue_catalog.finance_base_db.fin_claims_base",          "base",     "standard", "STR-FIN-CLM-0001", "finance_base_db",     "ACE-DA-FIN-CLM-BASE-PRD",      "ACE-DA-FIN-CLM-TRANSFORM-PRD", "ACE-DA-FIN-CLM-HK-PRD",  "weekly"),
+        ("glue_catalog.finance_staging_db.fin_claims_stg",       "staging",  "standard", "finance_staging_db",  "ACE-DA-FIN-CLM-INGEST-PRD",    "ACE-DA-FIN-CLM-INGEST-PRD",    "ACE-DA-FIN-CLM-HK-PRD",  "daily"),
+        ("glue_catalog.finance_datalake_db.fin_claims_dl",        "datalake", "standard", "finance_datalake_db", "ACE-DA-FIN-CLM-TRANSFORM-PRD", "ACE-DA-FIN-CLM-INGEST-PRD",    "ACE-DA-FIN-CLM-HK-PRD",  "daily"),
+        ("glue_catalog.finance_base_db.fin_claims_base",          "base",     "standard", "finance_base_db",     "ACE-DA-FIN-CLM-BASE-PRD",      "ACE-DA-FIN-CLM-TRANSFORM-PRD", "ACE-DA-FIN-CLM-HK-PRD",  "weekly"),
     ]
 
     # ── ERS: booking stream ───────────────────────────────────────────────────
     ers_bkg = [
-        ("glue_catalog.ers_staging_db.ers_booking_stg",           "staging",  "critical", "STR-ERS-BKG-0001", "ers_staging_db",  "ACE-DA-ERS-BKG-INGEST-PRD",    "ACE-DA-ERS-BKG-INGEST-PRD",    "ACE-DA-ERS-BKG-HK-PRD",  "every_trigger"),
-        ("glue_catalog.ers_datalake_db.ers_booking_dl",            "datalake", "critical", "STR-ERS-BKG-0001", "ers_datalake_db", "ACE-DA-ERS-BKG-TRANSFORM-PRD", "ACE-DA-ERS-BKG-INGEST-PRD",    "ACE-DA-ERS-BKG-HK-PRD",  "daily"),
-        ("glue_catalog.ers_datalake_db.ers_inventory_dl",          "datalake", "standard", "STR-ERS-INV-0001", "ers_datalake_db", "ACE-DA-ERS-INV-TRANSFORM-PRD", "ACE-DA-ERS-INV-INGEST-PRD",    "ACE-DA-ERS-HK-PRD",      "daily"),
+        ("glue_catalog.ers_staging_db.ers_booking_stg",           "staging",  "critical", "ers_staging_db",  "ACE-DA-ERS-BKG-INGEST-PRD",    "ACE-DA-ERS-BKG-INGEST-PRD",    "ACE-DA-ERS-BKG-HK-PRD",  "every_trigger"),
+        ("glue_catalog.ers_datalake_db.ers_booking_dl",            "datalake", "critical", "ers_datalake_db", "ACE-DA-ERS-BKG-TRANSFORM-PRD", "ACE-DA-ERS-BKG-INGEST-PRD",    "ACE-DA-ERS-BKG-HK-PRD",  "daily"),
+        ("glue_catalog.ers_datalake_db.ers_inventory_dl",          "datalake", "standard", "ers_datalake_db", "ACE-DA-ERS-INV-TRANSFORM-PRD", "ACE-DA-ERS-INV-INGEST-PRD",    "ACE-DA-ERS-HK-PRD",      "daily"),
     ]
 
     # ── Membership: profile stream ────────────────────────────────────────────
     mbr = [
-        ("glue_catalog.membership_staging_db.mbr_profile_stg",    "staging",  "standard", "STR-MBR-PRF-0001", "membership_staging_db", "ACE-DA-MBR-PRF-INGEST-PRD",    "ACE-DA-MBR-PRF-INGEST-PRD",    "ACE-DA-MBR-HK-PRD",  "daily"),
-        ("glue_catalog.membership_staging_db.mbr_activity_stg",   "staging",  "low",      "STR-MBR-ACT-0001", "membership_staging_db", "ACE-DA-MBR-ACT-INGEST-PRD",    "ACE-DA-MBR-ACT-INGEST-PRD",    "ACE-DA-MBR-HK-PRD",  "weekly"),
+        ("glue_catalog.membership_staging_db.mbr_profile_stg",    "staging",  "standard", "membership_staging_db", "ACE-DA-MBR-PRF-INGEST-PRD",    "ACE-DA-MBR-PRF-INGEST-PRD",    "ACE-DA-MBR-HK-PRD",  "daily"),
+        ("glue_catalog.membership_staging_db.mbr_activity_stg",   "staging",  "low",      "membership_staging_db", "ACE-DA-MBR-ACT-INGEST-PRD",    "ACE-DA-MBR-ACT-INGEST-PRD",    "ACE-DA-MBR-HK-PRD",  "weekly"),
     ]
 
     # ── Claims: flat structure (no master) ────────────────────────────────────
     clm = [
-        ("glue_catalog.claims_staging_db.clm_incident_stg",       "staging",  "standard", "STR-CLM-INC-0001", "claims_staging_db", "ACE-DA-CLM-INC-INGEST-PRD",    "ACE-DA-CLM-INC-INGEST-PRD",    "ACE-DA-CLM-HK-PRD",  "daily"),
-        ("glue_catalog.claims_staging_db.clm_settlement_stg",     "staging",  "standard", "STR-CLM-STL-0001", "claims_staging_db", "ACE-DA-CLM-STL-INGEST-PRD",    "ACE-DA-CLM-STL-INGEST-PRD",    "ACE-DA-CLM-HK-PRD",  "daily"),
+        ("glue_catalog.claims_staging_db.clm_incident_stg",       "staging",  "standard", "claims_staging_db", "ACE-DA-CLM-INC-INGEST-PRD",    "ACE-DA-CLM-INC-INGEST-PRD",    "ACE-DA-CLM-HK-PRD",  "daily"),
+        ("glue_catalog.claims_staging_db.clm_settlement_stg",     "staging",  "standard", "claims_staging_db", "ACE-DA-CLM-STL-INGEST-PRD",    "ACE-DA-CLM-STL-INGEST-PRD",    "ACE-DA-CLM-HK-PRD",  "daily"),
     ]
 
     # ── Tables with issues (circuit breaker, disabled, ramp-up) ──────────────
     special = [
-        ("glue_catalog.finance_datalake_db.fin_reconcile_dl",     "datalake", "low",      "STR-FIN-REC-0001", "finance_datalake_db", "ACE-DA-FIN-REC-TRANSFORM-PRD", "ACE-DA-FIN-REC-INGEST-PRD",    "ACE-DA-FIN-HK-PRD",  "weekly"),
-        ("glue_catalog.ers_staging_db.ers_pricing_stg",           "staging",  "low",      "STR-ERS-PRC-0001", "ers_staging_db",      "ACE-DA-ERS-PRC-INGEST-PRD",    "ACE-DA-ERS-PRC-INGEST-PRD",    "ACE-DA-ERS-HK-PRD",  "daily"),
-        ("glue_catalog.membership_staging_db.mbr_rewards_stg",    "staging",  "low",      "STR-MBR-RWD-0001", "membership_staging_db", "ACE-DA-MBR-RWD-INGEST-PRD",  "ACE-DA-MBR-RWD-INGEST-PRD",    "ACE-DA-MBR-HK-PRD",  "monthly"),
+        ("glue_catalog.finance_datalake_db.fin_reconcile_dl",     "datalake", "low",      "finance_datalake_db", "ACE-DA-FIN-REC-TRANSFORM-PRD", "ACE-DA-FIN-REC-INGEST-PRD",    "ACE-DA-FIN-HK-PRD",  "weekly"),
+        ("glue_catalog.ers_staging_db.ers_pricing_stg",           "staging",  "low",      "ers_staging_db",      "ACE-DA-ERS-PRC-INGEST-PRD",    "ACE-DA-ERS-PRC-INGEST-PRD",    "ACE-DA-ERS-HK-PRD",  "daily"),
+        ("glue_catalog.membership_staging_db.mbr_rewards_stg",    "staging",  "low",      "membership_staging_db", "ACE-DA-MBR-RWD-INGEST-PRD",  "ACE-DA-MBR-RWD-INGEST-PRD",    "ACE-DA-MBR-HK-PRD",  "monthly"),
     ]
 
     all_groups = fin_aps + fin_claims + ers_bkg + mbr + clm + special
@@ -421,7 +420,7 @@ def seed_stream_registry() -> list[dict]:
         "s3://zamboni-metadata-demo/finance_master_db/fin_payment_master/"
         "metadata/00042-c9f1a2e0-cur.metadata.json"
     )
-    for i, (fqn, layer, tier, stream_id, db_name,
+    for i, (fqn, layer, tier, db_name,
             pipeline_job, dep_job, hk_job, freq) in enumerate(all_groups):
 
         domain = fqn.split(".")[1].split("_")[0]
@@ -440,7 +439,6 @@ def seed_stream_registry() -> list[dict]:
 
         tables.append({
             "table_fqn":               fqn,
-            "stream_id":               stream_id,
             "domain":                  domain,
             "layer":                   layer,
             "tier":                    tier,
@@ -552,7 +550,6 @@ def seed_execution_log(stream_rows: list[dict]) -> list[dict]:
                     "engine":           "hk",
                     "operation":        op,
                     "table_fqn":        fqn,
-                    "stream_id":        tbl.get("stream_id", ""),
                     "domain":           domain,
                     "layer":            layer,
                     "tier":             tier,
@@ -605,7 +602,6 @@ def seed_rollback_demo_rows(stream_rows: list[dict]) -> list[dict]:
             "engine":                   "hk",
             "operation":                op,
             "table_fqn":                fqn,
-            "stream_id":                row.get("stream_id", ""),
             "domain":                   row["domain"],
             "layer":                    row["layer"],
             "tier":                     row["tier"],
@@ -692,7 +688,6 @@ def seed_archival_demo_rows(stream_rows: list[dict]) -> list[dict]:
             "engine":           "archival",
             "operation":        "export_then_delete",
             "table_fqn":        tbl["table_fqn"],
-            "stream_id":        tbl.get("stream_id", ""),
             "domain":           tbl["domain"],
             "layer":            tbl["layer"],
             "tier":             tbl["tier"],
@@ -892,6 +887,7 @@ def main():
         # contracts.md's locked Athena DDL -- in real mode the current
         # pointer always comes from live Glue Parameters, never this table.
         ("stream_registry",  "metadata_location",        "TEXT"),
+        ("controlm_jobs",    "job_frequency",             "TEXT DEFAULT ''"),
     ]
     from engine.utils.local_db import get_connection as _gc
     _conn = _gc()

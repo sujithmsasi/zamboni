@@ -225,7 +225,6 @@ class ArchivalEngine(BaseEngine):
             engine="archival",
             operation="archival",
             table_fqn=table_row.get("table_fqn", ""),
-            stream_id=table_row.get("stream_id"),
             domain=table_row.get("domain", ""),
             layer=table_row.get("layer", "staging"),
             tier=table_row.get("tier", "standard"),

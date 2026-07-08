@@ -41,6 +41,10 @@ CONTRACT_ROUTES = [
     ("GET", "/api/jobs"),
     ("POST", "/api/jobs"),
     ("POST", "/api/jobs/import"),
+    # > ADDED (Control-M Integration follow-up, 2026-07-08): drill-in for
+    # Job List's "Tables Mapped" count -- see contracts.md's note under
+    # routers/controlm.py.
+    ("GET", "/api/jobs/{name}/tables"),
     ("DELETE", "/api/jobs/{name}"),
     ("GET", "/api/settings"),
     ("PUT", "/api/settings"),
@@ -86,4 +90,4 @@ def test_route_count_matches_contract():
     """Belt-and-braces: total method+path count should match the 50 defined here
     (44 from contracts.md §6 + 4 domains routes added in Phase 4 + 2 template
     routes added in Phase 5a)."""
-    assert len(CONTRACT_ROUTES) == 50
+    assert len(CONTRACT_ROUTES) == 51

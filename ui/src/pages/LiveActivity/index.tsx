@@ -46,7 +46,11 @@ const STATUS_OPTIONS = ['SUCCESS', 'FAILURE', 'SKIPPED', 'DRY_RUN', 'RUNNING'].m
 export default function LiveActivityPage() {
   const [engine, setEngine] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<string | undefined>(undefined);
-  const { running, recent, locks } = useLiveActivityData({ engine, status });
+  const {
+    running, onRunningPageChange,
+    recent, onRecentPageChange,
+    locks,
+  } = useLiveActivityData({ engine, status });
 
   return (
     <div>
@@ -74,6 +78,7 @@ export default function LiveActivityPage() {
           queryResult={running}
           rowKey="execution_id"
           emptyText="No engines currently running."
+          onPageChange={onRunningPageChange}
         />
       </Card>
 
@@ -83,6 +88,7 @@ export default function LiveActivityPage() {
           queryResult={recent}
           rowKey="execution_id"
           emptyText="No operations found with the selected filters."
+          onPageChange={onRecentPageChange}
           toolbar={
             <Space>
               <Select placeholder="Engine" allowClear style={{ width: 150 }} value={engine} onChange={setEngine} options={ENGINE_OPTIONS} />

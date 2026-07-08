@@ -50,7 +50,7 @@ export default function AuditLogPage() {
   const [actor, setActor] = useState('');
   const [statusFilter, setStatusFilter] = useState<string[]>(['SUCCESS', 'FAILURE', 'REJECTED']);
   const [page, setPage] = useState(1);
-  const [size, setSize] = useState(50);
+  const [size, setSize] = useState(15);
 
   const today = new Date().toISOString().slice(0, 10);
   const from = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);

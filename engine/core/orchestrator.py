@@ -103,7 +103,7 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
     def _write(operation: str, status: str, **kw) -> None:
         entry = LogEntry(
             run_id=run_id, engine="hk", operation=operation, table_fqn=fqn,
-            stream_id=table_row.get("stream_id"), domain=table_row.get("domain", ""),
+            domain=table_row.get("domain", ""),
             layer=table_row.get("layer", ""), tier=tier,
             environment=table_row.get("environment", "prod"),
             status=status, dry_run=dry_run, **kw,
@@ -159,7 +159,7 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
         execution_log.write(
             LogEntry(
                 run_id=run_id, engine="hk", operation="hk_run", table_fqn=fqn,
-                stream_id=table_row.get("stream_id"), domain=table_row.get("domain", ""),
+                domain=table_row.get("domain", ""),
                 layer=table_row.get("layer", ""), tier=tier,
                 environment=table_row.get("environment", "prod"),
                 status="RUNNING", dry_run=dry_run, lock_id=lock_id,

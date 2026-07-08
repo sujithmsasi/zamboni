@@ -28,12 +28,20 @@ def upsert_job(req: JobUpsertRequest, actor: str = Depends(get_current_user)):
 
 
 @router.post("/api/jobs/import")
-async def import_jobs(file: UploadFile, actor: str = Depends(get_current_user)):
+async def import_jobs(
+    file: UploadFile, dry_run: bool = False, exclude: str | None = None,
+    actor: str = Depends(get_current_user),
+):
     content = await file.read()
+    exclude_job_names = exclude.split(",") if exclude else None
     try:
-        result = controlm_svc.import_jobs(content, registered_by=actor)
+        result = controlm_svc.import_jobs(
+            content, registered_by=actor, dry_run=dry_run, exclude_job_names=exclude_job_names,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    if dry_run:
+        return envelope(result)
     event = AuditEvent(
         actor=actor, action_type=AuditAction.TABLE_REGISTER, page_source="api",
         target_type="controlm_job", target_id=file.filename or "upload",
@@ -42,6 +50,11 @@ async def import_jobs(file: UploadFile, actor: str = Depends(get_current_user)):
     )
     audit(event)
     return envelope({**result, "audit_id": event.audit_id})
+
+
+@router.get("/api/jobs/{name}/tables")
+def get_job_mapped_tables(name: str):
+    return envelope(controlm_svc.get_mapped_tables(name))
 
 
 @router.delete("/api/jobs/{name}")

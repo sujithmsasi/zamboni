@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
+from api.services import controlm_svc
 from config.settings import STREAM_REGISTRY_TABLE
 from engine.core import registry
 from engine.core.config import apply_template, infer_template
@@ -81,7 +82,7 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
     ok = registry.register_table(
         table_fqn=req["table_fqn"], domain=req["domain"], layer=req["layer"], tier=req["tier"],
         environment=req.get("environment", "prod"), table_format=req.get("table_format", "iceberg"),
-        stream_id=req.get("stream_id"), owner_email=req.get("owner_email", ""),
+        owner_email=req.get("owner_email", ""),
         ci_number=req.get("ci_number", ""), hk_enabled=req.get("hk_enabled", False),
         archive_enabled=req.get("archive_enabled", False),
         archive_retention_days=req.get("archive_retention_days"),
@@ -101,7 +102,7 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
 
 
 _UPDATABLE_FIELDS = {
-    "domain", "layer", "tier", "owner_email", "ci_number", "stream_id",
+    "domain", "layer", "tier", "owner_email", "ci_number",
     "hk_enabled", "archive_enabled", "lifecycle_enabled", "processing_cadence",
     "controlm_pipeline_job", "controlm_hk_job", "dependent_on_controlm_job",
     "dependent_job_type", "controlm_job_start_time", "controlm_expected_duration_min",
@@ -160,7 +161,7 @@ def _build_bulk_where(filters: dict) -> str:
 _BULK_SETTABLE = {
     "controlm_pipeline_job", "controlm_hk_job", "dependent_on_controlm_job",
     "dependent_job_type", "controlm_job_start_time", "controlm_expected_duration_min",
-    "ci_number", "stream_id",
+    "ci_number",
     # Engine Flags "Bulk Apply" sub-tab reuses this same filter+set mechanism
     # rather than a second bulk endpoint -- domain/layer/database_name filters
     # are identical, only the set_fields differ.
@@ -190,6 +191,16 @@ def bulk_controlm(filters: dict, set_fields: dict, dry_run: bool) -> int:
     sets.append(f"updated_at = '{_now()}'")
     sql = f"UPDATE {STREAM_REGISTRY_TABLE} SET {', '.join(sets)} {where}"
     run_query(sql, workgroup="app", dry_run=dry_run)
+
+    if not dry_run:
+        job_type = str(set_fields.get("dependent_job_type", "controlm"))
+        domain = str(filters.get("domain") or "")
+        job_frequency = str(set_fields.get("job_frequency", ""))
+        for job_key in ("controlm_pipeline_job", "controlm_hk_job"):
+            job_name = set_fields.get(job_key)
+            if job_name:
+                controlm_svc.register_job_if_missing(str(job_name), job_type, domain, job_frequency)
+
     return count
 
 
@@ -218,6 +229,11 @@ def import_job_mapping(csv_bytes: bytes, dry_run: bool) -> list[dict]:
     df.dropna(how="all", inplace=True)
     df.reset_index(drop=True, inplace=True)
     df.columns = [c.strip().lower() for c in df.columns]
+    # A column left entirely blank in the CSV (e.g. table_pattern) is read by
+    # pandas as all-NaN float64, not object dtype -- the object-dtype-only
+    # loop below would skip it, leaving the raw NaN to later stringify as the
+    # literal text "nan" and get used as a LIKE pattern that matches nothing.
+    df = df.fillna("")
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip().replace({"nan": "", "None": ""})
     if "domain" in df.columns:
@@ -266,6 +282,11 @@ def import_job_mapping(csv_bytes: bytes, dry_run: bool) -> list[dict]:
                     f"updated_at='{now}' {where}",
                     workgroup="app", dry_run=dry_run,
                 )
+                domain = str(filters.get("domain") or "")
+                if pipeline_job:
+                    controlm_svc.register_job_if_missing(pipeline_job, job_type, domain)
+                if hk_job:
+                    controlm_svc.register_job_if_missing(hk_job, job_type, domain)
         report.append({
             "job": str(row.get("controlm_job_name", "")),
             "job_type": str(row.get("job_type", "controlm")),
@@ -286,9 +307,9 @@ def export_job_mapping() -> str:
             domain, layer, database_name,
             '' AS table_pattern,
             COALESCE(controlm_pipeline_job, '')        AS controlm_job_name,
-            COALESCE(dependent_job_type, 'controlm')   AS job_type,
             COALESCE(controlm_hk_job, '')               AS hk_controlm_job,
             COALESCE(dependent_on_controlm_job, '')    AS aws_gate1_job,
+            COALESCE(dependent_job_type, 'controlm')   AS job_type,
             COALESCE(controlm_job_start_time, '02:00') AS job_start_time,
             COALESCE(controlm_expected_duration_min, 0)  AS expected_duration_min
         FROM {STREAM_REGISTRY_TABLE}

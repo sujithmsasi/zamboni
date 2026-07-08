@@ -111,7 +111,6 @@ export function BrowseRegisterTab() {
           table_format: row.format,
           owner_email: values.owner_email || '',
           ci_number: values.ci_number || '',
-          stream_id: values.stream_id || null,
           notes: values.notes || '',
           controlm_pipeline_job: values.controlm_pipeline_job || null,
           controlm_hk_job: values.controlm_hk_job || null,
@@ -197,7 +196,7 @@ export function BrowseRegisterTab() {
             dataSource={tables}
             rowKey="table_fqn"
             rowSelection={{ selectedRowKeys: selectedFqns, onChange: (keys) => setSelectedFqns(keys as string[]) }}
-            pagination={tables.length > 20 ? { pageSize: 20 } : false}
+            pagination={tables.length > 15 ? { pageSize: 15 } : false}
             style={{ marginBottom: 16 }}
           />
 
@@ -234,14 +233,11 @@ export function BrowseRegisterTab() {
                   </Col>
                 </Row>
                 <Row gutter={16}>
-                  <Col span={8}>
+                  <Col span={12}>
                     <Form.Item name="owner_email" label="Owner Email"><Input /></Form.Item>
                   </Col>
-                  <Col span={8}>
+                  <Col span={12}>
                     <Form.Item name="ci_number" label="CI Number"><Input /></Form.Item>
-                  </Col>
-                  <Col span={8}>
-                    <Form.Item name="stream_id" label="Stream ID (optional)"><Input placeholder="STR-FIN-APS-0001" /></Form.Item>
                   </Col>
                 </Row>
                 <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>🔗 Control-M Integration (optional)</div>

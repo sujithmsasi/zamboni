@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Checkbox, Col, Form, Input, message, Row, Select, Skeleton } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Divider, Form, Input, message, Row, Select, Skeleton } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import { useTableDetail, useTablesSearch, useUpdateTable } from '../../../api/hooks/useTables';
@@ -86,16 +86,16 @@ export function EditTableTab() {
               </Col>
             </Row>
             <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item name="stream_id" label="Stream ID"><Input placeholder="STR-FIN-APS-0001" /></Form.Item>
-              </Col>
-              <Col span={8}>
+              <Col span={12}>
                 <Form.Item name="owner_email" label="Owner Email"><Input /></Form.Item>
               </Col>
-              <Col span={8}>
+              <Col span={12}>
                 <Form.Item name="ci_number" label="CI Number"><Input /></Form.Item>
               </Col>
             </Row>
+            <Divider orientation="left" style={{ margin: '8px 0 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>⚙️ Engine Flags</span>
+            </Divider>
             <Row gutter={16}>
               <Col span={6}>
                 <Form.Item name="hk_enabled" valuePropName="checked" label=" ">
@@ -118,7 +118,9 @@ export function EditTableTab() {
                 </Form.Item>
               </Col>
             </Row>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>🔗 Control-M Integration</div>
+            <Divider orientation="left" style={{ margin: '8px 0 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>🔗 Control-M Integration</span>
+            </Divider>
             <ControlMFields jobNameRequired />
             <Button type="primary" onClick={handleSave} loading={update.isPending}>💾 Save Changes</Button>
           </Form>

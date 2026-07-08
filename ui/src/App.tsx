@@ -1,9 +1,12 @@
 import { Layout, Menu, Tag } from 'antd';
-import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useSystemMode } from './api/hooks/useSystem';
 import zamboniLogo from './assets/zamboni-logo.png';
-import { DryRunBanner } from './components/DryRunBanner';
+import { isAuthenticated } from './auth';
+import { FleetHealthBanner } from './components/FleetHealthBanner';
 import { UserMenu } from './components/UserMenu';
+import LoginPage from './pages/Login';
 import { ROUTE_CATEGORIES, ROUTES } from './routes';
 import './sidebar.css';
 
@@ -16,7 +19,34 @@ const ENV_COLORS: Record<string, string> = {
   test: 'purple',
 };
 
+// Gates the dashboard shell behind the client-side demo login (see auth.ts).
+// Unauthenticated visits to any in-app route redirect to /login, remembering
+// where they were headed so a successful sign-in returns them there.
+function RequireAuth({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  if (!isAuthenticated()) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+  return <>{children}</>;
+}
+
 function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/*"
+        element={
+          <RequireAuth>
+            <AppShell />
+          </RequireAuth>
+        }
+      />
+    </Routes>
+  );
+}
+
+function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const { data: mode } = useSystemMode();
@@ -96,7 +126,7 @@ function App() {
             </Tag>
           )}
         </Header>
-        <DryRunBanner />
+        <FleetHealthBanner />
         <Content style={{ padding: 16, maxWidth: 'none' }}>
           <Routes>
             {ROUTES.map((r) => (

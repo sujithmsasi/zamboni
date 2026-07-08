@@ -55,15 +55,23 @@ interface GovernanceSectionProps {
 export function GovernanceSection({ conflicts }: GovernanceSectionProps) {
   const [domain, setDomain] = useState<string | undefined>(undefined);
   const [page, setPage] = useState(1);
-  const conflictsQuery = useConflicts(page, 25, domain);
+  const [size, setSize] = useState(15);
+  const conflictsQuery = useConflicts(page, size, domain);
   const domainsQuery = useDomainsList(true);
   const rescan = useRescanConflicts();
   const exportAll = useConflictsExportAll(domain);
 
+  const handleDomainChange = (value: string | undefined) => {
+    setDomain(value);
+    setPage(1);
+  };
+
   const today = new Date().toISOString().slice(0, 10);
   const from7d = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const [failuresPage, setFailuresPage] = useState(1);
+  const [failuresSize, setFailuresSize] = useState(15);
   const failuresQuery = useExecutionsList({
-    page: 1, size: 50, integrity_status: 'FAILED', from: from7d, to: today,
+    page: failuresPage, size: failuresSize, integrity_status: 'FAILED', from: from7d, to: today,
   });
 
   const handleExport = async () => {
@@ -111,7 +119,7 @@ export function GovernanceSection({ conflicts }: GovernanceSectionProps) {
         queryResult={conflictsQuery}
         rowKey="table_fqn"
         emptyText="No dual-optimizer conflicts detected."
-        onPageChange={setPage}
+        onPageChange={(p, s) => { setPage(p); setSize(s); }}
         toolbar={
           <Row justify="space-between" align="middle">
             <Col>
@@ -120,7 +128,7 @@ export function GovernanceSection({ conflicts }: GovernanceSectionProps) {
                 placeholder="Filter by domain"
                 style={{ width: 200 }}
                 value={domain}
-                onChange={setDomain}
+                onChange={handleDomainChange}
                 options={(domainsQuery.data ?? []).map((d) => ({
                   value: d.domain_name, label: d.display_name || d.domain_name,
                 }))}
@@ -153,6 +161,7 @@ export function GovernanceSection({ conflicts }: GovernanceSectionProps) {
         queryResult={failuresQuery}
         rowKey="execution_id"
         emptyText="No integrity failures in the last 7 days."
+        onPageChange={(p, s) => { setFailuresPage(p); setFailuresSize(s); }}
       />
     </div>
   );

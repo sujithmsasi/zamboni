@@ -74,7 +74,13 @@ export function useBulkControlM() {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tables'] });
+      // A real (non-dry-run) apply auto-registers controlm_pipeline_job /
+      // controlm_hk_job into the Control-M Job Registry if not already
+      // there -- refresh Job List so it shows up without a manual refresh.
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
   });
 }
 
@@ -105,7 +111,10 @@ export function useImportJobMapping() {
         formData,
       );
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tables'] });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
   });
 }
 

@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Row, Select, Skeleton } from 'antd';
+import { Alert, Button, Col, Collapse, Form, Input, InputNumber, message, Row, Select, Skeleton, Tag } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { usePolicyDetail, useUpdatePolicy } from '../../../api/hooks/usePolicies';
 import { useTablesSearch } from '../../../api/hooks/useTables';
@@ -26,12 +26,14 @@ export function EditTableTab() {
   const [gates, setGates] = useState<GatesValue>({ gate1_enabled: false, gate2_enabled: true, gate3_enabled: true });
   const [windowCfg, setWindowCfg] = useState<WindowConfig>(DEFAULT_WINDOW);
   const [reason, setReason] = useState('');
+  const [activeKey, setActiveKey] = useState('gates');
 
   const tables = useTablesSearch(search);
   const detail = usePolicyDetail(fqn);
   const systemMode = useSystemMode();
   const updatePolicy = useUpdatePolicy();
   const updateGates = useUpdateGates();
+  const compactionStrategy = Form.useWatch('compaction_strategy', form);
 
   // Applies server data into the local edit state exactly once per table
   // selection -- keying the effect on `detail.data`'s object identity
@@ -55,6 +57,7 @@ export function EditTableTab() {
     }
     setWindowCfg(parsed);
     setReason('');
+    setActiveKey('gates');
   }, [detail.data, fqn, form]);
 
   const handleSave = async () => {
@@ -144,92 +147,135 @@ export function EditTableTab() {
 
       {fqn && detail.data && (
         <>
-          <div style={{ marginBottom: 8, fontSize: 13, color: '#667085' }}>
+          <div style={{ marginBottom: 12, fontSize: 13, color: '#667085' }}>
             Template: <strong>{detail.data.policy_template ?? '—'}</strong> ·{' '}
             {detail.data.manually_overridden ? '⚠️ Manually overridden' : '✅ On template'}
           </div>
 
-          <Card size="small" title="🚦 Gate Enable / Disable" style={{ marginBottom: 16 }}>
-            <GatesEditor value={gates} onChange={setGates} overrideMaxHours={systemMode.data?.gate0_override_max_hours ?? 24} />
-          </Card>
+          <Collapse
+            accordion
+            activeKey={activeKey}
+            onChange={(k) => setActiveKey(Array.isArray(k) ? k[0] ?? '' : k)}
+            style={{ marginBottom: 16 }}
+            items={[
+              {
+                key: 'gates',
+                label: '🚦 Gate Enable / Disable',
+                extra: (() => {
+                  const active = [gates.gate1_enabled, gates.gate2_enabled, gates.gate3_enabled].filter(Boolean).length;
+                  return <Tag color={active === 3 ? 'green' : 'gold'}>{active}/3 active</Tag>;
+                })(),
+                children: <GatesEditor value={gates} onChange={setGates} overrideMaxHours={systemMode.data?.gate0_override_max_hours ?? 24} />,
+              },
+              {
+                key: 'window',
+                label: '⏰ Safe Window & Blackout',
+                extra: <Tag>{windowCfg.type} · {windowCfg.blackout_hours.length}h blocked</Tag>,
+                children: <WindowBlackoutEditor value={windowCfg} onChange={setWindowCfg} />,
+              },
+              {
+                key: 'compaction',
+                label: 'Compaction & Snapshot Settings',
+                extra: <Tag>{compactionStrategy ?? detail.data.compaction_strategy}</Tag>,
+                children: (
+                  <Form form={form} layout="vertical">
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <Form.Item name="snapshot_retention_days" label="Snapshot Retention (days) *">
+                          <InputNumber min={1} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="snapshot_min_to_keep" label="Min Snapshots to Keep *">
+                          <InputNumber min={2} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="run_frequency" label="Run Frequency *">
+                          <Select options={RUN_FREQUENCIES.map((f) => ({ value: f, label: f }))} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <Form.Item name="orphan_file_retention_days" label="Orphan Retention (days) *">
+                          <InputNumber min={2} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="orphan_cleanup_cadence_days" label="Orphan Cleanup Cadence (days)">
+                          <InputNumber min={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="compaction_target_file_size_mb" label="Target File Size (MB) *">
+                          <InputNumber min={64} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <Form.Item name="compaction_strategy" label="Compaction Strategy *">
+                          <Select options={['binpack', 'sort', 'zorder'].map((s) => ({ value: s, label: s }))} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="compaction_engine" label="Compaction Engine *">
+                          <Select options={['athena', 'glue'].map((e) => ({ value: e, label: e }))} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name="partition_type" label="Partition Type">
+                          <Select options={PARTITION_TYPES.map((p) => ({ value: p, label: p }))} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Form.Item name="partition_column" label="Partition Column">
+                          <Input placeholder="partition_date" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name="sort_order_cols" label="Sort / Z-Order Columns">
+                          <Input placeholder="partition_date, customer_id" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </Form>
+                ),
+              },
+            ]}
+          />
 
-          <Card size="small" title="⏰ Safe Window & Blackout" style={{ marginBottom: 16 }}>
-            <WindowBlackoutEditor value={windowCfg} onChange={setWindowCfg} />
-          </Card>
-
-          <Card size="small" title="Compaction & Snapshot Settings">
-            <Form form={form} layout="vertical">
-              <Row gutter={16}>
-                <Col span={8}>
-                  <Form.Item name="snapshot_retention_days" label="Snapshot Retention (days) *">
-                    <InputNumber min={1} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="snapshot_min_to_keep" label="Min Snapshots to Keep *">
-                    <InputNumber min={2} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="run_frequency" label="Run Frequency *">
-                    <Select options={RUN_FREQUENCIES.map((f) => ({ value: f, label: f }))} />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Row gutter={16}>
-                <Col span={8}>
-                  <Form.Item name="orphan_file_retention_days" label="Orphan Retention (days) *">
-                    <InputNumber min={2} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="orphan_cleanup_cadence_days" label="Orphan Cleanup Cadence (days)">
-                    <InputNumber min={0} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="compaction_target_file_size_mb" label="Target File Size (MB) *">
-                    <InputNumber min={64} style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Row gutter={16}>
-                <Col span={8}>
-                  <Form.Item name="compaction_strategy" label="Compaction Strategy *">
-                    <Select options={['binpack', 'sort', 'zorder'].map((s) => ({ value: s, label: s }))} />
-                  </Form.Item>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="compaction_engine" label="Compaction Engine *">
-                    <Select options={['athena', 'glue'].map((e) => ({ value: e, label: e }))} />
-                  </Form.Item>
-                </Col>
-                <Col span={8}>
-                  <Form.Item name="partition_type" label="Partition Type">
-                    <Select options={PARTITION_TYPES.map((p) => ({ value: p, label: p }))} />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Form.Item name="partition_column" label="Partition Column">
-                    <Input placeholder="partition_date" />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item name="sort_order_cols" label="Sort / Z-Order Columns">
-                    <Input placeholder="partition_date, customer_id" />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Form.Item label="Reason for override *" required>
-                <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. High-volume table needs shorter retention" />
-              </Form.Item>
-              <Button type="primary" onClick={handleSave} loading={updatePolicy.isPending || updateGates.isPending}>
-                💾 Save Changes
-              </Button>
-            </Form>
-          </Card>
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 10,
+              background: '#fff',
+              borderTop: '1px solid #D9E2EC',
+              borderRadius: 8,
+              padding: '12px 16px',
+              boxShadow: '0 -2px 8px rgba(0,0,0,0.06)',
+            }}
+          >
+            <Row gutter={16} align="middle">
+              <Col flex="auto">
+                <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Reason for override *</div>
+                <Input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. High-volume table needs shorter retention"
+                />
+              </Col>
+              <Col>
+                <Button type="primary" onClick={handleSave} loading={updatePolicy.isPending || updateGates.isPending}>
+                  💾 Save Changes
+                </Button>
+              </Col>
+            </Row>
+          </div>
         </>
       )}
     </div>

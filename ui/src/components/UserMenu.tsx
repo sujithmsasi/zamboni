@@ -1,14 +1,19 @@
 import { CaretUpDown, SignOut, UserCircle } from '@phosphor-icons/react';
-import { Dropdown, message } from 'antd';
+import { Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { useSystemMode } from '../api/hooks/useSystem';
+import { logout } from '../auth';
 
-// No real session exists yet to log out of -- api/deps.py::get_current_user()
-// is an env-var stub (contracts.md D5's OIDC seam for later). Rather than a
-// silent no-op or a fake session, clicking Log out says so plainly, same
-// spirit as PlaceholderPage for unbuilt routes.
+// "Log out" clears the client-side demo gate (auth.ts) and returns to
+// /login -- real for what it is (blocks the dashboard shell again), but it
+// is not a backend session: api/deps.py::get_current_user() is still an
+// env-var stub (contracts.md D5's OIDC seam for later) and is unaffected by
+// this. The name shown here is that server-side actor, not the locally
+// entered login username, since that's what audit events actually record.
 export function UserMenu() {
   const { data: mode } = useSystemMode();
+  const navigate = useNavigate();
   const user = mode?.user ?? 'local-dev';
 
   const items: MenuProps['items'] = [
@@ -17,7 +22,8 @@ export function UserMenu() {
       icon: <SignOut size={15} />,
       label: 'Log out',
       onClick: () => {
-        message.info('Logout requires SSO/OIDC integration (contracts.md D5) — not wired up yet.');
+        logout();
+        navigate('/login', { replace: true });
       },
     },
   ];

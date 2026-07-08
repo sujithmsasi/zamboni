@@ -17,7 +17,6 @@ const COLUMNS = [
   { title: 'Layer', dataIndex: 'layer', key: 'layer' },
   { title: 'Tier', dataIndex: 'tier', key: 'tier' },
   { title: 'CI', dataIndex: 'ci_number', key: 'ci_number' },
-  { title: 'Stream', dataIndex: 'stream_id', key: 'stream_id' },
   { title: 'Owner', dataIndex: 'owner_email', key: 'owner_email' },
   { title: 'Control-M Job', dataIndex: 'controlm_pipeline_job', key: 'controlm_pipeline_job' },
   { title: 'HK ControlM Job', dataIndex: 'controlm_hk_job', key: 'controlm_hk_job' },

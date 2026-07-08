@@ -234,7 +234,6 @@ class ParquetLogBuffer:
             "engine":             entry.engine,
             "operation":          entry.operation,
             "table_fqn":          entry.table_fqn,
-            "stream_id":          g("stream_id"),
             "domain":             entry.domain,
             "layer":              entry.layer,
             "tier":               entry.tier,

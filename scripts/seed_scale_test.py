@@ -95,8 +95,6 @@ for domain, meta in DOMAINS.items():
 
     for i in range(TABLES_PER_DOMAIN):
         stream_code = streams[i % len(streams)]
-        seq         = (i // len(streams)) + 1
-        stream_id   = f"STR-{domain[:3].upper()}-{stream_code}-{seq:04d}"
 
         layer       = LAYERS[i % len(LAYERS)]
         db_suffix   = LAYER_DB.get(layer, "_staging_db")
@@ -125,7 +123,6 @@ for domain, meta in DOMAINS.items():
 
         registry_rows.append({
             "table_fqn":              fqn,
-            "stream_id":              stream_id,
             "domain":                 domain,
             "layer":                  layer,
             "tier":                   tier,
@@ -196,7 +193,6 @@ for domain, meta in DOMAINS.items():
                     "engine":             "hk",
                     "operation":          "hk_run",
                     "table_fqn":          fqn,
-                    "stream_id":          stream_id,
                     "domain":             domain,
                     "layer":              layer,
                     "tier":              tier,

@@ -43,9 +43,6 @@ class LogEntry:
     completed_at:   datetime | None = None
     duration_seconds: int | None    = None
 
-    # Stream ID (optional)
-    stream_id:      str | None = None
-
     # HK Engine metrics
     snapshots_before:     int | None   = None
     snapshots_after:      int | None   = None
@@ -129,7 +126,6 @@ def write(entry: LogEntry, dry_run: bool = False) -> bool:
             {_s(entry.engine)},
             {_s(entry.operation)},
             {_s(entry.table_fqn)},
-            {_s(entry.stream_id)},
             {_s(entry.domain)},
             {_s(entry.layer)},
             {_s(entry.tier)},

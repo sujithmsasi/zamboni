@@ -17,3 +17,18 @@ body,
 body {
   font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
 }
+
+/* Focused-input accent (Zamboni Arctic Blue colorPrimary) -- AntD's default
+   focus ring is subtle enough to miss at a glance; strengthen the border +
+   add a soft glow so it's obvious which field currently has focus. */
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused,
+.ant-select-focused:not(.ant-select-disabled) .ant-select-selector,
+.ant-picker-focused,
+.ant-input-number-focused {
+  border-color: #167d9a !important;
+  box-shadow: 0 0 0 3px rgba(22, 125, 154, 0.15) !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}

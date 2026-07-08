@@ -30,7 +30,7 @@ export function UnhealthyTablesGrid({ data }: UnhealthyTablesGridProps) {
       columns={COLUMNS}
       dataSource={data}
       rowKey="table_fqn"
-      pagination={data.length > 10 ? { pageSize: 10, size: 'small' } : false}
+      pagination={data.length > 15 ? { pageSize: 15, size: 'small' } : false}
     />
   );
 }

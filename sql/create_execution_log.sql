@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.execution_log (
 
     -- ── Table Context ─────────────────────────────────────────────────────────
     table_fqn           STRING    COMMENT 'Fully qualified table name',
-    stream_id           STRING    COMMENT 'Stream ID from registry',
     domain              STRING    COMMENT 'Business domain',
     layer               STRING    COMMENT 'staging | datalake | base | master',
     tier                STRING    COMMENT 'critical | standard | low',
