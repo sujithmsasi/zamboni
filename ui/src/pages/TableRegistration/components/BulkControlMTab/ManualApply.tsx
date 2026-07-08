@@ -11,7 +11,10 @@ const JOB_TYPE_OPTIONS = ['controlm', 'glue', 'lambda', 'step_functions', 'airfl
  * Manual Bulk Apply (2_Table_Registration.py bc_tab_manual). The Streamlit
  * exclude-checkbox multiselect becomes native AntD rowSelection on the
  * preview grid -- deselecting a row is the exclude action, no separate
- * widget needed.
+ * widget needed. Split into "1. Job Details" / "2. Target Tables" cards
+ * (previously one flat 12-field block with no visual grouping) so the two
+ * distinct decisions -- what to set, and where to apply it -- read as
+ * separate steps.
  */
 export function ManualApply() {
   const [pipelineJob, setPipelineJob] = useState('');
@@ -21,7 +24,6 @@ export function ManualApply() {
   const [gate1Job, setGate1Job] = useState('');
   const [jobType, setJobType] = useState('controlm');
   const [ciNumber, setCiNumber] = useState('');
-  const [streamId, setStreamId] = useState('');
 
   const [domain, setDomain] = useState<string | undefined>();
   const [layer, setLayer] = useState<string | undefined>();
@@ -56,7 +58,6 @@ export function ManualApply() {
       controlm_expected_duration_min: duration,
     };
     if (ciNumber.trim()) setFields.ci_number = ciNumber.trim();
-    if (streamId.trim()) setFields.stream_id = streamId.trim();
 
     const excludeFqns = matchedRows.filter((t) => !selectedFqns.includes(t.table_fqn)).map((t) => t.table_fqn);
 
@@ -78,68 +79,66 @@ export function ManualApply() {
 
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 12 }}>
-        <Col span={12}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Control-M Job Name *</div>
-          <Input value={pipelineJob} onChange={(e) => setPipelineJob(e.target.value)} placeholder="ACE-DA-FIN-APS-INGEST-PRD" />
-        </Col>
-        <Col span={6}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job run start time</div>
-          <Input
-            value={startTime} onChange={(e) => setStartTime(e.target.value)} placeholder="02:00"
-            onBlur={() => { if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(startTime)) setStartTime(dayjs().hour(2).minute(0).format('HH:mm')); }}
-          />
-        </Col>
-        <Col span={6}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected duration (min)</div>
-          <InputNumber min={0} max={480} style={{ width: '100%' }} value={duration} onChange={(v) => setDuration(v ?? 0)} />
-        </Col>
-      </Row>
-      <Row gutter={16} style={{ marginBottom: 12 }}>
-        <Col span={8}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>HK Control-M Job</div>
-          <Input value={hkJob} onChange={(e) => setHkJob(e.target.value)} placeholder="ACE-DA-FIN-HK-PRD" />
-        </Col>
-        <Col span={8}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>AWS Job Name — Gate 1 (optional)</div>
-          <Input value={gate1Job} onChange={(e) => setGate1Job(e.target.value)} placeholder="Leave blank to use Control-M Job Name" />
-        </Col>
-        <Col span={8}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job Type</div>
-          <Select style={{ width: '100%' }} value={jobType} onChange={setJobType} options={JOB_TYPE_OPTIONS.map((j) => ({ value: j, label: j }))} />
-        </Col>
-      </Row>
-      <Row gutter={16} style={{ marginBottom: 12 }}>
-        <Col span={12}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>CI Number (optional — blank keeps existing)</div>
-          <Input value={ciNumber} onChange={(e) => setCiNumber(e.target.value)} placeholder="CI-10300" />
-        </Col>
-        <Col span={12}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Stream ID (optional — blank keeps existing)</div>
-          <Input value={streamId} onChange={(e) => setStreamId(e.target.value)} placeholder="STR-FIN-APS-0001" />
-        </Col>
-      </Row>
+      <Card size="small" title="1. Job Details" style={{ marginBottom: 16 }}>
+        <Row gutter={16} style={{ marginBottom: 12 }}>
+          <Col span={12}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Control-M Job Name *</div>
+            <Input value={pipelineJob} onChange={(e) => setPipelineJob(e.target.value)} placeholder="ACE-DA-FIN-APS-INGEST-PRD" />
+          </Col>
+          <Col span={6}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job run start time</div>
+            <Input
+              value={startTime} onChange={(e) => setStartTime(e.target.value)} placeholder="02:00"
+              onBlur={() => { if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(startTime)) setStartTime(dayjs().hour(2).minute(0).format('HH:mm')); }}
+            />
+          </Col>
+          <Col span={6}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected duration (min)</div>
+            <InputNumber min={0} max={480} style={{ width: '100%' }} value={duration} onChange={(v) => setDuration(v ?? 0)} />
+          </Col>
+        </Row>
+        <Row gutter={16} style={{ marginBottom: 12 }}>
+          <Col span={8}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>HK Control-M Job</div>
+            <Input value={hkJob} onChange={(e) => setHkJob(e.target.value)} placeholder="ACE-DA-FIN-HK-PRD" />
+          </Col>
+          <Col span={8}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>AWS Job Name — Gate 1 (optional)</div>
+            <Input value={gate1Job} onChange={(e) => setGate1Job(e.target.value)} placeholder="Leave blank to use Control-M Job Name" />
+          </Col>
+          <Col span={8}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job Type</div>
+            <Select style={{ width: '100%' }} value={jobType} onChange={setJobType} options={JOB_TYPE_OPTIONS.map((j) => ({ value: j, label: j }))} />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>CI Number (optional — blank keeps existing)</div>
+            <Input value={ciNumber} onChange={(e) => setCiNumber(e.target.value)} placeholder="CI-10300" />
+          </Col>
+        </Row>
+      </Card>
 
-      <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>Apply to tables matching:</div>
-      <Row gutter={16} style={{ marginBottom: 12 }}>
-        <Col span={8}>
-          <Select style={{ width: '100%' }} allowClear placeholder="Domain (All)" value={domain} onChange={setDomain} options={(domains.data ?? []).map((d) => ({ value: d.domain_name, label: d.domain_name }))} />
-        </Col>
-        <Col span={8}>
-          <Select style={{ width: '100%' }} allowClear placeholder="Layer (All)" value={layer} onChange={setLayer} options={VALID_LAYERS.map((l) => ({ value: l, label: l }))} />
-        </Col>
-        <Col span={8}>
-          <Input placeholder="Database (optional)" value={databaseName} onChange={(e) => setDatabaseName(e.target.value)} />
-        </Col>
-      </Row>
-      <Input
-        style={{ marginBottom: 12 }} placeholder="Table name pattern (optional) — aps_%_staging  or  %_ingest_%"
-        value={pattern} onChange={(e) => setPattern(e.target.value)}
-      />
-
-      <Button onClick={handlePreview} disabled={!pipelineJob.trim()} style={{ marginBottom: 16 }}>
-        🔍 Preview Matching Tables
-      </Button>
+      <Card size="small" title="2. Target Tables" style={{ marginBottom: 16 }}>
+        <Row gutter={16} style={{ marginBottom: 12 }}>
+          <Col span={8}>
+            <Select style={{ width: '100%' }} allowClear placeholder="Domain (All)" value={domain} onChange={setDomain} options={(domains.data ?? []).map((d) => ({ value: d.domain_name, label: d.domain_name }))} />
+          </Col>
+          <Col span={8}>
+            <Select style={{ width: '100%' }} allowClear placeholder="Layer (All)" value={layer} onChange={setLayer} options={VALID_LAYERS.map((l) => ({ value: l, label: l }))} />
+          </Col>
+          <Col span={8}>
+            <Input placeholder="Database (optional)" value={databaseName} onChange={(e) => setDatabaseName(e.target.value)} />
+          </Col>
+        </Row>
+        <Input
+          style={{ marginBottom: 12 }} placeholder="Table name pattern (optional) — aps_%_staging  or  %_ingest_%"
+          value={pattern} onChange={(e) => setPattern(e.target.value)}
+        />
+        <Button onClick={handlePreview} disabled={!pipelineJob.trim()}>
+          🔍 Preview Matching Tables
+        </Button>
+      </Card>
 
       {previewed && (
         <Card size="small" title={`${matchedRows.length} table(s) matched`}>

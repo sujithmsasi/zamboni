@@ -86,13 +86,10 @@ export function EditTableTab() {
               </Col>
             </Row>
             <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item name="stream_id" label="Stream ID"><Input placeholder="STR-FIN-APS-0001" /></Form.Item>
-              </Col>
-              <Col span={8}>
+              <Col span={12}>
                 <Form.Item name="owner_email" label="Owner Email"><Input /></Form.Item>
               </Col>
-              <Col span={8}>
+              <Col span={12}>
                 <Form.Item name="ci_number" label="CI Number"><Input /></Form.Item>
               </Col>
             </Row>

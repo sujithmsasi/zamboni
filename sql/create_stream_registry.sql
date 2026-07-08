@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.stream_registry (
 
     -- ── Identity ──────────────────────────────────────────────────────────────
     table_fqn               STRING  COMMENT 'Fully qualified: glue_catalog.database.table',
-    stream_id               STRING  COMMENT 'Logical stream ID e.g. STR-FIN-001',
     domain                  STRING  COMMENT 'FK to domain_registry.domain_name',
     layer                   STRING  COMMENT 'staging | datalake | base | master',
     tier                    STRING  COMMENT 'critical | standard | low',

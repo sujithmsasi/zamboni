@@ -81,7 +81,7 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
     ok = registry.register_table(
         table_fqn=req["table_fqn"], domain=req["domain"], layer=req["layer"], tier=req["tier"],
         environment=req.get("environment", "prod"), table_format=req.get("table_format", "iceberg"),
-        stream_id=req.get("stream_id"), owner_email=req.get("owner_email", ""),
+        owner_email=req.get("owner_email", ""),
         ci_number=req.get("ci_number", ""), hk_enabled=req.get("hk_enabled", False),
         archive_enabled=req.get("archive_enabled", False),
         archive_retention_days=req.get("archive_retention_days"),
@@ -101,7 +101,7 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
 
 
 _UPDATABLE_FIELDS = {
-    "domain", "layer", "tier", "owner_email", "ci_number", "stream_id",
+    "domain", "layer", "tier", "owner_email", "ci_number",
     "hk_enabled", "archive_enabled", "lifecycle_enabled", "processing_cadence",
     "controlm_pipeline_job", "controlm_hk_job", "dependent_on_controlm_job",
     "dependent_job_type", "controlm_job_start_time", "controlm_expected_duration_min",
@@ -160,7 +160,7 @@ def _build_bulk_where(filters: dict) -> str:
 _BULK_SETTABLE = {
     "controlm_pipeline_job", "controlm_hk_job", "dependent_on_controlm_job",
     "dependent_job_type", "controlm_job_start_time", "controlm_expected_duration_min",
-    "ci_number", "stream_id",
+    "ci_number",
     # Engine Flags "Bulk Apply" sub-tab reuses this same filter+set mechanism
     # rather than a second bulk endpoint -- domain/layer/database_name filters
     # are identical, only the set_fields differ.

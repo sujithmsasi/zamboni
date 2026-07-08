@@ -82,7 +82,6 @@ class RegisterTableRequest(BaseModel):
     tier: str
     environment: str = "prod"
     table_format: str = "iceberg"
-    stream_id: str | None = None
     owner_email: str = ""
     ci_number: str = ""
     hk_enabled: bool = False
@@ -105,7 +104,6 @@ class UpdateTableRequest(BaseModel):
     tier: str | None = None
     owner_email: str | None = None
     ci_number: str | None = None
-    stream_id: str | None = None
     hk_enabled: bool | None = None
     archive_enabled: bool | None = None
     lifecycle_enabled: bool | None = None

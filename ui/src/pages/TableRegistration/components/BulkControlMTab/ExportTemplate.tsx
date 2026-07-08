@@ -1,5 +1,5 @@
 import { DownloadSimple } from '@phosphor-icons/react';
-import { Alert, Button, Card, Table } from 'antd';
+import { Alert, Button, Card, Collapse, Table } from 'antd';
 import { useEffect } from 'react';
 import { useExportJobMapping } from '../../../../api/hooks/useTables';
 import { downloadRawCsv } from '../../../../utils/csv';
@@ -73,20 +73,28 @@ export function ExportTemplate() {
         Download Job Mapping Template CSV
       </Button>
 
-      <Card size="small" title="CSV column guide for domain teams">
-        <Table
-          size="small"
-          dataSource={COLUMN_GUIDE}
-          rowKey="column"
-          pagination={false}
-          columns={[
-            { title: 'Column', dataIndex: 'column', key: 'column' },
-            { title: 'Required', dataIndex: 'required', key: 'required' },
-            { title: 'Example', dataIndex: 'example', key: 'example' },
-            { title: 'Notes', dataIndex: 'notes', key: 'notes' },
-          ]}
-        />
-      </Card>
+      <Collapse
+        items={[
+          {
+            key: 'guide',
+            label: 'CSV column guide for domain teams',
+            children: (
+              <Table
+                size="small"
+                dataSource={COLUMN_GUIDE}
+                rowKey="column"
+                pagination={false}
+                columns={[
+                  { title: 'Column', dataIndex: 'column', key: 'column' },
+                  { title: 'Required', dataIndex: 'required', key: 'required' },
+                  { title: 'Example', dataIndex: 'example', key: 'example' },
+                  { title: 'Notes', dataIndex: 'notes', key: 'notes' },
+                ]}
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

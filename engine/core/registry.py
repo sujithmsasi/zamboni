@@ -5,7 +5,6 @@ All queries go through athena_client — no direct boto3 calls here.
 """
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 
 from config.settings import (
@@ -161,17 +160,6 @@ def get_tables_by_domain(
     return df.to_dict(orient="records")
 
 
-def get_tables_by_stream(stream_id: str) -> list[dict]:
-    """Return all tables belonging to a logical stream."""
-    sql = f"""
-        SELECT * FROM {STREAM_REGISTRY_TABLE}
-        WHERE stream_id = '{stream_id}'
-        ORDER BY layer
-    """
-    df = read_sql(sql, workgroup="app")
-    return df.to_dict(orient="records")
-
-
 def is_in_dry_run_ramp(table_row: dict) -> bool:
     """
     Return True if a table is still in its dry-run ramp-up window.
@@ -255,7 +243,6 @@ def register_table(
     tier: str,
     environment: str = "prod",
     table_format: str = "iceberg",
-    stream_id: str | None = None,
     owner_email: str = "",
     ci_number: str = "",
     hk_enabled: bool = False,
@@ -280,7 +267,6 @@ def register_table(
     _validate_tier(tier)
     _validate_environment(environment)
 
-    sid  = stream_id or _generate_stream_id(domain, layer)
     now  = _now()
     arch = archive_retention_days if archive_retention_days else "NULL"
 
@@ -296,7 +282,6 @@ def register_table(
                 environment                    = '{environment}',
                 owner_email                    = '{_esc(owner_email)}',
                 ci_number                      = '{_esc(ci_number)}',
-                stream_id                      = '{sid}',
                 controlm_pipeline_job          = '{_esc(controlm_pipeline_job or "")}',
                 controlm_hk_job                = '{_esc(controlm_hk_job or "")}',
                 dependent_on_controlm_job      = '{_esc(_gate1_job)}',
@@ -315,7 +300,7 @@ def register_table(
     archive_int = 1 if archive_enabled else 0
     sql = f"""
         INSERT INTO {STREAM_REGISTRY_TABLE} (
-            table_fqn, stream_id, domain, layer, tier,
+            table_fqn, domain, layer, tier,
             table_format, environment, owner_email, ci_number,
             hk_enabled, dry_run_until, force_run,
             dependent_job_name, dependent_job_type,
@@ -328,7 +313,6 @@ def register_table(
             database_name, owner_name, notes
         ) VALUES (
             '{table_fqn}',
-            '{sid}',
             '{domain}',
             '{layer}',
             '{tier}',
@@ -449,9 +433,3 @@ def _validate_tier(tier: str) -> None:
 def _validate_environment(env: str) -> None:
     if env not in VALID_ENVIRONMENTS:
         raise ValueError(f"Invalid environment '{env}'. Must be one of: {VALID_ENVIRONMENTS}")
-
-
-def _generate_stream_id(domain: str, layer: str) -> str:
-    """Generate a unique stream ID — STR-DOM-XXXX format."""
-    suffix = str(uuid.uuid4())[:8].upper()
-    return f"STR-{domain[:3].upper()}-{suffix}"

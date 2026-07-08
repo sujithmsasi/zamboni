@@ -900,3 +900,95 @@ touched.
   `STAGING_DEFAULT` afterward so `config/policy_templates.json` (a tracked
   repo file) isn't left mutated.
 - No Streamlit file modified this phase.
+
+2026-07-07 Ad-hoc UX pass: Policy Configuration's Edit Single Table
+restructured, `stream_id` concept removed fleet-wide (org decision — not
+adopting the stream-grouping model), and three Bulk Control-M sub-tabs
+improved, all per Sujith's live review. 562 unit + 80 api tests still
+passing (no test count change — this pass touched fixtures, not coverage),
+ruff/tsc/build/lint all clean.
+- **Policy Configuration → Edit Single Table**: the three always-open cards
+  (Gates/Window/Compaction) replaced with a single-open `Collapse` — each
+  collapsed section shows a status `Tag` (e.g. `2/3 active`, `post_batch ·
+  8h blocked`, `zorder`) so context isn't lost when collapsed. The required
+  override-reason field + Save button moved out of the bottom of the
+  Compaction form into a `position: sticky; bottom: 0` footer, so they're
+  visible at all times regardless of scroll position or which section is
+  open. Verified live via Playwright: accordion enforces exactly one open
+  panel, footer stays pinned to the viewport bottom after scrolling.
+- **`stream_id` removed from the entire stack** (Sujith: org isn't adopting
+  the pipeline-stream-grouping model). Removed cleanly from every layer,
+  not just the UI:
+  - `engine/core/registry.py`: `register_table()`'s `stream_id` param,
+    `_generate_stream_id()`, and `get_tables_by_stream()` (no callers)
+    deleted outright; `import uuid` removed (its only remaining use).
+  - `engine/core/execution_log.py` / `execution_log_parquet.py`: `LogEntry.
+    stream_id` field removed. `execution_log.write()`'s positional
+    `INSERT ... VALUES (...)` (no column list — position is the only
+    contract with the Athena table) required removing `stream_id` from
+    `sql/create_execution_log.sql` at the exact same position, not just
+    deleting the Python field — same care the two-writer-path rule in
+    `context_hints.md` already calls out for *adding* columns applies
+    symmetrically to *removing* one.
+  - `engine/core/orchestrator.py`, `engine/engines/hk_engine.py`,
+    `engine/engines/archival_engine.py`: dropped the `stream_id=table_row.
+    get("stream_id")` kwarg from every `LogEntry(...)` construction site.
+  - `api/models.py` (`RegisterTableRequest`/`UpdateTableRequest`),
+    `api/services/tables_svc.py` (`_UPDATABLE_FIELDS`/`_BULK_SETTABLE`):
+    field/set removed.
+  - `scripts/seed_local_db.py`: `stream_registry`/`execution_log` local
+    DDL columns removed; the 17-row seed tuple literals (`fin_aps`,
+    `fin_claims`, `ers_bkg`, `mbr`, `clm`, `special` — each carried a
+    `"STR-..."` positional element) stripped via a scoped regex pass
+    rather than 17 manual edits, then the unpacking loop and 3 downstream
+    `execution_log`/`archival` row-dict builders updated to match.
+    `scripts/seed_scale_test.py` similarly (its `stream_id`/`seq` locals
+    were unused for anything else once removed — deleted, not stubbed).
+  - `app/pages/2_Table_Registration.py` (Streamlit legacy — still updated
+    for consistency even though React has superseded this page): register
+    form field, Registered Tables SELECT + column order + rename map, Edit
+    Table's `e_stream` widget + its UPDATE SQL clause, and Bulk Control-M's
+    `_bulk_stream` field + SET clause all removed.
+  - `sql/create_stream_registry.sql`: DDL column removed (this one uses a
+    named `INSERT (...) VALUES (...)` in `registry.py`, so — unlike
+    `execution_log` — position here was never load-bearing).
+  - `tests/unit/test_orchestrator.py`: `TABLE_ROW` fixture's `stream_id`
+    key removed.
+  - Reseeded `zamboni_local.db` end-to-end (`python scripts/
+    seed_local_db.py --reset`) to confirm the edited seed script actually
+    runs clean, not just imports clean — required stopping the running
+    `uvicorn` first (Windows SQLite file lock on `reset_db()`'s
+    `os.unlink`, per `context_hints.md`), then restarting it afterward.
+    Full repo-wide grep for `stream_id`/`streamId`/`Stream ID` confirmed
+    zero remaining references before calling this done.
+  - **Found, not fixed** (pre-existing, unrelated): reseeding surfaced a
+    `home_snapshot has no column named environment` insert failure —
+    `home_snapshot`'s DDL never had an `environment` column and
+    `seed_home_snapshot()` wasn't touched by this pass; out of scope as a
+    drive-by fix.
+- **Bulk Control-M — three sub-tabs improved** (Sujith's live feedback:
+  "some over details there"):
+  - **Manual Bulk Apply**: the flat 12-field block (job config + target
+    filters, no visual grouping) split into two `Card`s, "1. Job Details"
+    and "2. Target Tables" — reads as two sequential decisions instead of
+    one wall of inputs. (`stream_id`'s removal above also dropped it from
+    two fields to one in the Job Details card.)
+  - **Export Mapping Template**: the always-rendered 10-row "CSV column
+    guide" reference table moved into a `Collapse`, collapsed by default —
+    it's opt-in reference material, not something needed on every visit.
+  - **Control-M Job Registry**: was a static, unfiltered grid glued above
+    the Add/Upload forms with no search and no way to remove a stale entry
+    (`DELETE /api/jobs/{name}` already existed server-side, unused).
+    Restructured into 3 sub-tabs — new **Job List** (server-side search via
+    the existing `GET /api/jobs?search=` param, client-side domain/job-type
+    filters, CSV export, and a Remove action wired to the existing delete
+    hook with a confirm modal) alongside the existing Add Single Job / Bulk
+    Upload CSV tabs.
+  - Verified live via Playwright: Manual Bulk Apply shows both sections
+    with the Stream ID field gone; Export Mapping's guide table is absent
+    until the Collapse header is clicked; Job Registry's new Job List tab
+    shows an added job immediately (real audit ID in the success toast),
+    search-filters it down to 1 row, and Remove deletes it for real
+    (confirmed gone from the list after the confirm-modal click).
+- No engine *logic* changed (vacuum.py, gates, orchestration sequencing
+  all untouched) — this pass is schema/field removal plus UI layout only.

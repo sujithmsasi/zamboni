@@ -351,14 +351,6 @@ with tab_browse:
                                     help="ITSM Configuration Item for change management.",
                                 )
 
-                            stream_id = st.text_input(
-                                "Stream ID (optional)",
-                                placeholder="STR-FIN-APS-0001",
-                                help="Groups related tables in a pipeline. "
-                                     "Format: STR-{DOMAIN}-{SOURCE}-{SEQ}. "
-                                     "Leave blank for standalone tables.",
-                            )
-
                             st.markdown("**🔗 Control-M Integration (optional)**")
                             _rc1, _rc2, _rc3, _rc4 = st.columns(4)
                             with _rc1:
@@ -444,7 +436,6 @@ with tab_browse:
                                             table_format=fmt,
                                             owner_email=owner_email or "",
                                             ci_number=ci_number or "",
-                                            stream_id=stream_id.strip() or None,
                                             controlm_pipeline_job=reg_pipeline_job.strip() or None,
                                             controlm_hk_job=reg_hk_job.strip() or None,
                                             dependent_on_controlm_job=reg_gate1_job.strip() or reg_pipeline_job.strip() or None,
@@ -539,7 +530,7 @@ with tab_registered:
 
     sql = f"""
         SELECT
-            table_fqn, stream_id, domain, layer, tier,
+            table_fqn, domain, layer, tier,
             ci_number, owner_email,
             controlm_pipeline_job, controlm_hk_job,
             dependent_on_controlm_job,
@@ -576,7 +567,7 @@ with tab_registered:
             # Show all columns in a logical order
             _col_order = [
                 "table_fqn", "domain", "layer", "tier",
-                "ci_number", "stream_id", "owner_email",
+                "ci_number", "owner_email",
                 "controlm_pipeline_job", "controlm_hk_job",
                 "dependent_on_controlm_job",
                 "controlm_job_start_time", "controlm_expected_duration_min",
@@ -587,7 +578,6 @@ with tab_registered:
             _d = _d[_k].rename(columns={
                 "table_fqn":                    "Table",
                 "ci_number":                    "CI",
-                "stream_id":                    "Stream",
                 "owner_email":                  "Owner",
                 "controlm_pipeline_job":        "Control-M Job",
                 "controlm_hk_job":              "HK ControlM Job",
@@ -632,13 +622,13 @@ with tab_edit_reg:
     st.subheader("✏️ Edit Registered Table")
     st.caption(
         "Select a table from the list above to update its "
-        "domain, tier, layer, owner, or stream ID."
+        "domain, tier, layer, or owner."
     )
     # Rebuild unformatted FQN list from raw query
     try:
         raw_df = cached_read_registry(
             f"SELECT table_fqn, domain, layer, tier, "
-            f"owner_email, ci_number, stream_id, hk_enabled, "
+            f"owner_email, ci_number, hk_enabled, "
             f"archive_enabled, lifecycle_enabled, processing_cadence, "
             f"dry_run_until, "
             f"controlm_pipeline_job, controlm_hk_job, "
@@ -684,12 +674,6 @@ with tab_edit_reg:
                             index=(VALID_TIERS.index(trow.get("tier","standard"))
                                    if trow.get("tier","standard") in VALID_TIERS else 1),
                             key=f"{_ek}_tier",
-                        )
-                        e_stream = st.text_input(
-                            "Stream ID",
-                            value=str(trow.get("stream_id") or ""),
-                            key=f"{_ek}_stream",
-                            placeholder="STR-FIN-APS-0001",
                         )
                     with ec3:
                         e_owner = st.text_input(
@@ -819,7 +803,6 @@ with tab_edit_reg:
                                     SET domain                     = '{e_domain}',
                                         layer                      = '{e_layer}',
                                         tier                       = '{e_tier}',
-                                        stream_id                  = '{e_stream}',
                                         owner_email                = '{e_owner}',
                                         ci_number                  = '{e_ci}',
                                         hk_enabled                 = {'1' if e_hk else '0'},
@@ -1184,7 +1167,7 @@ with tab_bulk_ctrlm:
                 help="AWS service type used by Gate 1 engine.",
             )
 
-        # Row 3: CI Number + Stream ID
+        # Row 3: CI Number
         _brow3a, _brow3b, _brow3c = st.columns(3)
         with _brow3a:
             _bulk_ci = st.text_input(
@@ -1193,12 +1176,7 @@ with tab_bulk_ctrlm:
                 key="bulk_ctrlm_ci",
             )
         with _brow3b:
-            _bulk_stream = st.text_input(
-                "Stream ID (optional — leave blank to keep existing)",
-                placeholder="STR-FIN-APS-0001",
-                key="bulk_ctrlm_stream",
-                help="Groups tables into a pipeline stream.",
-            )
+            st.empty()
         with _brow3c:
             st.empty()
 
@@ -1337,8 +1315,6 @@ with tab_bulk_ctrlm:
                     ]
                     if _bulk_ci.strip():
                         _sets.append(f"ci_number = '{_bulk_ci.strip()}'")
-                    if _bulk_stream.strip():
-                        _sets.append(f"stream_id = '{_bulk_stream.strip()}'")
 
                     _applied = 0
                     for _tfqn in _to_apply:
