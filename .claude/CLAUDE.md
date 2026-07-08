@@ -1236,3 +1236,31 @@ is genuinely excluded from what gets written).
   `job_name`s as `excludeJobNames` -- no file re-upload or client-side
   CSV re-parsing needed, the already-open file object is reused.
 - No changes to engine core, orchestrator, gate logic, or vacuum.py.
+
+2026-07-08 Manual Bulk Apply, fourth follow-up: the "✅ All N table(s)
+selected" summary was found lingering after navigating away and back
+(Sujith's report). Root cause: the *previous* follow-up deliberately
+stopped resetting `confirmed`/`confirmedRows`/`selectedFqns` after a
+successful apply (to stop a different complaint — the "select tables
+first" hint flashing right after success). That traded one bug for
+another: since AntD Tabs keeps inactive panes mounted, switching to
+another Control-M Integration tab and back never remounted this
+component, so the stale confirmed-selection summary survived
+indefinitely, not just across a single render.
+- **Fix**: `handleApply`'s `onSuccess` now fully resets Target Tables
+  (domain/layer/database/pattern + confirmed/confirmedRows/selectedFqns)
+  in addition to Job Details -- a completed apply starts the next one
+  from a clean slate, so there's nothing stale left to survive a tab
+  switch or navigation. To avoid reintroducing the earlier complaint,
+  the "select tables first" hint also changed from a gold warning `Tag`
+  to plain muted helper text ("Select target tables above to enable
+  Apply.") — neutral guidance instead of an error state, so showing it
+  again immediately after a successful save (which now happens, by
+  design) doesn't read as something broke.
+- Live-verified via Playwright specifically reproducing the reported
+  repro: apply → confirm chip is gone immediately → switch to Control-M
+  Job Registry tab and back to Manual Bulk Apply → chip still gone (this
+  is the scenario a plain "did the bug reproduce once" check would have
+  missed, since without the tab-switch step the reset alone looks
+  sufficient).
+- No changes to engine core, orchestrator, gate logic, or vacuum.py.

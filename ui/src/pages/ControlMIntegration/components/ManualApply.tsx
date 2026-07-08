@@ -1,4 +1,4 @@
-import { Alert, AutoComplete, Button, Card, Col, Input, InputNumber, message, Modal, Row, Select, Table, Tag } from 'antd';
+import { Alert, AutoComplete, Button, Card, Col, Input, InputNumber, message, Modal, Row, Select, Table } from 'antd';
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useJobs } from '../../../api/hooks/useControlm';
@@ -104,13 +104,23 @@ export function ManualApply() {
       {
         onSuccess: (r) => {
           message.success(`✅ Applied to ${r.affected} table(s) (audit: ${r.audit_id}).`);
-          // Deliberately NOT resetting confirmed/confirmedRows/selectedFqns --
-          // that selection is still valid, and clearing it immediately after
-          // a successful apply used to flash the "Select target tables above
-          // first" warning right after success, which reads like something
-          // went wrong. Only the Job Details fields (what was just applied)
-          // get cleared, ready for a different job on the same or a new
-          // selection.
+          // Full reset, including Target Tables -- a prior version kept the
+          // confirmed selection alive after a successful apply (to avoid
+          // flashing the "select tables first" hint right after success),
+          // but that meant the "✅ All N table(s) selected" summary lingered
+          // indefinitely -- surviving tab switches and even navigating away
+          // and back (AntD Tabs keeps inactive panes mounted, so this
+          // component's state was never actually reset by that navigation).
+          // A completed apply should start the next one from a clean slate;
+          // the "select tables first" hint below is now worded as neutral
+          // guidance rather than a warning, so showing it again isn't jarring.
+          setDomain(undefined);
+          setLayer(undefined);
+          setDatabaseName('');
+          setPattern('');
+          setConfirmed(false);
+          setConfirmedRows([]);
+          setSelectedFqns([]);
           setPipelineJob('');
           setStartTime('02:00');
           setDuration(0);
@@ -260,8 +270,8 @@ export function ManualApply() {
           🔗 Apply to {selectedFqns.length || 0} Table(s)
         </Button>
         {!confirmed && (
-          <div style={{ marginTop: 8 }}>
-            <Tag color="gold">Select target tables above first</Tag>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#667085' }}>
+            Select target tables above to enable Apply.
           </div>
         )}
       </Card>
