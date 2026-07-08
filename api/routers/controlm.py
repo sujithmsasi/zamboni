@@ -44,6 +44,11 @@ async def import_jobs(file: UploadFile, actor: str = Depends(get_current_user)):
     return envelope({**result, "audit_id": event.audit_id})
 
 
+@router.get("/api/jobs/{name}/tables")
+def get_job_mapped_tables(name: str):
+    return envelope(controlm_svc.get_mapped_tables(name))
+
+
 @router.delete("/api/jobs/{name}")
 def delete_job(name: str, actor: str = Depends(get_current_user)):
     ok = controlm_svc.delete_job(name)

@@ -25,6 +25,22 @@ def test_list_jobs_includes_tables_mapped_count(client):
     assert jobs[0]["tables_mapped"] >= 1
 
 
+def test_get_job_mapped_tables(client):
+    """Backs the Job List 'Tables Mapped' drill-in popup -- ACE-DA-FIN-APS-
+    INGEST-PRD is seeded as controlm_pipeline_job on fin_aps_payment_stg."""
+    resp = client.get("/api/jobs/ACE-DA-FIN-APS-INGEST-PRD/tables")
+    assert resp.status_code == 200
+    rows = resp.json()["data"]
+    assert len(rows) >= 1
+    assert any(r["table_fqn"].endswith("fin_aps_payment_stg") for r in rows)
+
+
+def test_get_job_mapped_tables_empty_for_unknown_job(client):
+    resp = client.get("/api/jobs/NOT-A-REAL-JOB/tables")
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
+
+
 def test_upsert_job(client):
     resp = client.post("/api/jobs", json={"job_name": "ACE-DA-TEST-NEW-PRD", "job_type": "controlm"})
     assert resp.status_code == 200

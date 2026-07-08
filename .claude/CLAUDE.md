@@ -121,10 +121,10 @@ tests/api/           80 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through Phase 5a)
+## Test Baseline (2026-07-06, updated through 2026-07-08 Control-M Integration)
 ```
 python -m pytest tests/unit -q   → 562 passed
-python -m pytest tests/api -q    → 80 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/api -q    → 86 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
@@ -1174,4 +1174,32 @@ deterministic non-default start-time/duration/frequency to autofill from).
   (open by default, matching prior behavior, but collapsible) instead of
   a plain `Card` — repeat visitors who already know the format can
   collapse it out of the way.
+- No changes to engine core, orchestrator, gate logic, or vacuum.py.
+
+2026-07-08 Control-M Integration, second follow-up: Job List gained Edit +
+a drill-in "Tables Mapped" popup, plus a sample CSV download for Bulk
+Upload. 562 unit + 86 api tests passing (+2 regression tests),
+ruff/tsc/build/lint clean, live-verified via Playwright.
+- **New route** `GET /api/jobs/{name}/tables` (`> ADDED` note in
+  contracts.md, same precedent as prior additions; contract-smoke route
+  count 50→51) — `controlm_svc.get_mapped_tables()` returns every table
+  referencing the job in any of its three role columns
+  (`controlm_pipeline_job`/`controlm_hk_job`/`dependent_on_controlm_job`).
+- **Job List "Tables Mapped" is now a link** (only when count > 0) opening
+  a `MappedTablesModal` — table/domain/layer plus a `Role` column
+  (Pipeline/HK/Gate 1 tags, since a table can reference the same job in
+  more than one role) sourced from the new endpoint.
+- **Job List gained an Edit action** — `EditJobModal` pre-fills from the
+  row and reuses the existing `useUpsertJob()` mutation (`INSERT OR
+  REPLACE` keyed on `job_name`). Job Name itself is deliberately not
+  editable in this modal: renaming would silently create a second
+  registry row and orphan the original rather than rename anything, since
+  upsert's uniqueness key *is* job_name.
+- **Bulk Upload CSV gained a "Download Sample CSV" button** — a static
+  2-row example (`SAMPLE_CSV` const) covering every documented column
+  (`job_name, job_type, domain, description, expected_start_time,
+  expected_duration_min, job_frequency`), via the same `downloadRawCsv()`
+  helper Export Mapping Template already uses.
+- Two new regression tests: `test_get_job_mapped_tables` (real seeded
+  mapping resolves), `test_get_job_mapped_tables_empty_for_unknown_job`.
 - No changes to engine core, orchestrator, gate logic, or vacuum.py.

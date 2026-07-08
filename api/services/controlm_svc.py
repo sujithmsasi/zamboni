@@ -118,3 +118,19 @@ def import_jobs(csv_bytes: bytes, registered_by: str) -> dict:
 def delete_job(job_name: str) -> bool:
     run_query(f"DELETE FROM {_CTRLM_JOBS_TABLE} WHERE job_name = '{_esc(job_name)}'", workgroup="app", dry_run=False)
     return True
+
+
+def get_mapped_tables(job_name: str) -> list[dict]:
+    """Tables referencing job_name in any of the three Control-M role
+    columns -- backs the Job List "Tables Mapped" count's drill-in popup."""
+    esc = _esc(job_name)
+    sql = f"""
+        SELECT table_fqn, domain, layer, tier,
+               controlm_pipeline_job, controlm_hk_job, dependent_on_controlm_job
+        FROM {STREAM_REGISTRY_TABLE}
+        WHERE controlm_pipeline_job = '{esc}'
+           OR controlm_hk_job = '{esc}'
+           OR dependent_on_controlm_job = '{esc}'
+        ORDER BY table_fqn
+    """
+    return read_sql(sql, workgroup="app").to_dict(orient="records")

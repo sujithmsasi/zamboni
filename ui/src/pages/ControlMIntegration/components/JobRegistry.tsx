@@ -1,27 +1,153 @@
 import { UploadSimple } from '@phosphor-icons/react';
 import { Alert, AutoComplete, Button, Col, Input, InputNumber, message, Modal, Row, Select, Table, Tabs, Tag, Upload } from 'antd';
 import type { UploadRequestOption } from 'rc-upload/lib/interface';
-import { useMemo, useState } from 'react';
-import { useDeleteJob, useImportJobs, useJobs, useUpsertJob } from '../../../api/hooks/useControlm';
+import { useEffect, useMemo, useState } from 'react';
+import { useDeleteJob, useImportJobs, useJobMappedTables, useJobs, useUpsertJob } from '../../../api/hooks/useControlm';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import type { JobRow } from '../../../api/types';
-import { downloadCsv } from '../../../utils/csv';
+import { downloadCsv, downloadRawCsv } from '../../../utils/csv';
 
 const JOB_TYPE_OPTIONS = ['controlm', 'glue', 'lambda', 'step_functions', 'airflow', 'other'];
 const JOB_FREQUENCY_OPTIONS = ['hourly', 'daily', 'weekly', 'monthly', 'every_trigger'];
 
+/** Drill-in popup for Job List's "Tables Mapped" count -- which tables
+ * reference this job, and via which of the three Control-M role columns. */
+function MappedTablesModal({ jobName, onClose }: { jobName: string | null; onClose: () => void }) {
+  const mapped = useJobMappedTables(jobName);
+
+  return (
+    <Modal title={`Tables mapped to "${jobName}"`} open={!!jobName} onCancel={onClose} footer={null} width={800}>
+      <Table
+        size="small"
+        loading={mapped.isLoading}
+        dataSource={mapped.data ?? []}
+        rowKey="table_fqn"
+        pagination={(mapped.data?.length ?? 0) > 10 ? { pageSize: 10 } : false}
+        locale={{ emptyText: 'No tables currently reference this job.' }}
+        columns={[
+          { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn' },
+          { title: 'Domain', dataIndex: 'domain', key: 'domain' },
+          { title: 'Layer', dataIndex: 'layer', key: 'layer' },
+          {
+            title: 'Role', key: 'role',
+            render: (_: unknown, row: Record<string, unknown>) => {
+              const roles: string[] = [];
+              if (row.controlm_pipeline_job === jobName) roles.push('Pipeline');
+              if (row.controlm_hk_job === jobName) roles.push('HK');
+              if (row.dependent_on_controlm_job === jobName) roles.push('Gate 1');
+              return roles.map((r) => <Tag key={r}>{r}</Tag>);
+            },
+          },
+        ]}
+      />
+    </Modal>
+  );
+}
+
+/** Edit an existing job's registry metadata. Job Name itself isn't
+ * editable -- upsert_job is INSERT OR REPLACE keyed on job_name, so
+ * "renaming" here would silently create a second entry and orphan the
+ * original rather than rename it. */
+function EditJobModal({ job, onClose }: { job: JobRow | null; onClose: () => void }) {
+  const [jobType, setJobType] = useState('controlm');
+  const [domain, setDomain] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [duration, setDuration] = useState(0);
+  const [jobFrequency, setJobFrequency] = useState<string | undefined>();
+  const [description, setDescription] = useState('');
+
+  const domains = useDomainsList(true);
+  const upsert = useUpsertJob();
+
+  useEffect(() => {
+    if (!job) return;
+    setJobType(job.job_type || 'controlm');
+    setDomain(job.domain || '');
+    setStartTime(job.expected_start_time || '');
+    setDuration(job.expected_duration_min ?? 0);
+    setJobFrequency(job.job_frequency || undefined);
+    setDescription(job.description || '');
+  }, [job]);
+
+  const handleSave = () => {
+    if (!job) return;
+    upsert.mutate(
+      {
+        job_name: job.job_name, job_type: jobType, domain, description,
+        expected_start_time: startTime, expected_duration_min: duration,
+        job_frequency: jobFrequency ?? '',
+      },
+      {
+        onSuccess: (r) => {
+          message.success(`✅ ${job.job_name} updated (audit: ${r.audit_id}).`);
+          onClose();
+        },
+        onError: (err) => message.error(err instanceof Error ? err.message : 'Failed.'),
+      },
+    );
+  };
+
+  return (
+    <Modal
+      title={`Edit "${job?.job_name}"`}
+      open={!!job}
+      onCancel={onClose}
+      onOk={handleSave}
+      confirmLoading={upsert.isPending}
+      okText="Save Changes"
+    >
+      <Row gutter={16}>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job Type</div>
+          <Select style={{ width: '100%', marginBottom: 12 }} value={jobType} onChange={setJobType} options={JOB_TYPE_OPTIONS.map((j) => ({ value: j, label: j }))} />
+        </Col>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Domain</div>
+          <Select
+            allowClear value={domain || undefined} onChange={(v) => setDomain(v ?? '')}
+            options={(domains.data ?? []).map((d) => ({ value: d.domain_name, label: d.domain_name }))}
+            style={{ width: '100%', marginBottom: 12 }}
+          />
+        </Col>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected start time (HH:MM)</div>
+          <Input value={startTime} onChange={(e) => setStartTime(e.target.value)} placeholder="02:00" style={{ marginBottom: 12 }} />
+        </Col>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Expected duration (min)</div>
+          <InputNumber min={0} max={480} style={{ width: '100%', marginBottom: 12 }} value={duration} onChange={(v) => setDuration(v ?? 0)} />
+        </Col>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Job Frequency</div>
+          <Select
+            allowClear value={jobFrequency} onChange={setJobFrequency}
+            options={JOB_FREQUENCY_OPTIONS.map((f) => ({ value: f, label: f }))}
+            style={{ width: '100%', marginBottom: 12 }}
+          />
+        </Col>
+        <Col span={24}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Description</div>
+          <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Finance APS ingest pipeline" />
+        </Col>
+      </Row>
+    </Modal>
+  );
+}
+
 /**
  * Job List -- the registry grid used to sit above the Add/Upload forms with
- * no search, no domain filter, and no way to remove a stale entry. The job
- * list is small (dozens, not thousands, of registered jobs), so search and
- * domain/type filters are all client-side over one already-fetched list --
- * the search box is an AutoComplete so it doubles as a suggestion dropdown
- * without a second round trip.
+ * no search, no domain filter, and no way to remove or edit a stale entry.
+ * The job list is small (dozens, not thousands, of registered jobs), so
+ * search and domain/type filters are all client-side over one already-
+ * fetched list -- the search box is an AutoComplete so it doubles as a
+ * suggestion dropdown without a second round trip.
  */
 function JobListTab() {
   const [search, setSearch] = useState('');
   const [domain, setDomain] = useState<string | undefined>();
   const [jobType, setJobType] = useState<string | undefined>();
+  const [editingJob, setEditingJob] = useState<JobRow | null>(null);
+  const [mappedTablesFor, setMappedTablesFor] = useState<string | null>(null);
 
   const jobs = useJobs();
   const domains = useDomainsList(true);
@@ -120,22 +246,37 @@ function JobListTab() {
           {
             title: 'Tables Mapped', dataIndex: 'tables_mapped', key: 'tables_mapped',
             sorter: (a: JobRow, b: JobRow) => a.tables_mapped - b.tables_mapped,
-            render: (v: number) => (v > 0 ? <Tag color="blue">{v}</Tag> : <span style={{ color: '#98A2B3' }}>0</span>),
+            render: (v: number, row: JobRow) =>
+              v > 0 ? (
+                <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setMappedTablesFor(row.job_name)}>
+                  {v}
+                </Button>
+              ) : (
+                <span style={{ color: '#98A2B3' }}>0</span>
+              ),
           },
           {
             title: 'Active', dataIndex: 'active', key: 'active',
             render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>),
           },
           {
-            title: '', key: 'actions', width: 80,
+            title: '', key: 'actions', width: 140,
             render: (_: unknown, row: JobRow) => (
-              <Button size="small" danger type="text" onClick={() => handleDelete(row.job_name, row.tables_mapped)}>
-                Remove
-              </Button>
+              <>
+                <Button size="small" type="text" onClick={() => setEditingJob(row)}>
+                  Edit
+                </Button>
+                <Button size="small" danger type="text" onClick={() => handleDelete(row.job_name, row.tables_mapped)}>
+                  Remove
+                </Button>
+              </>
             ),
           },
         ]}
       />
+
+      <EditJobModal job={editingJob} onClose={() => setEditingJob(null)} />
+      <MappedTablesModal jobName={mappedTablesFor} onClose={() => setMappedTablesFor(null)} />
     </div>
   );
 }
@@ -210,6 +351,12 @@ function AddSingleJob() {
   );
 }
 
+const SAMPLE_CSV = [
+  'job_name,job_type,domain,description,expected_start_time,expected_duration_min,job_frequency',
+  'ACE-DA-FIN-APS-INGEST-PRD,controlm,finance,Finance APS ingest pipeline,02:00,45,daily',
+  'ACE-DA-FIN-APS-HK-PRD,controlm,finance,Zamboni HK trigger for APS,03:00,15,daily',
+].join('\n');
+
 function BulkUploadJobs() {
   const importJobs = useImportJobs();
 
@@ -233,9 +380,18 @@ function BulkUploadJobs() {
         message="Upload a CSV with your full Control-M job list. Existing jobs are updated (upsert)."
         description="Required column: job_name. Optional: job_type, domain, description, expected_start_time, expected_duration_min, job_frequency."
       />
-      <Upload accept=".csv" showUploadList={false} customRequest={customRequest}>
-        <Button icon={<UploadSimple size={14} />} loading={importJobs.isPending}>Upload Control-M Jobs CSV</Button>
-      </Upload>
+      <Row gutter={12}>
+        <Col>
+          <Upload accept=".csv" showUploadList={false} customRequest={customRequest}>
+            <Button icon={<UploadSimple size={14} />} loading={importJobs.isPending}>Upload Control-M Jobs CSV</Button>
+          </Upload>
+        </Col>
+        <Col>
+          <Button onClick={() => downloadRawCsv(SAMPLE_CSV, 'zamboni_controlm_jobs_sample.csv')}>
+            ⬇️ Download Sample CSV
+          </Button>
+        </Col>
+      </Row>
     </div>
   );
 }

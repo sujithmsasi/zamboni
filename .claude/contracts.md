@@ -409,8 +409,13 @@ GET    /api/stale                      ?kind=hk|orphan|zero_row|nonprod&filters
 GET    /api/jobs                       ?search
 POST   /api/jobs                       upsert single
 POST   /api/jobs/import                CSV upload, upsert-all
+GET    /api/jobs/{name}/tables         tables referencing this job (any of the 3 role columns)
 DELETE /api/jobs/{name}
 ```
+> ADDED (Control-M Integration follow-up, 2026-07-08): `GET /api/jobs/
+> {name}/tables` -- backs the Job List "Tables Mapped" count's drill-in
+> popup. Not in the original lock; same precedent as Phase 4's domains
+> router and Phase 5a's template create/delete routes.
 
 ### routers/settings_router.py
 ```

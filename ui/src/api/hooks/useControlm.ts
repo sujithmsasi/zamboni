@@ -1,11 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { qs, request, requestMultipart } from '../client';
-import type { JobRow, MutationResult } from '../types';
+import type { JobRow, MutationResult, TableRow } from '../types';
 
 export function useJobs(search?: string) {
   return useQuery({
     queryKey: ['jobs', 'list', search],
     queryFn: () => request<JobRow[]>(`/jobs${qs({ search })}`),
+  });
+}
+
+export function useJobMappedTables(jobName: string | null) {
+  return useQuery({
+    queryKey: ['jobs', 'mapped-tables', jobName],
+    queryFn: () => request<TableRow[]>(`/jobs/${encodeURIComponent(jobName ?? '')}/tables`),
+    enabled: !!jobName,
   });
 }
 
