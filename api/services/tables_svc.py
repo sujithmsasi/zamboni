@@ -18,7 +18,7 @@ from api.services import controlm_svc
 from config.settings import STREAM_REGISTRY_TABLE
 from engine.core import registry
 from engine.core.config import apply_template, infer_template
-from engine.utils.athena_client import read_sql, run_query
+from engine.core.control_plane import read_sql, run_query, update_row
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 
 
@@ -66,7 +66,13 @@ def list_tables(
 
 
 def get_table(fqn: str) -> dict | None:
-    return registry.get_table(fqn)
+    # Deliberately NOT registry.get_table() -- see domains_svc.py::get_domain()'s
+    # identical comment. Inlined so GET /api/tables/{fqn} shares the same read
+    # cache list_tables() (above) already uses.
+    df = read_sql(f"SELECT * FROM {STREAM_REGISTRY_TABLE} WHERE table_fqn = '{_esc(fqn)}' LIMIT 1", workgroup="app")
+    if df.empty:
+        return None
+    return df.iloc[0].to_dict()
 
 
 # ── register / update ────────────────────────────────────────────────────────
@@ -110,21 +116,13 @@ _UPDATABLE_FIELDS = {
 
 
 def update_table(fqn: str, fields: dict, dry_run: bool) -> bool:
-    sets = []
-    for key, value in fields.items():
-        if key not in _UPDATABLE_FIELDS or value is None:
-            continue
-        if isinstance(value, bool):
-            sets.append(f"{key} = {1 if value else 0}")
-        elif isinstance(value, int):
-            sets.append(f"{key} = {value}")
-        else:
-            sets.append(f"{key} = '{_esc(str(value))}'")
-    if not sets:
+    column_values = {
+        key: value for key, value in fields.items()
+        if key in _UPDATABLE_FIELDS and value is not None
+    }
+    if not column_values:
         return False
-    sets.append(f"updated_at = '{_now()}'")
-    sql = f"UPDATE {STREAM_REGISTRY_TABLE} SET {', '.join(sets)} WHERE table_fqn = '{_esc(fqn)}'"
-    run_query(sql, workgroup="app", dry_run=dry_run)
+    update_row(STREAM_REGISTRY_TABLE, "table_fqn", fqn, column_values, dry_run=dry_run)
     return True
 
 

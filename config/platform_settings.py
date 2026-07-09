@@ -158,4 +158,8 @@ def _safe_defaults() -> dict[str, Any]:
         "teams_webhook_url":                      "",
         "cost_explorer_enabled":                  False,
         "cost_explorer_cache_hours":              24,
+        "control_plane_sync_interval_seconds":         300,
+        "control_plane_backup_interval_seconds":       300,
+        "control_plane_backup_hourly_retention_hours": 24,
+        "control_plane_backup_daily_retention_days":   30,
     }

@@ -11,10 +11,10 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from config.settings import STREAM_REGISTRY_TABLE
-from engine.utils.athena_client import read_sql, run_query
+from config.settings import CONTROLM_JOBS_TABLE, STREAM_REGISTRY_TABLE
+from engine.core.control_plane import read_sql, run_query
 
-_CTRLM_JOBS_TABLE = "controlm_jobs"
+_CTRLM_JOBS_TABLE = CONTROLM_JOBS_TABLE
 
 
 def _esc(value: str) -> str:
@@ -41,6 +41,9 @@ def list_jobs(search: str | None = None) -> list[dict]:
 
 
 def upsert_job(req: dict, registered_by: str) -> bool:
+    # INSERT OR REPLACE runs natively against the SQLite control-plane DB --
+    # no outbox/UPDATE-by-key shape constraint to work around here, unlike
+    # the earlier Athena-primary-plus-cache design.
     now = _now()
     run_query(
         f"INSERT OR REPLACE INTO {_CTRLM_JOBS_TABLE} "

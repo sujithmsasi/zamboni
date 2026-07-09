@@ -55,6 +55,23 @@ if [ $? -ne 0 ]; then
 fi
 echo "[app_start] Settings validated ✓" | tee -a "$LOG"
 
+# ── 2b. Control-plane DB liveness check ───────────────────────────────────────
+# stream_registry/hk_config/domain_registry/nonprod_registry/controlm_jobs are
+# SQLite-primary in production now (engine/core/control_plane.py) -- unlike
+# the Athena check below, this one is FATAL: it's not a nice-to-have, it's
+# the file the app actually reads/writes for these tables.
+echo "[app_start] Checking control-plane DB liveness..." | tee -a "$LOG"
+$PYTHON -c "
+from engine.core.control_plane import read_sql
+df = read_sql('SELECT 1 AS ok')
+assert not df.empty and int(df.iloc[0]['ok']) == 1
+print('  Control-plane DB liveness OK')
+"
+if [ $? -ne 0 ]; then
+    echo "[app_start] ERROR: control-plane DB liveness check failed." | tee -a "$LOG"
+    exit 1
+fi
+
 # ── 3. Athena connectivity check ──────────────────────────────────────────────
 echo "[app_start] Checking Athena connectivity..." | tee -a "$LOG"
 $PYTHON -c "
@@ -112,7 +129,28 @@ until curl -sf http://localhost:8000/api/system/mode > /dev/null 2>&1; do
     sleep 5
 done
 
-# ── 6. Log deploy event ───────────────────────────────────────────────────────
+# ── 6. Start zamboni-control-plane-{sync,backup} ─────────────────────────────
+# Non-fatal if either fails to start -- the control-plane DB liveness check
+# above (step 2b) already confirmed the app itself can read/write it; these
+# two are the Athena-sync and S3-backup loops layered on top, not something
+# a request-serving path depends on synchronously.
+for svc in zamboni-control-plane-sync zamboni-control-plane-backup; do
+    echo "[app_start] Starting $svc service..." | tee -a "$LOG"
+    systemctl start "$svc" || echo "[app_start] WARNING: $svc failed to start (non-fatal)." | tee -a "$LOG"
+    sleep 2
+    if systemctl is-active --quiet "$svc"; then
+        echo "[app_start] $svc is running ✓" | tee -a "$LOG"
+    else
+        echo "[app_start] WARNING: $svc is not active." | tee -a "$LOG"
+        journalctl -u "$svc" -n 20 | tee -a "$LOG"
+    fi
+done
+
+# zamboni-control-plane-integrity is a .timer-triggered daily oneshot (see
+# deploy/systemd/zamboni-control-plane-integrity.timer) -- nothing to start
+# here, systemctl enable in after_install.sh is sufficient.
+
+# ── 7. Log deploy event ───────────────────────────────────────────────────────
 DEPLOY_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 HOSTNAME=$(hostname)
 echo "[app_start] Deploy completed successfully at $DEPLOY_TIME on $HOSTNAME" | tee -a "$LOG"

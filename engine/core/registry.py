@@ -14,7 +14,7 @@ from config.settings import (
     VALID_LAYERS,
     VALID_TIERS,
 )
-from engine.utils.athena_client import read_sql, run_query
+from engine.core.control_plane import read_sql, run_query
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -332,6 +332,11 @@ def register_table(
         ramp_days = int(get_setting("default_dry_run_ramp_days", 14) or 0)
         if ramp_days > 0:
             dry_run_until_sql = f"DATE '{(date.today() + timedelta(days=ramp_days)).isoformat()}'"
+    # properties_synced/last_execution_id deliberately omitted -- engine-owned
+    # columns excluded from the SQLite control-plane mirror (see
+    # config/control_plane_schema.py's docstring); property_sync.py and
+    # idempotency.py each write these directly, real Athena, on their own
+    # first touch of the row.
     sql = f"""
         INSERT INTO {STREAM_REGISTRY_TABLE} (
             table_fqn, domain, layer, tier,
@@ -342,7 +347,6 @@ def register_table(
             controlm_job_start_time, controlm_expected_duration_min,
             archive_enabled, archive_retention_days, archive_bucket,
             lifecycle_enabled, processing_cadence,
-            properties_synced, last_execution_id,
             registered_by, registered_at, updated_at,
             database_name, owner_name, notes
         ) VALUES (
@@ -366,8 +370,6 @@ def register_table(
             {int(controlm_expected_duration_min)},
             {archive_int},
             {arch},
-            NULL,
-            0,
             NULL,
             0,
             NULL,

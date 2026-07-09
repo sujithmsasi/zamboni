@@ -8,6 +8,7 @@ export interface PoliciesFilter {
   domain?: string;
   layer?: string;
   tier?: string;
+  search?: string;
   [key: string]: string | number | boolean | undefined;
 }
 

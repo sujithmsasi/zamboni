@@ -114,4 +114,45 @@ systemctl daemon-reload
 systemctl enable zamboni-api
 echo "[after_install] zamboni-api service registered." | tee -a "$LOG"
 
+# ── 7. Control-plane data directory ──────────────────────────────────────────
+# /data/zamboni holds the control-plane SQLite DB (stream_registry,
+# hk_config, domain_registry, nonprod_registry, controlm_jobs -- SQLite-
+# primary in production, see engine/core/control_plane.py) -- deliberately
+# OUTSIDE /opt/zamboni, which CodeDeploy replaces wholesale on every
+# revision. Lives on the instance's existing root EBS volume (no dedicated
+# volume provisioned for it -- deploy/zamboni-cfn.yaml only has the one
+# root volume today); this mkdir is idempotent and is the only place this
+# directory is created. It must never be deleted or recreated
+# destructively here or anywhere else in this deploy pipeline.
+mkdir -p /data/zamboni
+chown ec2-user:ec2-user /data/zamboni
+echo "[after_install] /data/zamboni ready." | tee -a "$LOG"
+
+# ── 8. Control-plane DB schema init/migrate ──────────────────────────────────
+# Idempotent -- CREATE TABLE IF NOT EXISTS + guarded ALTER TABLE, safe on
+# every deploy. Never touches ZAMBONI_LOCAL_DB or seeds any data.
+echo "[after_install] Initializing control-plane DB schema..." | tee -a "$LOG"
+"$VENV_DIR/bin/python" "$DEPLOY_DIR/scripts/init_control_plane_db.py" | tee -a "$LOG"
+
+# ── 9. zamboni-control-plane-{sync,backup,integrity} systemd services ───────
+# Push the control-plane DB's current state to real Athena and back it up
+# to S3 on their own intervals (tunable live via Settings -> Advanced, see
+# scripts/control_plane_sync.py / control_plane_backup.py). All three are
+# no-ops in ZAMBONI_LOCAL_MODE (never runs on this deployed instance) --
+# safe to always install/enable.
+for svc in zamboni-control-plane-sync zamboni-control-plane-backup; do
+    echo "[after_install] Installing $svc systemd unit..." | tee -a "$LOG"
+    cp "$DEPLOY_DIR/deploy/systemd/$svc.service" "/etc/systemd/system/$svc.service"
+    systemctl daemon-reload
+    systemctl enable "$svc"
+    echo "[after_install] $svc service registered." | tee -a "$LOG"
+done
+
+echo "[after_install] Installing zamboni-control-plane-integrity timer..." | tee -a "$LOG"
+cp "$DEPLOY_DIR/deploy/systemd/zamboni-control-plane-integrity.service" /etc/systemd/system/zamboni-control-plane-integrity.service
+cp "$DEPLOY_DIR/deploy/systemd/zamboni-control-plane-integrity.timer" /etc/systemd/system/zamboni-control-plane-integrity.timer
+systemctl daemon-reload
+systemctl enable zamboni-control-plane-integrity.timer
+echo "[after_install] zamboni-control-plane-integrity timer registered." | tee -a "$LOG"
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === AfterInstall DONE ===" | tee -a "$LOG"

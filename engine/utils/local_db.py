@@ -27,25 +27,39 @@ from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_conn: sqlite3.Connection | None = None
+_conns: dict[str, sqlite3.Connection] = {}
 
 
-def get_connection() -> sqlite3.Connection:
-    """Return (or create) the singleton SQLite connection."""
-    global _conn
-    if _conn is None:
+def get_connection(db_path: str | None = None) -> sqlite3.Connection:
+    """
+    Return (or create) the SQLite connection for db_path.
+    db_path defaults to ZAMBONI_LOCAL_DB (the dev/demo fixture) for
+    backward compatibility -- pass an explicit path (e.g.
+    config.settings.ZAMBONI_CONTROL_PLANE_DB) to get a distinct,
+    independent connection, such as the control-plane primary DB. One
+    connection is cached per resolved path, not a single global, so the
+    two files never collide within the same process.
+    """
+    if db_path is None:
         from config.settings import ZAMBONI_LOCAL_DB
         db_path = ZAMBONI_LOCAL_DB
-        _conn = sqlite3.connect(db_path, check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
+    if db_path not in _conns:
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
         # Enable WAL mode for better concurrent read performance
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        # synchronous=NORMAL + a busy_timeout are cheap everywhere and matter
+        # once a db_path is used as real persistent primary storage (the
+        # control-plane DB), not just a disposable dev/demo fixture.
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        _conns[db_path] = conn
         log.info("local_db.connected", path=db_path)
-    return _conn
+    return _conns[db_path]
 
 
-def read_sql_local(sql: str) -> pd.DataFrame:
+def read_sql_local(sql: str, db_path: str | None = None) -> pd.DataFrame:
     """
     Execute a SELECT against the local SQLite DB.
     Translates common Athena-isms to SQLite equivalents automatically.
@@ -53,7 +67,7 @@ def read_sql_local(sql: str) -> pd.DataFrame:
     """
     sql = _translate(sql)
     try:
-        conn = get_connection()
+        conn = get_connection(db_path)
         df   = pd.read_sql_query(sql, conn)
         log.debug("local_db.read_sql", rows=len(df), sql=sql[:120])
         return df
@@ -62,7 +76,7 @@ def read_sql_local(sql: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def run_query_local(sql: str) -> str | None:
+def run_query_local(sql: str, db_path: str | None = None) -> str | None:
     """
     Execute an INSERT/UPDATE/DELETE against the local SQLite DB.
     Returns a fake query_id string (for compatibility with callers).
@@ -84,7 +98,7 @@ def run_query_local(sql: str) -> str | None:
 
     sql = _translate(sql)
     try:
-        conn = get_connection()
+        conn = get_connection(db_path)
         conn.execute(sql)
         conn.commit()
         qid = "local-" + _fake_id()
@@ -95,12 +109,19 @@ def run_query_local(sql: str) -> str | None:
         return None
 
 
-def create_tables(ddl_map: dict[str, str]) -> None:
+def translate_athena_sql(sql: str) -> str:
+    """Public wrapper around _translate() for callers outside this module
+    (e.g. engine.core.athena_cache) that need the same Athena-to-SQLite
+    rewriting without duplicating it."""
+    return _translate(sql)
+
+
+def create_tables(ddl_map: dict[str, str], db_path: str | None = None) -> None:
     """
     Create tables from a dict of {table_name: sqlite_ddl}.
-    Called by the seed script.
+    Called by the seed script and by scripts/init_control_plane_db.py.
     """
-    conn = get_connection()
+    conn = get_connection(db_path)
     for table_name, ddl in ddl_map.items():
         try:
             conn.execute(ddl)
@@ -111,11 +132,11 @@ def create_tables(ddl_map: dict[str, str]) -> None:
                         table=table_name, error=str(e))
 
 
-def insert_rows(table: str, rows: list[dict]) -> int:
+def insert_rows(table: str, rows: list[dict], db_path: str | None = None) -> int:
     """Bulk insert rows into a local table. Returns count inserted."""
     if not rows:
         return 0
-    conn   = get_connection()
+    conn   = get_connection(db_path)
     cols   = list(rows[0].keys())
     placeholders = ", ".join("?" * len(cols))
     col_list     = ", ".join(cols)
@@ -130,17 +151,18 @@ def insert_rows(table: str, rows: list[dict]) -> int:
         return 0
 
 
-def reset_db() -> None:
+def reset_db(db_path: str | None = None) -> None:
     """Drop all Zamboni tables and recreate from scratch. Used by seed script."""
-    global _conn
-    if _conn:
-        _conn.close()
-        _conn = None
-    from config.settings import ZAMBONI_LOCAL_DB
-    db_path = Path(ZAMBONI_LOCAL_DB)
-    if db_path.exists():
-        db_path.unlink()
-        log.info("local_db.reset", path=str(db_path))
+    if db_path is None:
+        from config.settings import ZAMBONI_LOCAL_DB
+        db_path = ZAMBONI_LOCAL_DB
+    conn = _conns.pop(db_path, None)
+    if conn:
+        conn.close()
+    path = Path(db_path)
+    if path.exists():
+        path.unlink()
+        log.info("local_db.reset", path=str(path))
 
 
 # ── SQL translation ───────────────────────────────────────────────────────────

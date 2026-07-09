@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Divider, Input, message, Row, Skeleton, Switch } from 'antd';
+import { Alert, Button, Card, Col, Divider, Input, InputNumber, message, Row, Skeleton, Switch } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useLocks } from '../../../api/hooks/useSystem';
 import { useUpdateSettings } from '../../../api/hooks/useSettings';
@@ -28,6 +28,10 @@ export function AdvancedTab() {
   const [ceEnabled, setCeEnabled] = useState(false);
   const [tagKey, setTagKey] = useState('zamboni:managed');
   const [tagValue, setTagValue] = useState('true');
+  const [cpSyncInterval, setCpSyncInterval] = useState(300);
+  const [cpBackupInterval, setCpBackupInterval] = useState(300);
+  const [cpHourlyRetention, setCpHourlyRetention] = useState(24);
+  const [cpDailyRetention, setCpDailyRetention] = useState(30);
 
   const applied = useRef(false);
   useEffect(() => {
@@ -38,6 +42,10 @@ export function AdvancedTab() {
     setCeEnabled(!!settings.data.cost_explorer_enabled);
     setTagKey(settings.data.cost_explorer_tag_key ?? 'zamboni:managed');
     setTagValue(settings.data.cost_explorer_tag_value ?? 'true');
+    setCpSyncInterval(settings.data.control_plane_sync_interval_seconds ?? 300);
+    setCpBackupInterval(settings.data.control_plane_backup_interval_seconds ?? 300);
+    setCpHourlyRetention(settings.data.control_plane_backup_hourly_retention_hours ?? 24);
+    setCpDailyRetention(settings.data.control_plane_backup_daily_retention_days ?? 30);
   }, [settings.data]);
 
   const savePatterns = () => {
@@ -87,6 +95,32 @@ export function AdvancedTab() {
       { settings: { cost_explorer_enabled: ceEnabled, cost_explorer_tag_key: tagKey.trim(), cost_explorer_tag_value: tagValue.trim() }, dry_run: false },
       {
         onSuccess: (r) => message.success(`✅ Cost Explorer settings saved (audit: ${r.audit_id}).`),
+        onError: (err) => message.error(err instanceof Error ? err.message : 'Save failed.'),
+      },
+    );
+  };
+
+  const saveControlPlane = () => {
+    if (cpSyncInterval < 15 || cpBackupInterval < 15) {
+      message.error('Intervals must be at least 15 seconds.');
+      return;
+    }
+    if (cpHourlyRetention < 1 || cpDailyRetention < 1) {
+      message.error('Retention windows must be at least 1.');
+      return;
+    }
+    updateSettings.mutate(
+      {
+        settings: {
+          control_plane_sync_interval_seconds: cpSyncInterval,
+          control_plane_backup_interval_seconds: cpBackupInterval,
+          control_plane_backup_hourly_retention_hours: cpHourlyRetention,
+          control_plane_backup_daily_retention_days: cpDailyRetention,
+        },
+        dry_run: false,
+      },
+      {
+        onSuccess: (r) => message.success(`✅ Control plane sync settings saved (audit: ${r.audit_id}).`),
         onError: (err) => message.error(err instanceof Error ? err.message : 'Save failed.'),
       },
     );
@@ -146,6 +180,37 @@ export function AdvancedTab() {
         </Row>
       )}
       <Button onClick={saveCostExplorer} loading={updateSettings.isPending} style={{ marginBottom: 24 }}>💾 Save Cost Explorer Settings</Button>
+
+      <Divider />
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>Control Plane Sync &amp; Backup</div>
+      <div style={{ fontSize: 12, color: '#667085', marginBottom: 8 }}>
+        stream_registry, hk_config, domain_registry, nonprod_registry, and controlm_jobs are
+        SQLite-primary -- the UI/engine read and write the control-plane DB directly, fast and
+        always fresh. These intervals only control the background jobs that push a copy to Athena
+        for reporting/recovery and back up the SQLite file to S3; they never affect how quickly a
+        change here takes effect.
+      </div>
+      <Row gutter={16} style={{ marginBottom: 12 }}>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Athena sync interval (seconds)</div>
+          <InputNumber min={15} value={cpSyncInterval} onChange={(v) => setCpSyncInterval(v ?? 300)} style={{ width: '100%' }} />
+        </Col>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>S3 backup interval (seconds)</div>
+          <InputNumber min={15} value={cpBackupInterval} onChange={(v) => setCpBackupInterval(v ?? 300)} style={{ width: '100%' }} />
+        </Col>
+      </Row>
+      <Row gutter={16} style={{ marginBottom: 12 }}>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Hourly backup retention (hours)</div>
+          <InputNumber min={1} value={cpHourlyRetention} onChange={(v) => setCpHourlyRetention(v ?? 24)} style={{ width: '100%' }} />
+        </Col>
+        <Col span={12}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Daily backup retention (days)</div>
+          <InputNumber min={1} value={cpDailyRetention} onChange={(v) => setCpDailyRetention(v ?? 30)} style={{ width: '100%' }} />
+        </Col>
+      </Row>
+      <Button onClick={saveControlPlane} loading={updateSettings.isPending} style={{ marginBottom: 24 }}>💾 Save Control Plane Settings</Button>
 
       <Divider />
       <Alert type="info" showIcon message="SSO / LDAP Integration (Phase 2)" description="Planned: replace username/password auth with SSO for automatic user population and LDAP-based role mapping. Not active." style={{ marginBottom: 24 }} />

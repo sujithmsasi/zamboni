@@ -45,15 +45,13 @@ export function ControlMFields({ jobNameRequired = false }: ControlMFieldsProps)
               options={jobOptions}
               onSearch={setSearch}
               placeholder="ACE-DA-FIN-APS-INGEST-PRD"
-              filterOption={(inputValue, option) =>
-                (option?.value as string)?.toLowerCase().includes(inputValue.toLowerCase())
-              }
+              filterOption={false}
             />
           </Form.Item>
         </Col>
         <Col span={12}>
           <Form.Item name="controlm_hk_job" label="HK Control-M Job" tooltip="Control-M job that triggers Zamboni HK.">
-            <AutoComplete options={jobOptions} placeholder="ACE-DA-FIN-HK-PRD" />
+            <AutoComplete options={jobOptions} placeholder="ACE-DA-FIN-HK-PRD" filterOption={false} />
           </Form.Item>
         </Col>
       </Row>

@@ -76,6 +76,10 @@ NONPROD_REGISTRY_TABLE = os.getenv(
     "glue_catalog.zamboni_catalog.nonprod_registry"
 )
 AUDIT_LOG_TABLE = os.getenv("AUDIT_LOG_TABLE", "glue_catalog.zamboni_catalog.audit_log")
+CONTROLM_JOBS_TABLE = os.getenv(
+    "CONTROLM_JOBS_TABLE",
+    "glue_catalog.zamboni_catalog.controlm_jobs"
+)
 
 # ── S3 ────────────────────────────────────────────────────────────────────────
 STAGING_BUCKET          = _req("STAGING_BUCKET",          "s3://mock-staging/")
@@ -117,6 +121,22 @@ NONPROD_ENVIRONMENTS = ["preprod", "dev", "test"]
 # Used for UI development and validation without AWS connectivity.
 ZAMBONI_LOCAL_MODE = os.getenv("ZAMBONI_LOCAL_MODE", "false").lower() == "true"
 ZAMBONI_LOCAL_DB   = os.getenv("ZAMBONI_LOCAL_DB", "zamboni_local.db")
+
+# ── Control Plane (SQLite-primary for config/control tables) ────────────────
+# stream_registry, hk_config, domain_registry, nonprod_registry, controlm_jobs
+# are SQLite-primary in production, not just local mode: the API/UI write here
+# first (fast, synchronous), and the engine reads the SAME file directly --
+# safe because SQLite is the first point of write, so reads are fresh by
+# construction. execution_log/audit_log/vacuum_audit and a handful of
+# engine-owned stream_registry columns (aws_opt_*, last_execution_id,
+# metadata_location, properties_synced) stay Athena-direct, untouched.
+# See engine/core/control_plane.py. In ZAMBONI_LOCAL_MODE this resolves to
+# ZAMBONI_LOCAL_DB instead (zero behavior change for local/demo).
+# In production this is a bare filename by default for laptop use --
+# override to a persistent path (e.g. /data/zamboni/zamboni_control.db) via
+# the EC2 .env. A periodic background sync (scripts/control_plane_sync.py)
+# pushes its current state to Athena for reporting/recovery/history.
+ZAMBONI_CONTROL_PLANE_DB = os.getenv("ZAMBONI_CONTROL_PLANE_DB", "zamboni_control.db")
 
 
 # ── Mode / Session Factory (Workstream A, Phase 1a — contracts.md §2) ───────

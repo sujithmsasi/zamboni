@@ -23,11 +23,11 @@ from datetime import UTC, datetime, timedelta
 
 from config.settings import NONPROD_REGISTRY_TABLE
 from engine.core import execution_log, notifier, registry
+from engine.core.control_plane import read_sql, run_query
 from engine.core.execution_log import LogEntry
 from engine.engines.base import BaseEngine
 from engine.monitoring.activity_scanner import get_activity_signals
 from engine.operations.catalog_cleanup import cleanup_table, is_backup_pattern
-from engine.utils.athena_client import read_sql, run_query
 from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
 from engine.utils.logger import get_logger
 

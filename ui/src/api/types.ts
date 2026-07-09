@@ -460,6 +460,10 @@ export interface PlatformSettings {
   cost_explorer_enabled: boolean;
   cost_explorer_tag_key: string;
   cost_explorer_tag_value: string;
+  control_plane_sync_interval_seconds: number;
+  control_plane_backup_interval_seconds: number;
+  control_plane_backup_hourly_retention_hours: number;
+  control_plane_backup_daily_retention_days: number;
   [key: string]: unknown;
 }
 

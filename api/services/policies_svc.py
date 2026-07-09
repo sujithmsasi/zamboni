@@ -7,13 +7,12 @@ app/pages/3_Policy_Configuration.py.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from config.settings import HK_CONFIG_TABLE, STREAM_REGISTRY_TABLE
 from engine.core.config import apply_template, get_hk_config, get_policy_templates, reload_templates
-from engine.utils.athena_client import read_sql, run_query
+from engine.core.control_plane import read_sql, update_row
 
 _TEMPLATES_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "policy_templates.json"
 
@@ -37,14 +36,11 @@ def _esc(value: str) -> str:
     return str(value).replace("'", "''")
 
 
-def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
-
-
 # ── list / get ────────────────────────────────────────────────────────────────
 
 def list_policies(
     page: int, size: int, domain: str | None = None, layer: str | None = None, tier: str | None = None,
+    search: str | None = None,
 ) -> tuple[list[dict], int]:
     conditions = ["r.table_format = 'iceberg'"]
     if domain:
@@ -53,6 +49,8 @@ def list_policies(
         conditions.append(f"r.layer = '{_esc(layer)}'")
     if tier:
         conditions.append(f"r.tier = '{_esc(tier)}'")
+    if search:
+        conditions.append(f"r.table_fqn LIKE '%{_esc(search)}%'")
     where = "WHERE " + " AND ".join(conditions)
 
     base = f"FROM {STREAM_REGISTRY_TABLE} r LEFT JOIN {HK_CONFIG_TABLE} c ON r.table_fqn = c.table_fqn {where}"
@@ -92,27 +90,23 @@ _UPDATABLE_FIELDS = {
 
 
 def update_policy(fqn: str, fields: dict, dry_run: bool) -> bool:
-    sets = []
+    column_values: dict = {}
     for key, value in fields.items():
         if value is None:
             continue
         if key == "window_config":
-            sets.append(f"window_config = '{_esc(json.dumps(value))}'")
+            # Pre-serialize to a JSON string here -- update_row()'s SQL
+            # literal formatting only knows str/int/bool/None, not dicts.
+            column_values["window_config"] = json.dumps(value)
         elif key == "override_notes":
-            sets.append(f"override_notes = '{_esc(value)}'")
+            column_values["override_notes"] = value
         elif key in _UPDATABLE_FIELDS:
-            if isinstance(value, bool):
-                sets.append(f"{key} = {1 if value else 0}")
-            elif isinstance(value, int):
-                sets.append(f"{key} = {value}")
-            else:
-                sets.append(f"{key} = '{_esc(str(value))}'")
-    if not sets:
+            column_values[key] = value
+
+    if not column_values:
         return False
-    sets.append("manually_overridden = 1")
-    sets.append(f"updated_at = '{_now()}'")
-    sql = f"UPDATE {HK_CONFIG_TABLE} SET {', '.join(sets)} WHERE table_fqn = '{_esc(fqn)}'"
-    run_query(sql, workgroup="app", dry_run=dry_run)
+    column_values["manually_overridden"] = True
+    update_row(HK_CONFIG_TABLE, "table_fqn", fqn, column_values, dry_run=dry_run)
     return True
 
 

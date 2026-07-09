@@ -6,12 +6,18 @@ import type { GlueTableRow, JobMappingRow, MutationResult, RegisterResult, Table
  * Minimal search-only hook for DryRunViewer's table picker (contracts.md §6
  * GET /api/tables?search=). Table Registration itself is a later wave's page
  * -- this doesn't attempt full CRUD, just enough to feed a search Select.
+ *
+ * By default gated on a non-empty search (the "type to search" pickers --
+ * DryRunViewer, Edit Table, Engine Flags -- show a hint instead of a huge
+ * unfiltered dropdown until the user types). Pass `{ enabled: true }` to
+ * always fetch, e.g. a suggestion dropdown that should list values as soon
+ * as it's opened (Registered Tables / View Configs search boxes).
  */
-export function useTablesSearch(search: string) {
+export function useTablesSearch(search: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['tables', 'search', search],
     queryFn: () => requestPaged<TableRow[]>(`/tables${qs({ page: 1, size: 20, search })}`),
-    enabled: search.length > 0,
+    enabled: options?.enabled ?? search.length > 0,
   });
 }
 

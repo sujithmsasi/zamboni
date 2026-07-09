@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.domain_registry (
 
     -- Weekly digest settings
     digest_enabled       BOOLEAN COMMENT 'true = include this domain in weekly HK digest email',
-    digest_email         STRING  COMMENT 'Digest recipient email (defaults to owner_email if blank)'
+    digest_email         STRING  COMMENT 'Digest recipient email (defaults to owner_email if blank)',
     environment         STRING      COMMENT 'prod | preprod | dev | test — primary environment for this domain',
 
     -- Audit

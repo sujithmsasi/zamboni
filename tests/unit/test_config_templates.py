@@ -98,9 +98,13 @@ def test_to_sql_array_empty():
 
 
 def test_to_sql_array_single():
-    assert _to_sql_array(["effective_date"]) == "ARRAY['effective_date']"
+    # Comma-separated TEXT literal, not a Presto/Athena ARRAY[...] literal --
+    # SQLite has no ARRAY syntax, and sort_order_cols is a plain TEXT column
+    # (matches every other write path's convention, e.g. the Policy Config
+    # page's "partition_date, customer_id" text input).
+    assert _to_sql_array(["effective_date"]) == "'effective_date'"
 
 
 def test_to_sql_array_multiple():
     result = _to_sql_array(["col_a", "col_b"])
-    assert result == "ARRAY['col_a', 'col_b']"
+    assert result == "'col_a, col_b'"

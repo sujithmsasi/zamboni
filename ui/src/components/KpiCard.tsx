@@ -1,17 +1,17 @@
 import { CaretRight } from '@phosphor-icons/react';
 import { Skeleton } from 'antd';
 import { useState } from 'react';
-import type { kpiCardPalette } from '../../../colors';
+import type { KpiPalette } from '../colors';
 
 interface KpiCardProps {
-  palette: (typeof kpiCardPalette)[number];
+  palette: KpiPalette;
   value: number;
   suffix?: string;
   loading?: boolean;
   onClick?: () => void;
 }
 
-/** Coastal-palette KPI card: soft gradient + decorative circle accent (.claude/ui_design.md). Clickable -> drill-down modal. */
+/** Coastal-palette KPI card: soft gradient + decorative circle accent (.claude/ui_design.md). Optionally clickable. */
 export function KpiCard({ palette, value, suffix, loading, onClick }: KpiCardProps) {
   const [hovered, setHovered] = useState(false);
 

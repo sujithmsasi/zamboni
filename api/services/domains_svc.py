@@ -10,19 +10,9 @@ modules. See contracts.md §6 domains subsection for the added route list.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from config.settings import DOMAIN_REGISTRY_TABLE, STREAM_REGISTRY_TABLE
 from engine.core import registry
-from engine.utils.athena_client import read_sql, run_query
-
-
-def _esc(value) -> str:
-    return str(value).replace("'", "''")
-
-
-def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+from engine.core.control_plane import read_sql, update_row
 
 
 def list_domains(active_only: bool = False) -> list[dict]:
@@ -40,6 +30,11 @@ def list_domains(active_only: bool = False) -> list[dict]:
 
 
 def get_domain(domain_name: str) -> dict | None:
+    # domain_registry is SQLite-primary now (engine/core/control_plane.py) --
+    # registry.get_domain() and this endpoint both resolve to the same file,
+    # so there's no more freshness reason to keep a separate inline query
+    # here the way an earlier design (Athena-primary + a lagging API-side
+    # cache) needed. Delegates directly.
     return registry.get_domain(domain_name)
 
 
@@ -83,22 +78,13 @@ def update_domain(domain_name: str, fields: dict, dry_run: bool) -> bool:
     if registry.get_domain(domain_name) is None:
         raise DomainValidationError(f"Domain '{domain_name}' is not registered.")
 
-    sets = []
-    for key, kind in _UPDATE_COLUMNS.items():
-        value = fields.get(key)
-        if value is None:
-            continue
-        if kind == "bool":
-            sets.append(f"{key} = {1 if value else 0}")
-        elif kind == "int":
-            sets.append(f"{key} = {int(value)}")
-        else:
-            sets.append(f"{key} = '{_esc(value)}'")
-
-    if not sets:
+    column_values = {k: fields[k] for k in _UPDATE_COLUMNS if fields.get(k) is not None}
+    if not column_values:
         return False
 
-    sets.append(f"updated_at = '{_now()}'")
-    sql = f"UPDATE {DOMAIN_REGISTRY_TABLE} SET {', '.join(sets)} WHERE domain_name = '{_esc(domain_name)}'"
-    run_query(sql, workgroup="app", dry_run=dry_run)
+    # is_active gates the engine's next scheduled run via registry.py's
+    # domain_active_filter_sql() -- safe as a normal SQLite-primary write
+    # here (not a synchronous-bypass special case) because the engine reads
+    # this same control-plane file directly, so there's no lag window.
+    update_row(DOMAIN_REGISTRY_TABLE, "domain_name", domain_name, column_values, dry_run=dry_run)
     return True
