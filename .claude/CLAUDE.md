@@ -144,16 +144,6 @@ cfn-lint deploy/zamboni-cfn.yaml → zero errors, zero warnings
 > their own Migration Progress entry — recorded here so the count isn't
 > read as a Phase 6 regression from the previously-documented 562/97.
 
-## Deferred Work
-- **Help doc / user guide generation**: intentionally not started. Sujith
-  wants this done as a pass at the end of the project (once the page/feature
-  set stabilizes), not incrementally alongside each wave — do not
-  proactively draft help docs, in-app tooltips-as-documentation, or a user
-  guide until asked. When that pass starts, the per-phase "Parity
-  checklists" and `> ADDED` notes throughout Migration Progress below are
-  the source material for what shipped and where it deviated from the
-  Streamlit twin.
-
 ## Migration Progress
 2026-07-05 Phase 0: baseline 494 tests (ruff clean), delta report done,
 contracts committed to `.claude/contracts.md` with REALITY annotations.
@@ -2348,3 +2338,147 @@ smoke test (not mocked) proving the core claim below.
   the lock service — confirmed by construction (none of them import
   `engine.core.control_plane`) and by the smoke test above (Gate-relevant
   reads/writes all still went through the expected paths).
+
+2026-07-09 Real Athena `OPTIMIZE` SQL bug fix + search UX pass. Sujith was
+checking the Dry Run Viewer's SQL preview for syntax correctness and found
+the app's own generated SQL was wrong. 593 unit + 100 api tests passing,
+ruff/tsc/lint/build clean.
+- **`engine/strategies/binpack.py::build_optimize_sql()`** generated
+  `OPTIMIZE TABLE {catalog}.{database}.{table} REWRITE DATA USING BIN_PACK
+  WITH (file_size_limit = '{mb}MB')` — three real Athena syntax errors at
+  once: `OPTIMIZE` takes no `TABLE` keyword, `OPTIMIZE`/`VACUUM` are
+  restricted to `[db_name.]table_name` (no catalog-qualified 3-part name —
+  `vacuum.py`'s own docstring already documents this exact restriction for
+  `VACUUM`, this file just never got the same treatment), and there is no
+  inline sizing clause — target size is TBLPROPERTIES-only. Fixed to
+  `OPTIMIZE {database}.{table} REWRITE DATA USING BIN_PACK[WHERE ...]`;
+  `target_file_size_mb` kept as a parameter for logging only, no longer
+  embedded in the SQL. The real target size was already being set
+  correctly all along via `property_sync.py::apply_vacuum_properties()`'s
+  `write_target_data_file_size_bytes` TBLPROPERTIES write (run once per
+  table by `orchestrator.py` before compaction/vacuum) — this bug was
+  purely in what the *preview* showed and what would actually execute,
+  not in the property-sync mechanism itself. `tests/unit/test_compaction.py`
+  updated to assert the corrected shape and the absence of `TABLE`/
+  `glue_catalog`/`WITH`/`256MB` in the output.
+- **Table-name search added to Registered Tables and View Configs**
+  (`api/services/policies_svc.py`/`api/routers/policies.py` gained a
+  `search` param on `GET /api/policies`, mirroring `/api/tables`'s
+  existing one) — first shipped as a plain `Input.Search`, then upgraded
+  to a searchable `AutoComplete` dropdown that lists values on expand
+  (`useTablesSearch` gained an optional `{enabled: true}` override so it
+  fetches immediately instead of waiting for input, without changing
+  behavior for the 4 existing "type to search" pickers that stay gated).
+- **`ui/src/components/ControlMFields.tsx`'s Control-M Job Name
+  AutoComplete real bug**: a redundant client-side `filterOption` filtered
+  suggestions against the field's *current value*, not what the user
+  typed. On Table Registration's Edit Table tab, the field starts
+  pre-filled with the table's existing job name — many of which predate
+  the Control-M Job Registry (only auto-registered as of an earlier
+  session's fix) and don't match anything in it, so the pre-filled value
+  self-filtered every suggestion out and the dropdown never opened (0
+  options, confirmed via Playwright against the real running app, not
+  guessed). Fixed with `filterOption={false}` on both AutoCompletes in the
+  component — filtering already happens server-side via the existing
+  `onSearch` → `GET /api/jobs?search=` path.
+- **A `git stash` recovery mid-session**: verifying the ControlMFields fix
+  required temporarily reverting it via `git stash`, which partially
+  failed because `zamboni_local.db` was locked by the running dev
+  backend — Git stashed all tracked-file changes but couldn't finish
+  resetting the working tree, leaving 4 files (`config/
+  zamboni_settings.json`, `scripts/seed_local_db.py`, `tests/unit/
+  test_safety_core.py`, `zamboni_local.db`) reset to HEAD while everything
+  else (including the entire prior session's uncommitted control-plane
+  migration) sat in the stash. Recovered cleanly: killed the process
+  holding the DB file, confirmed the 4 conflicting files' working-tree
+  content was byte-identical/text-identical to what the stash held (no
+  data at risk), `git checkout stash@{0} -- <4 files>` to pre-resolve the
+  conflict, then `git stash pop` completed and dropped the stash normally.
+  Full test suite + ruff re-run afterward to confirm nothing was corrupted
+  in the recovery, not just trusted that `git status` looked right.
+- Committed as `ac6e3b0` (this work) and separately `ee0e6f8` (a one-line
+  login-card width tweak Sujith made locally, 480px→600px, bundled in
+  since it was sitting uncommitted with nothing else touching it).
+
+2026-07-09 Org-drop readiness audit + fixes. Sujith asked directly "so
+ready for org pull and setup right?" — investigated rather than assumed,
+found one real gap and two documentation gaps. 593 unit + 100 api tests
+passing, ruff clean. Committed as `5fdc737`.
+- **The real one**: `.env.example` (the template `deploy/scripts/
+  after_install.sh` copies to `/opt/zamboni/.env` on first deploy, per its
+  own fallback comment "YOU MUST UPDATE") had no `ZAMBONI_CONTROL_PLANE_DB`
+  entry at all. Without it, `control_plane.py::_db_path()` falls back to a
+  bare filename resolving inside `/opt/zamboni` — which CodeDeploy wipes
+  on every revision. First deploy looks fine; the *second* deploy silently
+  starts against an empty control-plane DB, having destroyed every
+  registered domain/table/policy. Fixed by defaulting
+  `ZAMBONI_CONTROL_PLANE_DB=/data/zamboni/zamboni_control.db` in both
+  `.env.example` and (cross-referencing comment only, still a bare
+  filename there — correct, since a laptop run never goes through
+  CodeDeploy) `.env.aws_local.example`.
+- `scripts/aws_smoke_test.py` gained a `control_plane_db` check (8th
+  check, `mode=local` SKIPs it like the other 7) — FAILs in `aws_ec2` mode
+  specifically if the configured path resolves inside `/opt/zamboni`
+  (deliberately a raw string-prefix check, not `os.path.abspath()`, which
+  would be silently defeated by Windows drive-letter prefixing if this
+  script were ever run there — found via my own first implementation
+  failing its own verification), and verifies the 5 control-plane tables
+  are actually present. New `--init-control-plane-db` flag runs `scripts/
+  init_control_plane_db.py` to self-heal, now also creating the DB file's
+  parent directory first (a second bug found during verification — the
+  init script assumes the directory already exists, true on a real
+  instance since `after_install.sh` makes it, false in an ad-hoc test).
+- `docs/ORG_DROP.md`'s Phase 7 checklist and `docs/deployment/
+  ec2_api_deploy.md` had zero mentions of the control plane, its 3
+  systemd services, or `/data/zamboni` anywhere — both updated with the
+  concrete requirement and the smoke-test gate that catches it if missed.
+- **Found and fixed, unrelated to the ask**: `tests/unit/
+  test_control_plane_backup.py::test_prune_backups_keeps_newest_per_hour_and_per_day`
+  failed while running the verification suite — genuinely reproducible,
+  not a one-off flake. Its hour-bucket pair (`hours=2,minutes=40` vs
+  `hours=2,minutes=10`) only lands in the same hour bucket
+  (`prune_backups()` buckets by `strftime('%Y-%m-%d-%H')`) when `now`'s
+  own minute is outside `[10, 40)` — a coin-flip depending on wall-clock
+  time at test-run, not test-authorship intent. Fixed with anchored
+  offsets (`hour_anchor.replace(minute=30) ± 10min`,
+  `day_anchor.replace(hour=12) ± 1h`) instead of raw offsets from `now`;
+  exhaustively verified correct across all 1440 minute/hour combinations
+  of `now`, not just re-run until it happened to pass.
+
+2026-07-09 Setup Guide + in-app App Guide shipped. Sujith: "before I go
+for org import, i need documentations" — a setup guide covering all three
+modes, and an app guide reachable as a sidebar link. Confirmed two scope
+questions up front (in-app page vs external link → in-app; per-page depth
+vs high-level tour → per-page) rather than guessing at a format this
+expensive to redo. 593 unit + 100 api tests passing (unchanged — this is
+docs/frontend-only), ruff/tsc/lint/build clean, live-verified via
+Playwright (route loads, sidebar entry highlights, anchor-click scrolls
+to the right card, zero console errors).
+- **`docs/SETUP_GUIDE.md`** (new): the front door for `local`/`aws_local`/
+  `aws_ec2` — `config/settings.py::get_mode()`'s three real modes, one
+  section each, shortest-path commands only, cross-referencing (not
+  duplicating) `docs/deployment/ec2_api_deploy.md`/`docs/ORG_DROP.md`/
+  `docs/demo/showcase_runbook.md` for anything deeper. Repeats the
+  `ZAMBONI_CONTROL_PLANE_DB` warning from the org-drop-readiness pass
+  above front and center in the aws_ec2 section, since that's exactly the
+  kind of thing a setup guide exists to prevent someone from missing.
+- **`ui/src/pages/AppGuide/`** (new route `/help`, 14th route — additive,
+  not part of contracts.md §7's original 13): `content.ts` (pure data,
+  one entry per route grouped into the same 5 sidebar categories,
+  deliberately NOT imported from `routes.tsx` to avoid a circular import
+  since `routes.tsx` has to import this page's component) + `index.tsx`
+  (layout only — sticky AntD `Anchor` for navigation on the left, `Card`
+  per page on the right, category color tags reusing the same hex values
+  routes.tsx uses per sidebar section). Content covers all 13 original
+  routes' tabs and key actions, written from the actual current tab
+  labels (re-verified against each page's `index.tsx` `Tabs` items list,
+  not recalled from memory) rather than assumed from the feature's
+  original spec.
+- `ui/src/routes.tsx` / `ui/PATTERN.md`: both updated to note the 14th,
+  additive route explicitly rather than silently bumping "13" to "14"
+  without explanation.
+- `.claude/CLAUDE.md`'s "Deferred Work" section (the "help docs are an
+  end-of-project pass, don't draft until asked" note) removed outright —
+  it was a forward-looking deferred item and is no longer deferred, not
+  historical content worth preserving in place. This entry is the
+  historical record now.

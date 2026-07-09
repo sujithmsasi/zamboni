@@ -1,5 +1,6 @@
 import {
   ArrowsClockwise,
+  BookOpen,
   ChartBar,
   FileText,
   Flask,
@@ -16,6 +17,7 @@ import {
   type Icon,
 } from '@phosphor-icons/react';
 import type { ReactNode } from 'react';
+import AppGuidePage from './pages/AppGuide';
 import AuditLogPage from './pages/AuditLog';
 import ControlMIntegrationPage from './pages/ControlMIntegration';
 import CostReportPage from './pages/CostReport';
@@ -44,11 +46,12 @@ export interface RouteCategory {
   routes: RouteMeta[];
 }
 
-// All 13 routes per contracts.md §7, grouped into sidebar sections. All 13
-// are fully built as of Phase 5b -- UI is feature-complete, Streamlit is
-// fallback-only. Icons: Phosphor duotone (.claude/ui_design.md). `color`
-// tints the icon per category (one hue per section, not per-icon) — see
-// App.tsx for how it's applied.
+// The 13 routes per contracts.md §7, grouped into sidebar sections, plus
+// one additive 14th (/help, the in-app App Guide -- added post-replatform,
+// not part of the original contract). All are fully built as of Phase 5b
+// -- UI is feature-complete, Streamlit is fallback-only. Icons: Phosphor
+// duotone (.claude/ui_design.md). `color` tints the icon per category (one
+// hue per section, not per-icon) — see App.tsx for how it's applied.
 export const ROUTE_CATEGORIES: RouteCategory[] = [
   {
     label: 'Overview',
@@ -162,6 +165,13 @@ export const ROUTE_CATEGORIES: RouteCategory[] = [
         icon: MagnifyingGlass,
         color: '#B197FC',
         element: <AuditLogPage />,
+      },
+      {
+        path: '/help',
+        label: 'App Guide',
+        icon: BookOpen,
+        color: '#B197FC',
+        element: <AppGuidePage />,
       },
     ],
   },
