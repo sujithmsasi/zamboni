@@ -31,107 +31,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 os.environ.setdefault("ZAMBONI_LOCAL_MODE", "true")
 os.environ.setdefault("ZAMBONI_TEST_MODE",  "true")
 
+from config.control_plane_schema import (  # noqa: E402
+    CONTROL_PLANE_MIGRATIONS,
+    CONTROL_PLANE_TABLES,
+)
 from engine.utils.local_db import create_tables, insert_rows, reset_db  # noqa: E402
 
 # ── SQLite DDL (simplified from Iceberg DDL) ──────────────────────────────────
+# domain_registry, stream_registry, controlm_jobs, hk_config, and
+# nonprod_registry come from config/control_plane_schema.py -- the shared
+# source of truth also used by scripts/init_control_plane_db.py for the
+# real production control-plane DB, so the two schemas can't drift apart.
+# stream_registry's engine-owned columns (aws_opt_*, last_execution_id,
+# metadata_location, properties_synced) are added back below via
+# LOCAL_ONLY_MIGRATIONS, since local mode simulates the entire Athena side
+# -- including engine-owned state -- through one file, unlike production.
 
 TABLES = {
 
-"domain_registry": """
-CREATE TABLE IF NOT EXISTS domain_registry (
-    domain_name             TEXT PRIMARY KEY,
-    environment             TEXT,
-    owner_email             TEXT,
-    hot_retention_days      INTEGER DEFAULT 30,
-    stale_threshold_days    INTEGER DEFAULT 60,
-    is_active               INTEGER DEFAULT 1,
-    archive_enabled         INTEGER DEFAULT 0,
-    digest_enabled          INTEGER DEFAULT 0,
-    digest_email            TEXT,
-    ci_number               TEXT,
-    notes                   TEXT,
-    created_at              TEXT,
-    updated_at              TEXT,
-    registered_at           TEXT DEFAULT (datetime('now')),
-    display_name            TEXT,
-    owner_name              TEXT,
-    team_name               TEXT,
-    description             TEXT,
-    archive_duration_days   INTEGER DEFAULT 365,
-    auto_delete_after_days  INTEGER DEFAULT 120,
-    registered_by           TEXT DEFAULT ''
-)""",
-
-"stream_registry": """
-CREATE TABLE IF NOT EXISTS stream_registry (
-    table_fqn               TEXT PRIMARY KEY,
-    domain                  TEXT,
-    layer                   TEXT,
-    tier                    TEXT,
-    table_format            TEXT DEFAULT 'iceberg',
-    environment             TEXT DEFAULT 'prod',
-    owner_email             TEXT,
-    ci_number               TEXT,
-    hk_enabled              INTEGER DEFAULT 0,
-    dry_run_until           TEXT,
-    force_run               INTEGER DEFAULT 0,
-    dependent_job_name      TEXT,
-    dependent_job_type      TEXT DEFAULT 'glue',
-    controlm_pipeline_job   TEXT,
-    controlm_hk_job         TEXT,
-    dependent_on_controlm_job TEXT,
-    archive_enabled         INTEGER DEFAULT 0,
-    archive_retention_days  INTEGER,
-    archive_bucket          TEXT,
-    lifecycle_enabled       INTEGER DEFAULT 0,
-    processing_cadence      TEXT,
-    properties_synced       INTEGER DEFAULT 0,
-    last_execution_id       TEXT,
-    registered_by           TEXT,
-    registered_at           TEXT,
-    updated_at              TEXT,
-    database_name           TEXT,
-    owner_name              TEXT DEFAULT '',
-    notes                   TEXT DEFAULT ''
-)""",
-
-"controlm_jobs": """
-CREATE TABLE IF NOT EXISTS controlm_jobs (
-    job_name              TEXT PRIMARY KEY,
-    job_type              TEXT DEFAULT 'controlm',
-    description           TEXT DEFAULT '',
-    domain                TEXT DEFAULT '',
-    environment           TEXT DEFAULT 'prod',
-    expected_start_time   TEXT DEFAULT '',
-    expected_duration_min INTEGER DEFAULT 0,
-    job_frequency         TEXT DEFAULT '',
-    active                INTEGER DEFAULT 1,
-    registered_by         TEXT DEFAULT 'system',
-    created_at            TEXT,
-    updated_at            TEXT
-)""",
-"hk_config": """
-CREATE TABLE IF NOT EXISTS hk_config (
-    table_fqn                       TEXT PRIMARY KEY,
-    policy_template                 TEXT,
-    compaction_strategy             TEXT DEFAULT 'binpack',
-    compaction_target_file_size_mb  INTEGER DEFAULT 128,
-    compaction_engine               TEXT DEFAULT 'athena',
-    sort_order_cols                 TEXT,
-    snapshot_retention_days         INTEGER DEFAULT 7,
-    snapshot_min_to_keep            INTEGER DEFAULT 30,
-    orphan_file_retention_days      INTEGER DEFAULT 3,
-    orphan_cleanup_cadence_days     INTEGER DEFAULT 7,
-    run_frequency                   TEXT DEFAULT 'daily',
-    partition_column                TEXT,
-    partition_filter_days           INTEGER,
-    window_config                   TEXT,
-    manually_overridden             INTEGER DEFAULT 0,
-    override_notes                  TEXT,
-    created_at                      TEXT,
-    updated_at                      TEXT,
-    partition_type                  TEXT DEFAULT 'date'
-)""",
+**CONTROL_PLANE_TABLES,
 
 "execution_log": """
 CREATE TABLE IF NOT EXISTS execution_log (
@@ -161,32 +79,6 @@ CREATE TABLE IF NOT EXISTS execution_log (
     athena_query_id         TEXT,
     bytes_scanned           INTEGER DEFAULT 0,
     execution_date          TEXT
-)""",
-
-"nonprod_registry": """
-CREATE TABLE IF NOT EXISTS nonprod_registry (
-    table_fqn               TEXT PRIMARY KEY,
-    domain                  TEXT,
-    environment             TEXT,
-    table_format            TEXT DEFAULT 'iceberg',
-    lifecycle_state         TEXT DEFAULT 'ACTIVE',
-    last_query_at           TEXT,
-    last_write_at           TEXT,
-    days_since_activity     INTEGER DEFAULT 0,
-    stale_threshold_days    INTEGER DEFAULT 60,
-    is_backup               INTEGER DEFAULT 0,
-    is_backup_pattern       INTEGER DEFAULT 0,
-    pattern_matched         TEXT DEFAULT '',
-    owner_email             TEXT,
-    owner_exempted          INTEGER DEFAULT 0,
-    exemption_reason        TEXT,
-    state_changed_at        TEXT,
-    greenzone_expires_at    TEXT,
-    pending_drop_expires_at TEXT,
-    first_seen_at           TEXT,
-    scan_count              INTEGER DEFAULT 0,
-    created_at              TEXT,
-    database_name           TEXT DEFAULT ''
 )""",
 
 "home_snapshot": """
@@ -838,56 +730,36 @@ def main():
     # Schema migrations: add missing columns to existing tables
     # Safe to run repeatedly — ALTER TABLE is skipped if column exists
     _migrations = [
+        *CONTROL_PLANE_MIGRATIONS,
         ("execution_log",    "rows_archived",      "INTEGER DEFAULT 0"),
         ("execution_log",    "vacuum_iterations",  "INTEGER DEFAULT 1"),
         ("execution_log",    "oldest_snapshot_id", "TEXT"),
         ("execution_log",    "newest_snapshot_id", "TEXT"),
-        ("nonprod_registry", "dropped_at",         "TEXT"),
-        ("nonprod_registry", "bytes_reclaimed",    "INTEGER DEFAULT 0"),
-        ("nonprod_registry", "s3_cleaned",         "INTEGER DEFAULT 0"),
-        ("nonprod_registry", "catalog_dropped",    "INTEGER DEFAULT 0"),
-        ("nonprod_registry", "previous_state",     "TEXT"),
-        ("nonprod_registry", "is_backup_pattern",  "INTEGER DEFAULT 0"),
-        ("stream_registry",  "owner_name",                       "TEXT DEFAULT ''"),
-        ("stream_registry",  "notes",                             "TEXT DEFAULT ''"),
-        ("stream_registry",  "partition_type",                   "TEXT DEFAULT 'date'"),
-        ("stream_registry",  "controlm_job_start_time",          "TEXT DEFAULT '02:00'"),
-        ("stream_registry",  "controlm_expected_duration_min",   "INTEGER DEFAULT 0"),
-        ("hk_config",        "gate1_enabled",                    "INTEGER DEFAULT 0"),
-        ("hk_config",        "gate2_enabled",                    "INTEGER DEFAULT 1"),
-        ("hk_config",        "gate3_enabled",                    "INTEGER DEFAULT 1"),
-        ("hk_config",        "partition_type",     "TEXT DEFAULT 'date'"),
-        ("domain_registry",  "display_name",       "TEXT"),
-        ("domain_registry",  "registered_at",      "TEXT DEFAULT (datetime('now'))"),
-        ("domain_registry",  "owner_name",         "TEXT DEFAULT ''"),
-        ("domain_registry",  "team_name",          "TEXT DEFAULT ''"),
-        ("domain_registry",  "description",        "TEXT DEFAULT ''"),
-        ("domain_registry",  "archive_duration_days",  "INTEGER DEFAULT 365"),
-        ("domain_registry",  "auto_delete_after_days", "INTEGER DEFAULT 120"),
-        ("domain_registry",  "registered_by",      "TEXT DEFAULT ''"),
-        # ── Safety Core (Workstream A / Phase 1a — contracts.md §3.2) ───────
-        ("stream_registry",  "aws_opt_compaction", "INTEGER DEFAULT 0"),
-        ("stream_registry",  "aws_opt_retention",  "INTEGER DEFAULT 0"),
-        ("stream_registry",  "aws_opt_orphan",     "INTEGER DEFAULT 0"),
-        ("stream_registry",  "aws_opt_checked_at", "TEXT"),
-        ("hk_config",        "gate0_override_until",  "TEXT"),
-        ("hk_config",        "gate0_override_reason", "TEXT"),
-        ("hk_config",        "gate0_override_by",     "TEXT"),
         ("execution_log",    "lock_id",                  "TEXT"),
         ("execution_log",    "metadata_location_before", "TEXT"),
         ("execution_log",    "metadata_location_after",  "TEXT"),
         ("execution_log",    "snapshot_id_before",       "INTEGER"),
         ("execution_log",    "snapshot_id_after",        "INTEGER"),
         ("execution_log",    "integrity_status",         "TEXT"),
-        # ── Recovery tooling (Workstream A / Phase 1c) ───────────────────────
-        # Local-mode-only simulation column: recovery.py's rollback path
-        # reads/writes this to simulate Glue's Parameters['metadata_location']
-        # since there is no live Glue catalog in ZAMBONI_LOCAL_MODE (same gap
-        # integrity_checker.capture_state() documents). NOT part of
-        # contracts.md's locked Athena DDL -- in real mode the current
-        # pointer always comes from live Glue Parameters, never this table.
+        # ── Local-mode-only: engine-owned columns (see config/
+        # control_plane_schema.py's docstring) -- excluded from the shared
+        # control-plane schema since they stay Athena-direct in production,
+        # but local mode simulates the entire Athena side (including
+        # engine-owned state) through this one file, so they need to exist
+        # here regardless.
+        ("stream_registry",  "properties_synced",  "INTEGER DEFAULT 0"),
+        ("stream_registry",  "last_execution_id",  "TEXT"),
+        ("stream_registry",  "aws_opt_compaction", "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_retention",  "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_orphan",     "INTEGER DEFAULT 0"),
+        ("stream_registry",  "aws_opt_checked_at", "TEXT"),
+        # recovery.py's rollback path reads/writes this to simulate Glue's
+        # Parameters['metadata_location'] since there is no live Glue
+        # catalog in ZAMBONI_LOCAL_MODE (same gap integrity_checker.
+        # capture_state() documents). NOT part of the locked Athena DDL --
+        # in real mode the current pointer always comes from live Glue
+        # Parameters, never this table.
         ("stream_registry",  "metadata_location",        "TEXT"),
-        ("controlm_jobs",    "job_frequency",             "TEXT DEFAULT ''"),
     ]
     from engine.utils.local_db import get_connection as _gc
     _conn = _gc()

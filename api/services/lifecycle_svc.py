@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from config.settings import NONPROD_REGISTRY_TABLE
-from engine.utils.athena_client import read_sql, run_query
+from engine.core.control_plane import read_sql, run_query
 
 
 def _esc(value: str) -> str:
@@ -40,6 +40,11 @@ def list_nonprod(env: str, state: str | None, page: int, size: int) -> tuple[lis
 
 
 def exempt(fqns: list[str], reason: str, actor: str, dry_run: bool) -> int:
+    # nonprod_registry is SQLite-primary now -- this write and the Lifecycle
+    # Engine's next scheduled read both hit the same control-plane file, so
+    # there's no lag window an exemption could lose a race against (the
+    # earlier Athena-primary-plus-cache design needed a synchronous bypass
+    # here specifically to avoid that race; this design doesn't).
     now = _now()
     count = 0
     for fqn in fqns:

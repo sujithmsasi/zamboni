@@ -12,6 +12,15 @@ def test_list_policies_filtered(client):
     assert all(row["domain"] == "finance" for row in resp.json()["data"])
 
 
+def test_list_policies_search_by_table_name(client, a_table_fqn):
+    fragment = a_table_fqn.split(".")[-1][:6]
+    resp = client.get(f"/api/policies?page=1&size=50&search={fragment}")
+    assert resp.status_code == 200
+    rows = resp.json()["data"]
+    assert len(rows) >= 1
+    assert all(fragment in row["table_fqn"] for row in rows)
+
+
 def test_get_policy_404(client):
     resp = client.get("/api/policies/glue_catalog.nope.nope")
     assert resp.status_code == 404

@@ -94,3 +94,26 @@ def head_object(bucket: str, key: str) -> dict | None:
 def get_object_bytes(bucket: str, key: str) -> bytes:
     """Return the full body of an S3 object as bytes."""
     return _get_client().get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def upload_file(bucket: str, key: str, local_path: str) -> None:
+    """Upload a local file to S3. Used by scripts/control_plane_backup.py
+    for VACUUM INTO snapshots -- keeps every S3 call routed through this
+    module rather than constructing a raw boto3 client inline elsewhere."""
+    _get_client().upload_file(local_path, bucket, key)
+
+
+def delete_keys(bucket: str, keys: list[str]) -> int:
+    """Delete an explicit list of object keys (not a whole prefix -- see
+    delete_prefix() for that). Returns count deleted."""
+    if not keys:
+        return 0
+    client  = _get_client()
+    deleted = 0
+    for i in range(0, len(keys), 1000):
+        batch = [{"Key": k} for k in keys[i:i + 1000]]
+        resp  = client.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+        deleted += len(resp.get("Deleted", []))
+        if resp.get("Errors"):
+            log.error("s3.delete_keys.errors", bucket=bucket, errors=resp["Errors"])
+    return deleted

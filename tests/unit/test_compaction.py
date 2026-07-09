@@ -13,14 +13,20 @@ from engine.strategies.zorder import recommend_num_workers as zorder_workers
 
 def test_binpack_sql_basic():
     sql = build_optimize_sql("glue_catalog.finance_db.finance_staging")
-    assert "OPTIMIZE TABLE glue_catalog.finance_db.finance_staging" in sql
+    assert sql.startswith("OPTIMIZE finance_db.finance_staging ")
+    assert "OPTIMIZE TABLE" not in sql
+    assert "glue_catalog" not in sql
     assert "REWRITE DATA" in sql
     assert "BIN_PACK" in sql
 
 
-def test_binpack_sql_target_size():
+def test_binpack_sql_no_inline_size_clause():
+    # Athena's OPTIMIZE takes no WITH/options clause -- target size is set
+    # via TBLPROPERTIES ahead of time (property_sync.py), not inline here.
     sql = build_optimize_sql("glue_catalog.finance_db.finance_staging", target_file_size_mb=256)
-    assert "256MB" in sql
+    assert "WITH" not in sql
+    assert "256MB" not in sql
+    assert "file_size_limit" not in sql
 
 
 def test_binpack_sql_with_partition_filter():

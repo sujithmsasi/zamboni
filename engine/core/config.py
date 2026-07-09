@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from config.settings import HK_CONFIG_TABLE, SNAPSHOT_MIN_FLOOR
-from engine.utils.athena_client import read_sql, run_query
+from engine.core.control_plane import read_sql, run_query
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -238,8 +238,19 @@ def _esc(value: str) -> str:
 
 
 def _to_sql_array(items: list[str] | None) -> str:
-    """Convert a Python list to a SQL ARRAY literal, or NULL."""
+    """
+    Serialize sort columns as a comma-separated SQL string literal, or
+    NULL. hk_config.sort_order_cols is a plain TEXT column storing a
+    comma-separated list -- matching how every other write path stores it
+    (api/services/policies_svc.py's sort_order_cols field, the React
+    Policy Config page's plain text input "partition_date, customer_id").
+    This previously emitted a Presto/Athena ARRAY[...] literal, which
+    SQLite has no syntax for and which didn't match that convention
+    anyway -- it failed silently (run_query_local() catches and logs,
+    doesn't raise) any time apply_template() ran with sort_columns against
+    SQLite, whether under ZAMBONI_LOCAL_MODE or the SQLite-primary
+    control-plane DB.
+    """
     if not items:
         return "NULL"
-    quoted = ", ".join(f"'{i}'" for i in items)
-    return f"ARRAY[{quoted}]"
+    return f"'{_esc(', '.join(items))}'"

@@ -20,9 +20,11 @@ router = APIRouter(tags=["policies"])
 @router.get("/api/policies")
 def list_policies(
     page_params: PageParams = Depends(),
-    domain: str | None = None, layer: str | None = None, tier: str | None = None,
+    domain: str | None = None, layer: str | None = None, tier: str | None = None, search: str | None = None,
 ):
-    rows, total = policies_svc.list_policies(page_params.page, page_params.size, domain=domain, layer=layer, tier=tier)
+    rows, total = policies_svc.list_policies(
+        page_params.page, page_params.size, domain=domain, layer=layer, tier=tier, search=search,
+    )
     return envelope(rows, pagination={"page": page_params.page, "size": page_params.size, "total": total})
 
 

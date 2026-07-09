@@ -54,3 +54,7 @@ ui/dist/
 # ── SQLite transient journal files (zamboni_local.db itself is tracked) ───────
 *.db-shm
 *.db-wal
+
+# ── Control-plane DB (SQLite-primary for config tables in production;
+# never used for the tracked zamboni_local.db dev fixture) ───────────────────
+zamboni_control.db

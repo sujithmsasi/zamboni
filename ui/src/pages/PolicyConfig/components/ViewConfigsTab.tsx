@@ -1,7 +1,8 @@
-import { Button, Col, Row, Select, Switch, Tag } from 'antd';
+import { AutoComplete, Button, Col, Row, Select, Switch, Tag } from 'antd';
 import { useState } from 'react';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import { usePoliciesList } from '../../../api/hooks/usePolicies';
+import { useTablesSearch } from '../../../api/hooks/useTables';
 import type { PolicyViewRow } from '../../../api/types';
 import { DataGrid } from '../../../components/DataGrid';
 import { downloadCsv } from '../../../utils/csv';
@@ -35,19 +36,34 @@ const COLUMNS = [
 export function ViewConfigsTab() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(15);
+  const [search, setSearch] = useState('');
   const [domain, setDomain] = useState<string | undefined>();
   const [layer, setLayer] = useState<string | undefined>();
   const [tier, setTier] = useState<string | undefined>();
   const [showAll, setShowAll] = useState(true);
 
   const domains = useDomainsList(true);
-  const policies = usePoliciesList({ page, size, domain, layer, tier });
+  const suggestions = useTablesSearch(search, { enabled: true });
+  const policies = usePoliciesList({ page, size, domain, layer, tier, search: search || undefined });
 
   const rows = (policies.data?.data ?? []).filter((r) => showAll || r.gate1_enabled || r.gate2_enabled || r.gate3_enabled);
 
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <AutoComplete
+            style={{ width: '100%' }}
+            options={(suggestions.data?.data ?? []).map((t) => ({ value: t.table_fqn }))}
+            value={search}
+            onSearch={(v) => { setSearch(v); setPage(1); }}
+            onSelect={(v) => { setSearch(v); setPage(1); }}
+            onChange={(v) => { setSearch(v); setPage(1); }}
+            filterOption={false}
+            allowClear
+            placeholder="Search by table name"
+          />
+        </Col>
         <Col span={6}>
           <Select
             style={{ width: '100%' }} allowClear placeholder="Filter by Domain"

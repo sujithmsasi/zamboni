@@ -15,7 +15,11 @@ replatform in progress (see `.claude/contracts.md`).
 ```
 engine/core/        Registry, config, health, window evaluator, circuit breaker,
                      idempotency, property_sync, backpressure, commit_frequency,
-                     cost_explorer, escalation, digest, execution_log(+_parquet)
+                     cost_explorer, escalation, digest, execution_log(+_parquet),
+                     control_plane (SQLite-primary for 5 config tables —
+                     stream_registry/hk_config/domain_registry/
+                     nonprod_registry/controlm_jobs; engine reads/writes it
+                     via registry.py/config.py/lifecycle_engine.py)
 engine/engines/      hk_engine.py, archival_engine.py, lifecycle_engine.py, base.py
 engine/operations/   compaction.py, vacuum.py, archival.py, catalog_cleanup.py,
                       dynamic_router.py
@@ -30,7 +34,9 @@ app/                 Streamlit app — Home.py + 12 pages under app/pages/,
 config/              settings.py (central; nothing reads os.environ elsewhere),
                      platform_settings.py
 scripts/             seed_local_db.py (SQLite schema + migrations list),
-                     seed_scale_test.py
+                     seed_scale_test.py, init_control_plane_db.py,
+                     control_plane_sync.py, control_plane_backup.py,
+                     control_plane_integrity_check.py
 deploy/              zamboni-cfn.yaml (Phase 6, complete standalone stack) +
                      CodeDeploy/CodeBuild pieces (buildspec.yml, appspec.yml,
                      scripts/, systemd/zamboni-{api,streamlit}.service)
@@ -43,7 +49,7 @@ ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5b) — all
                      Streamlit is fallback-only; see ui/PATTERN.md for the
                      canonical page structure and the page/endpoint
                      inventory table
-tests/unit/          568 tests, all passing
+tests/unit/          593 tests, all passing
 tests/api/           99 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
@@ -121,9 +127,9 @@ tests/api/           99 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-08 Phase 6 close-out)
+## Test Baseline (2026-07-06, updated through 2026-07-09 SQLite control-plane migration)
 ```
-python -m pytest tests/unit -q   → 568 passed
+python -m pytest tests/unit -q   → 593 passed
 python -m pytest tests/api -q    → 99 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
@@ -1920,3 +1926,425 @@ live-verified via Playwright.
   shows "Type to search" on click before any input, confirmed via
   screenshot not just reading the JSX.
 - No backend/engine changes — this pass is `ui/src` only.
+
+2026-07-08 Athena read/write cache for the API layer (post-Phase-6 ad-hoc
+feature). Sujith reported real EC2 testing feels laggy — every API read/
+write hits Athena directly, and Athena's multi-second per-query overhead
+(query planning + S3 scan + poll) compounds badly across a dashboard that
+fires a dozen queries per load. Asked for reads and writes to be served
+from local SQLite with a periodic sync to Athena on a tunable interval.
+586 unit + 99 api tests passing, ruff/tsc/build/lint clean, **live-
+verified against the real FastAPI app** (not just unit tests) — which is
+what actually caught the one real bug in this feature, documented below.
+
+- **Design constraint that shaped everything**: the engine
+  (`run_hk.py`/`run_archival.py`/`run_lifecycle_*.py`) runs as separate,
+  short-lived processes triggered by EventBridge+SSM — never in-process
+  with the FastAPI app (confirmed via `api/main.py`'s own docstring plus a
+  repo-wide grep: no `api/` file imports `hk_engine`/`archival_engine`/
+  `orchestrator`). This meant the cache could be built as a new module
+  (`engine/core/athena_cache.py`) that the engine **never imports at
+  all** — an architectural guarantee, not a flag — so Gate 0's AWS-
+  optimizer-conflict check, Gate 1's upstream-job check, the lock
+  service, and every scheduled-run decision keep reading/writing real
+  Athena at full freshness, completely untouched by this feature.
+  Explicitly ruled out: flipping `ZAMBONI_LOCAL_MODE=true` in production
+  as a shortcut — confirmed via investigation that this flag doesn't just
+  swap storage, it stubs `glue_client.get_table_optimizer()` (Gate 0
+  always reports no conflict), stubs Gate 1's upstream check to always-
+  complete, stubs `integrity_checker.capture_state()`, and leaves
+  `engine/operations/archival.py` and SNS ungated by it entirely — using
+  it in prod would have silently defeated Workstream A's whole purpose.
+- **`engine/core/athena_cache.py`** (new): `read_sql_cached()` — drop-in
+  signature-compatible replacement for `athena_client.read_sql()` that
+  reads from a second, dedicated SQLite file (`ATHENA_CACHE_DB`, new
+  `config/settings.py` constant, default `zamboni_athena_cache.db`,
+  gitignored — deliberately not the git-tracked `zamboni_local.db` dev
+  fixture) when the new `athena_cache_enabled` setting is on, falling
+  through to real Athena on any cache miss/error. `write_columns()` — the
+  write-side entry point: splits a column→value dict by
+  `SAFETY_CRITICAL_COLUMNS` (`hk_enabled`, `archive_enabled`,
+  `lifecycle_enabled`, `gate1_enabled`, `gate2_enabled`, `gate3_enabled`,
+  `gate0_override_until/reason/by`, and `domain_registry.is_active` —
+  the last one added after remembering `engine/core/registry.py::
+  domain_active_filter_sql()` gates HK/archival/lifecycle table selection
+  on it, fixed just two days earlier in `584e8df`). Safety-critical
+  columns always write synchronously to real Athena, unchanged from
+  today's latency — delaying a kill-switch by even a few minutes defeats
+  its purpose. Everything else queues into a `_pending_writes` outbox
+  table (one row per changed column, not per row) and updates the local
+  mirror immediately for read-your-own-writes. `refresh_reads()` pulls a
+  fresh `SELECT *` per mirrored table from real Athena and merges into
+  the mirror column-by-column, preferring any unsynced pending value over
+  the freshly-pulled one (so a refresh can never stomp an edit that
+  hasn't flushed yet). `flush_writes()` pushes the outbox to real Athena
+  oldest-first as **column-scoped** `UPDATE`s (never a full-row
+  overwrite) — this is what guarantees the flush can't clobber an
+  engine-owned column on the same row (`conflict_detector.py`'s
+  `aws_opt_*` cache, `property_sync.py`'s sync timestamp,
+  `idempotency.py`'s `last_execution_id`, `recovery.py`'s
+  `metadata_location` — all confirmed via their own scoped `UPDATE`
+  statements). Alerts via the existing `engine/core/notifier.py::
+  send_alert()` if a write has been stuck past
+  `athena_cache_write_flush_alert_after_minutes` (default 15) — a
+  silently-stuck sync must never just lose data quietly.
+- **Scope, deliberately narrow**: write-caching applies ONLY to
+  single-row `UPDATE ... SET col=val WHERE key=val`-shaped mutations.
+  Excluded, all documented inline in the touched files, all unchanged
+  from pre-feature behavior: bulk/WHERE-clause multi-row updates
+  (`bulk_controlm`, `import_job_mapping`, `apply_template_bulk` —
+  less latency-sensitive per click, and don't fit the per-row outbox
+  model); `INSERT OR REPLACE`/`INSERT OR IGNORE`/`DELETE` statements
+  (`controlm_svc.py`'s `upsert_job`/`register_job_if_missing`/
+  `delete_job` — a different shape the outbox doesn't cover, and
+  `INSERT OR REPLACE` is SQLite-only syntax that was never valid real
+  Athena SQL in the first place, a pre-existing latent gap not touched
+  here); `lifecycle_svc.py`'s `exempt()`/`claim()` — safety-critical the
+  same way HK enable/disable is, since a delayed exemption sync could let
+  the Lifecycle Engine's next scheduled run hard-DELETE a PENDING_DROP
+  table before it ever flushed; anything delegating to `engine/core/
+  registry.py` or `engine/core/config.py` functions (`register_table`,
+  `register_domain`, `apply_template`) — those are shared engine code
+  this feature must never touch. Net write-caching surface ended up as
+  exactly 3 call sites: `tables_svc.py::update_table()`, `domains_svc.py::
+  update_domain()`, `policies_svc.py::update_policy()` (all three split
+  safety-critical columns out via `write_columns()`; `gates_svc.py::
+  update_gates()` needed zero changes since 100% of its columns are
+  safety-critical). Read-caching, by contrast, applies broadly — every
+  inline `read_sql()` call across all 8 `api/services/*.py` files got the
+  one-line import swap (`from engine.core.athena_cache import
+  read_sql_cached as read_sql`), since reads carry no correctness risk to
+  cache.
+- **Found, not fixed** (pre-existing, out of scope, confirmed not
+  affected by this feature): `settings_svc.py::list_audit()` (delegates
+  to `engine/core/audit.py::get_recent_events()`) and `system_svc.py::
+  system_health()`'s Athena connectivity probe stay real-Athena-always —
+  the former because it delegates to `engine/core/` (out of scope), the
+  latter **by design**: caching a health check would make it report
+  "healthy" even when real Athena is actually down, which is the one
+  thing a health check must never do. `policies_svc.py::get_policy()`
+  and `gates_svc.py::get_gates()` also stay uncached (both delegate to
+  `engine/core/config.py::get_hk_config()`, which enforces a real
+  `SNAPSHOT_MIN_FLOOR` safety clamp on the returned config — duplicating
+  that clamp inline to enable caching risked drifting it out of sync with
+  the one true copy, the exact "two similarly-named floor constants"
+  class of risk this project's own Conflict List already warns about
+  elsewhere; judged not worth it for a lower-traffic detail view).
+- **`engine/utils/local_db.py`**: `get_connection()`'s module-level
+  singleton (`_conn`) promoted to a dict keyed by resolved path (`_conns`)
+  so it can serve two independent SQLite files in one process — the dev/
+  demo fixture (`ZAMBONI_LOCAL_DB`) and the new cache mirror
+  (`ATHENA_CACHE_DB`) — without colliding. `read_sql_local()`/
+  `run_query_local()`/`reset_db()` all gained an optional `db_path` param
+  (default unchanged, fully backward compatible). New public
+  `translate_athena_sql()` wraps the existing `_translate()` so
+  `athena_cache.py` reuses the exact same Athena-to-SQLite rewriting
+  local/demo mode already relies on, instead of duplicating it.
+  `tests/unit/test_safety_core.py`'s `lock_db` fixture updated for the
+  new `_conns` dict shape (was directly monkeypatching the old `_conn`
+  singleton in setup and teardown).
+- **`scripts/athena_cache_sync.py`** (new) + **`deploy/systemd/
+  zamboni-cache-sync.service`** (new): a long-running loop, not a systemd
+  timer or EventBridge rule — it re-reads `athena_cache_read_interval_
+  seconds`/`athena_cache_write_flush_interval_seconds` from
+  `platform_settings` every cycle, so changing them via the Settings UI
+  takes effect on the next tick with no redeploy. `deploy/scripts/
+  {before_install,after_install,app_start}.sh` extended (additive, same
+  pattern as Phase 6's `zamboni-api.service` rollout) to install/start/
+  stop this third service alongside `zamboni-app`/`zamboni-api` — non-
+  fatal if it fails to start, since `athena_cache_enabled` defaults to
+  `false` and the loop is a no-op sleep until explicitly turned on.
+- **Settings**: 4 new keys (`athena_cache_enabled` default `false`,
+  `athena_cache_read_interval_seconds` default 300,
+  `athena_cache_write_flush_interval_seconds` default 60,
+  `athena_cache_write_flush_alert_after_minutes` default 15) added to
+  `config/platform_settings.py::_safe_defaults()` and
+  `config/zamboni_settings.json` — zero new infrastructure, same JSON
+  file + `GET/PUT /api/settings` mechanism every other advanced setting
+  already uses. Surfaced in Settings → Advanced (new section, same
+  pattern as the existing Teams/Cost Explorer toggles) — `ui/src/api/
+  types.ts`'s `PlatformSettings` interface gained the 4 matching fields.
+- **Real bug found via live verification, not caught by unit tests**:
+  the outbox stores `table_name` fully-qualified (`glue_catalog.
+  zamboni_catalog.domain_registry`) since `flush_writes()` needs that
+  exact form to write real Athena — but the local mirror table populated
+  by `refresh_reads()` is only ever named bare (`domain_registry`, via
+  `df.to_sql(bare_name, ...)`). The first version of `write_columns()`'s
+  optimistic "read-your-own-write" mirror update ran directly against
+  the fully-qualified name, which silently no-op'd against a mirror table
+  that didn't exist under that name (caught by a bare `except
+  OperationalError: pass`) — every unit test had (unrealistically) called
+  `write_columns()` with a bare name directly, so none of them caught it;
+  only curling the real running API (`PUT /api/domains/finance` then
+  immediately `GET` it back) showed the write silently not reflected.
+  Compounded by a second orphaned-uvicorn-process false start during the
+  same verification (the exact documented `[[project_windows_dev_env_gotchas]]`
+  pattern — a stale process from hours earlier was still bound to port
+  8000 serving pre-fix code; `Get-CimInstance Win32_Process` was needed
+  to find and kill the real PID, `netstat`'s PID column alone was
+  insufficient). Fixed with a new `_bare_table_name()` helper used for
+  every LOCAL sqlite operation (the optimistic mirror update, and
+  `refresh_reads()`'s pending-value lookup, which had the identical
+  fully-qualified-vs-bare mismatch on its query side) while
+  `flush_writes()` keeps using the stored fully-qualified name for the
+  real Athena write. Two new regression tests added
+  (`test_write_columns_read_your_own_write_with_fully_qualified_table_name`,
+  `test_refresh_reads_pending_write_wins_with_fully_qualified_table_name`)
+  using a real fully-qualified name, closing the gap the rest of the
+  suite's bare-name-only tests couldn't catch.
+- **A second, related gap found and fixed in the same pass**:
+  `domains_svc.py::get_domain()` and `tables_svc.py::get_table()`
+  delegated to `engine/core/registry.py::get_domain()`/`get_table()` —
+  correctly real-Athena-always by the "don't touch engine/core" rule,
+  but this meant `GET /api/domains/{name}` (used to populate the edit
+  form) showed stale data immediately after its own save, while `GET
+  /api/domains` (the list/grid, which already had its own inline
+  cache-eligible `read_sql` call) showed the fresh value — a real,
+  user-visible inconsistency between two "read the same thing" endpoints,
+  again only visible by comparing both live, not from unit tests. Fixed
+  by inlining the same trivial single-row `SELECT` both `registry.py`
+  helpers already run, routed through `read_sql_cached` instead of
+  delegating — `registry.py` itself untouched, still used as before by
+  `create_domain`/`update_domain`'s existence-check calls (validation
+  gates don't need to be fast/cached) and by whatever engine code calls
+  it directly.
+- **Live-verified end-to-end against the running FastAPI app** (mode=
+  local, `zamboni_local.db` standing in for "real Athena" — genuinely
+  exercises the full `refresh_reads()`/`write_columns()`/`flush_writes()`
+  code path since local mode's own Athena calls route through the same
+  `local_db.py` machinery either way): enabled the cache via the real
+  `PUT /api/settings`; confirmed `GET /api/domains` and `GET /api/
+  domains/{name}` both serve from the mirror; edited a non-safety field
+  (`display_name`) via `PUT /api/domains/finance` — confirmed instant
+  success, confirmed the "real Athena" (`zamboni_local.db`) was
+  genuinely UNCHANGED immediately after (still queued, not yet synced),
+  confirmed both GET endpoints reflected the edit immediately
+  (read-your-own-write) after the bug fix above; manually ran
+  `flush_writes()` and confirmed the value then landed in the real table
+  via a column-scoped `UPDATE`; toggled `gate1_enabled` via `PUT /api/
+  gates/{fqn}` and confirmed it wrote to the real table **immediately**
+  with zero outbox rows, regardless of the cache being enabled — the
+  safety-critical bypass holding under real traffic, not just a mocked
+  unit test. All test mutations reverted (`display_name` back to
+  `Finance`, `gate1_enabled` back to `false`, `athena_cache_enabled`
+  back to `false`) before finishing.
+- Test count: 586 unit (568 baseline + 18 new in `tests/unit/
+  test_athena_cache.py`) + 99 api (unchanged — this feature added zero
+  new API routes, only changed what backs existing ones).
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, lock service,
+  or any engine-scheduled-run code path — confirmed both by construction
+  (this module has no import edge into any of them) and by the live
+  verification above (Gate 1 toggle still synchronous under load).
+
+2026-07-09 SQLite control plane — supersedes the 2026-07-08 Athena
+read/write cache entirely, not an extension of it. 593 unit (568 + 25 new)
++ 99 api tests passing, ruff/tsc/build/lint clean, plus a real end-to-end
+smoke test (not mocked) proving the core claim below.
+- **The reframe**: the 2026-07-08 cache treated Athena as ground truth and
+  SQLite as a periodically-refreshed derivative, which needed a
+  `SAFETY_CRITICAL_COLUMNS` synchronous-bypass and a `_pending_writes`
+  outbox to avoid the engine seeing stale gating flags. Sujith reframed
+  the problem: make SQLite the *primary* store for 5 low-write-volume
+  config tables — `stream_registry`, `hk_config`, `domain_registry`,
+  `nonprod_registry`, `controlm_jobs` — so the UI/API write there first
+  (fast, synchronous, no queue) and the engine reads the *same* file
+  directly. Because SQLite is now the first point of write, engine reads
+  are fresh by construction — there is no staleness window to protect
+  against, so the entire outbox/merge/bypass apparatus from the prior
+  design is unnecessary and was deleted, not adapted.
+  `execution_log`/`audit_log`/`vacuum_audit` stay 100% Athena-primary
+  (real engine output from data-plane work, unchanged).
+- **Engine-owned columns on `stream_registry` excluded from the SQLite
+  mirror, stay Athena-direct via their existing dedicated functions**:
+  `aws_opt_compaction/retention/orphan`/`aws_opt_checked_at`
+  (`conflict_detector.py`, Gate 0's live conflict cache), `last_execution_id`
+  (`idempotency.py`), `metadata_location` (`recovery.py`, local-sim-only),
+  `properties_synced` (`property_sync.py`). Verified — not assumed — that
+  excluding these is safe: `idempotency.check_already_executed()`/
+  `mark_executed()` take `(execution_id, table_fqn)` and run their own
+  fresh SELECT/UPDATE against real Athena, never consuming a pre-fetched
+  row from `registry.get_table()`; same independence confirmed for
+  `conflict_detector.get_cached()`. `registry.register_table()`'s INSERT
+  (`registry.py:335-381`) had to be edited to drop these two columns from
+  its column/VALUES lists, since it previously hardcoded them (`0`/`NULL`).
+- **New module `engine/core/control_plane.py`** (replaces
+  `engine/core/athena_cache.py`, deleted outright): `read_sql()`/
+  `run_query()`/`update_row()`, signature-compatible with
+  `engine.utils.athena_client`'s so every migrated caller is an import
+  swap, not a rewrite. `_db_path()` resolves to `ZAMBONI_LOCAL_DB` when
+  `ZAMBONI_LOCAL_MODE=true` (zero behavior change for local/demo — still
+  the same file `scripts/seed_local_db.py` seeds) and the new
+  `ZAMBONI_CONTROL_PLANE_DB` otherwise (used by both `aws_local` and
+  `aws_ec2`). No outbox — every write is a plain SQL statement.
+- **`engine/utils/local_db.py`**: `create_tables()`/`insert_rows()`/
+  `reset_db()` gained the same optional `db_path` param `get_connection()`/
+  `read_sql_local()`/`run_query_local()` already had from the prior
+  session (kept — proven reusable groundwork). Added `synchronous=NORMAL`
+  + `busy_timeout=5000` pragmas to `get_connection()`, alongside the
+  existing `journal_mode=WAL`.
+- **`config/control_plane_schema.py`** (new): the shared DDL/migrations
+  source of truth for the 5 control-plane tables, imported by both
+  `scripts/seed_local_db.py` (local demo — adds the engine-owned columns
+  back on top via `LOCAL_ONLY_MIGRATIONS`-equivalent entries, since local
+  mode simulates the *entire* Athena side through one file) and
+  `scripts/init_control_plane_db.py` (new, idempotent — `CREATE TABLE IF
+  NOT EXISTS` + guarded `ALTER TABLE`, run on every deploy, never seeds
+  data). Prevents the demo schema and the real control-plane schema from
+  drifting into two independently hand-maintained copies — exactly the
+  kind of drift this phase's own research found between `sql/*.sql` and
+  the actual runtime schema (see below).
+- **Real bug found and fixed during schema research, not cosmetic**:
+  `engine/core/config.py::_to_sql_array()` emitted a Presto/Athena
+  `ARRAY['a','b']` literal for `hk_config.sort_order_cols` — but that
+  column is plain `TEXT` (matching every other write path's convention,
+  e.g. the Policy Config page's comma-separated text input), and SQLite
+  has no `ARRAY[...]` syntax at all. `run_query_local()` catches and logs
+  rather than raising, so `apply_template()` was silently failing to set
+  sort columns any time it ran with `sort_columns` provided against
+  SQLite — pre-existing under `ZAMBONI_LOCAL_MODE`, and would have stayed
+  silently broken in production too once `hk_config` became SQLite-
+  primary. Fixed to emit a comma-separated string instead; updated the
+  two `tests/unit/test_config_templates.py` tests that asserted the old
+  `ARRAY[...]` format.
+- **Athena DDL drift closed** (`sql/alter_control_plane_columns.sql`,
+  new): real columns the code has used for a while but which never had a
+  committed Athena `ALTER TABLE` — `stream_registry`'s
+  `controlm_pipeline_job`/`controlm_hk_job`/`controlm_job_start_time`/
+  `controlm_expected_duration_min`/`owner_name`/`database_name`;
+  `hk_config`'s `gate1/2/3_enabled`/`orphan_cleanup_cadence_days`/
+  `sort_order_cols`; `nonprod_registry`'s `stale_threshold_days`/
+  `is_backup`/`owner_email`/`database_name`. `sql/create_controlm_jobs.sql`
+  (new) is the first real Athena DDL this table has ever had — it
+  previously existed only in `scripts/seed_local_db.py`'s local fixture.
+  Also fixed two unrelated pre-existing syntax bugs found while in these
+  files: a missing comma in `sql/create_domain_registry.sql` (would have
+  broken the `CREATE TABLE` if ever run) and a stray quote in
+  `sql/create_stream_registry.sql`'s `partition_type` comment.
+- **Migration path**: `engine/core/registry.py`, `engine/core/config.py`,
+  `engine/engines/lifecycle_engine.py` (imports `read_sql`/`run_query`
+  directly, not via `registry.py`) all swapped their import from
+  `engine.utils.athena_client` to `engine.core.control_plane` — no other
+  code changes needed beyond the `register_table()` fix above, since they
+  already emit Athena-dialect SQL that `local_db._translate()` already
+  handles. **`engine/core/governance.py` was evaluated and explicitly
+  NOT migrated** — its `dual_optimizer_report()`/`fleet_conflict_summary()`
+  read `stream_registry.aws_opt_*` directly, which is one of the excluded
+  engine-owned columns; routing it through `control_plane.py` would have
+  silently broken it against a schema missing those columns. Caught before
+  landing, not after — a real save from a hasty migrate-everything pass.
+- **`api/services/*.py`** (6 of 8 files): `tables_svc.py`, `domains_svc.py`,
+  `policies_svc.py`, `gates_svc.py`, `lifecycle_svc.py`, `controlm_svc.py`
+  all migrated to `control_plane.read_sql`/`run_query`/`update_row`,
+  deleting `write_columns()`/`SAFETY_CRITICAL_COLUMNS` entirely. Two files
+  previously special-cased to bypass the old cache for staleness reasons
+  now simply write normally, since the reason no longer applies:
+  `gates_svc.py` (Gate 0-3, was 100% synchronous with zero cache
+  footprint) and `lifecycle_svc.py`'s `exempt()`/`claim()` (was
+  deliberately uncached with an in-code safety comment about lifecycle
+  transitions). Bulk operations (`tables_svc.bulk_controlm()`,
+  `import_job_mapping()`) and `controlm_svc.py`'s `INSERT OR REPLACE`/
+  `INSERT OR IGNORE`/`DELETE` also now just run directly — no more
+  "doesn't fit the outbox" carve-out, since there's no more outbox.
+  `domains_svc.get_domain()` was simplified to delegate straight to
+  `registry.get_domain()` (the earlier inline duplicate existed purely to
+  dodge a staleness bug in the old cache design; that reason is gone, so
+  the duplicate is too). `executions_svc.py` was reverted back to plain
+  `engine.utils.athena_client.read_sql` — it joins Athena-only tables
+  (`execution_log`, `vacuum_audit`) against the config tables in single
+  SQL statements (e.g. cost/health-KPI queries), which can only run
+  against Athena once the config tables live in a physically different
+  database; `settings_svc.py` was already untouched (JSON-file-only).
+- **`scripts/control_plane_sync.py`** (new, replaces
+  `scripts/athena_cache_sync.py`): same long-running-loop-daemon shape
+  (re-reads its interval from `platform_settings` every cycle, no
+  redeploy needed to retune), but the loop body is trivial since there's
+  no outbox — per table, per cycle: `SELECT * FROM <table>` against the
+  control-plane DB, then `wr.athena.to_iceberg(..., mode="overwrite")`
+  against real Athena. Deliberately full-table overwrite, not `MERGE`:
+  Athena/Trino `MERGE` has no "delete rows missing from the source"
+  clause, so it can't express a real SQLite-side `DELETE` (e.g.
+  `controlm_svc.delete_job()`) — an overwrite naturally reflects deletes,
+  a `MERGE` would silently strand them in Athena forever. No-ops cleanly
+  under `ZAMBONI_LOCAL_MODE` (nothing to push, no real Athena to push to).
+- **`scripts/control_plane_backup.py`** (new): `VACUUM INTO` a temp file
+  (never a raw copy of the live DB — transactionally consistent even
+  under concurrent WAL writers) on a configurable interval, uploads to
+  S3 under `control-plane-backups/`. `prune_backups()` implements the
+  two-tier retention exactly as specified: newest backup per hour kept
+  for `control_plane_backup_hourly_retention_hours` (default 24), newest
+  per day kept for `control_plane_backup_daily_retention_days` (default
+  30), everything else deleted — **no EBS snapshot tier**, ruled out
+  explicitly by Sujith. `engine/utils/s3_client.py` gained `upload_file()`
+  and `delete_keys()` (an explicit-key-list variant of the existing
+  `delete_prefix()`) so this stays consistent with the module's
+  "never construct a raw boto3 client outside `s3_client.py`" convention.
+- **`scripts/control_plane_integrity_check.py`** (new) + `deploy/systemd/
+  zamboni-control-plane-integrity.service`+`.timer` (`OnCalendar=daily`):
+  `PRAGMA integrity_check`, alerts via `engine/core/notifier.send_alert()`
+  on failure — corruption pages loudly, doesn't log-and-continue. The
+  faster liveness check (`SELECT 1`) lives directly in `app_start.sh` and
+  is fatal (`exit 1`) unlike the pre-existing Athena connectivity check,
+  which stays a warning — this file is primary storage now, Athena isn't.
+- **Deploy**: `deploy/scripts/{before_install,after_install,app_start}.sh`
+  all updated — stop/install/start the two new long-running services
+  (`zamboni-control-plane-sync`, `zamboni-control-plane-backup`) and the
+  integrity timer, run `scripts/init_control_plane_db.py` on every
+  deploy, `mkdir -p /data/zamboni` (idempotent, outside `/opt/zamboni`
+  which CodeDeploy replaces wholesale every revision — this directory and
+  the file inside it must never be touched by any other step in this
+  pipeline). **`/data/zamboni` lives on the existing single root EBS
+  volume** — `deploy/zamboni-cfn.yaml` provisions no separate data volume,
+  and none was added this pass; a dedicated volume was considered and
+  explicitly deferred, not forgotten. `.env.aws_local.example` gained
+  `CONTROLM_JOBS_TABLE` and `ZAMBONI_CONTROL_PLANE_DB` (bare filename for
+  laptop use; the EC2 `.env` overrides to `/data/zamboni/zamboni_control.db`).
+- **Settings**: `config/zamboni_settings.json` + `config/
+  platform_settings.py::_safe_defaults()` — the 4 `athena_cache_*` keys
+  replaced with `control_plane_sync_interval_seconds` (300),
+  `control_plane_backup_interval_seconds` (300),
+  `control_plane_backup_hourly_retention_hours` (24),
+  `control_plane_backup_daily_retention_days` (30). No more
+  enabled/disabled toggle — this isn't an optional performance feature
+  anymore, it's the architecture; Settings → Advanced's "Control Plane
+  Sync & Backup" section (was "Athena Read/Write Cache") only exposes the
+  four intervals now. `ui/src/api/types.ts`'s `PlatformSettings` updated
+  to match.
+- **Tests**: `tests/unit/test_control_plane.py` (15, replaces the deleted
+  `test_athena_cache.py`), `test_control_plane_sync.py` (5 — including a
+  regression guard that a row deleted from SQLite is genuinely absent
+  from the DataFrame pushed to Athena, not silently retained via
+  accidental upsert semantics), `test_control_plane_backup.py` (5 —
+  real `VACUUM INTO` against a `tmp_path` SQLite file, no S3 needed; the
+  two-tier retention logic against a synthetic S3 key list). **Found and
+  fixed a real test-authoring bug while writing these**: the first version
+  of `test_control_plane_backup.py` monkeypatched `config.settings.
+  ZAMBONI_CONTROL_PLANE_DB`/`ZAMBONI_METADATA_BUCKET`, which silently did
+  nothing — `control_plane_backup.py` imports both as module-level names
+  (`from config.settings import X`), so the live values it reads are
+  bound in its own module namespace, not `config.settings`'s (unlike
+  `control_plane.py`'s `_db_path()`, which re-imports fresh inside the
+  function body specifically so it stays patchable). Caught immediately
+  by the test actually failing against a stray real/default DB path
+  instead of the intended `tmp_path` fixture — fixed by patching
+  `backup_mod.X` instead. No production code was wrong; only the test's
+  patch target was.
+- **Live-verified via a real (non-mocked) end-to-end smoke test**, not
+  just unit tests: with `ZAMBONI_LOCAL_MODE=false` and a throwaway
+  `ZAMBONI_CONTROL_PLANE_DB`, called `domains_svc.create_domain()` (the
+  real API-layer function) to register a domain, then called
+  `engine.core.registry.get_domain()` (the real engine-layer function)
+  directly and confirmed it saw the new domain with zero lag; repeated for
+  `tables_svc.register_table()` → `registry.get_table()`, and for flipping
+  `hk_enabled` via `tables_svc.update_table()` → confirmed
+  `registry.get_table()` reflected it immediately on the next call. This
+  is the concrete proof of the redesign's central claim: UI/API writes
+  and engine reads share one file, so there is no staleness window.
+  Not tested in this environment (no real AWS credentials available):
+  `control_plane_sync.py`'s actual push to a real Athena table — that
+  logic is unit-tested with a mocked `wr.athena.to_iceberg` instead; a
+  real run requires `aws_local` credentials per `docs/deployment/
+  ec2_api_deploy.md`'s post-deploy validation section.
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 decision logic, or
+  the lock service — confirmed by construction (none of them import
+  `engine.core.control_plane`) and by the smoke test above (Gate-relevant
+  reads/writes all still went through the expected paths).

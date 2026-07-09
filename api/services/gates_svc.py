@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from config.settings import GATE0_OVERRIDE_MAX_HOURS, HK_CONFIG_TABLE
 from engine.core import conflict_detector, governance
 from engine.core.config import get_hk_config
-from engine.utils.athena_client import run_query
+from engine.core.control_plane import run_query
 
 
 def _esc(value: str) -> str:

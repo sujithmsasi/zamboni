@@ -1,0 +1,12 @@
+[Unit]
+Description=Zamboni Control Plane Integrity Check (PRAGMA integrity_check)
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/opt/zamboni
+EnvironmentFile=/opt/zamboni/.env
+Environment=PYTHONPATH=/opt/zamboni
+ExecStart=/opt/zamboni/.venv/bin/python scripts/control_plane_integrity_check.py
+StandardOutput=journal
+StandardError=journal

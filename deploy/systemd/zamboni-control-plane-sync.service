@@ -1,0 +1,18 @@
+[Unit]
+Description=Zamboni Control Plane Sync (SQLite -> Athena)
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/zamboni
+EnvironmentFile=/opt/zamboni/.env
+Environment=PYTHONPATH=/opt/zamboni
+ExecStart=/opt/zamboni/.venv/bin/python scripts/control_plane_sync.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -41,7 +41,7 @@ def lock_db(tmp_path, monkeypatch):
 
     db_path = tmp_path / "test_locks.db"
     monkeypatch.setattr(settings, "ZAMBONI_LOCAL_DB", str(db_path))
-    monkeypatch.setattr(local_db, "_conn", None)
+    monkeypatch.setattr(local_db, "_conns", {})
 
     conn = local_db.get_connection()
     conn.execute(
@@ -59,7 +59,7 @@ def lock_db(tmp_path, monkeypatch):
     conn.commit()
     yield conn
     conn.close()
-    monkeypatch.setattr(local_db, "_conn", None)
+    monkeypatch.setattr(local_db, "_conns", {})
 
 
 def _make_engine():

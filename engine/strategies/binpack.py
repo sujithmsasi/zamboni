@@ -18,25 +18,32 @@ def build_optimize_sql(
     """
     Build OPTIMIZE ... REWRITE DATA SQL for Athena.
 
+    Athena engine v3 OPTIMIZE syntax (verified against AWS docs, same class
+    of "no catalog prefix" restriction vacuum.py already hard-codes for
+    VACUUM): `OPTIMIZE [db_name.]table_name REWRITE DATA USING BIN_PACK
+    [WHERE predicate]` — no `TABLE` keyword, no catalog-qualified 3-part
+    name, no inline sizing clause. `target_file_size_mb` is NOT embedded in
+    the SQL (Athena's OPTIMIZE takes no such option) — it's logged for
+    visibility only. The real target size must already be set on the table
+    via `write_target_data_file_size_bytes` in TBLPROPERTIES ahead of time
+    (engine/core/property_sync.py::apply_vacuum_properties, which
+    orchestrator.py runs before compaction/vacuum on every table's first
+    HK run).
+
     Args:
-        table_fqn:           Fully qualified table name
-        target_file_size_mb: Target file size in MB
+        table_fqn:           Fully qualified table name (catalog.database.table)
+        target_file_size_mb: Target file size in MB, for logging only
         partition_filter:    Optional WHERE clause fragment for partition pruning
                              e.g. "partition_date >= DATE '2026-03-01'"
 
     Returns:
         SQL string ready to execute via athena_client.run_query()
     """
-    catalog, database, table = parse_table_fqn(table_fqn)
+    _, database, table = parse_table_fqn(table_fqn)
 
     where_clause = f"\nWHERE {partition_filter}" if partition_filter else ""
 
-    sql = (
-        f"OPTIMIZE TABLE {catalog}.{database}.{table} "
-        f"REWRITE DATA "
-        f"USING BIN_PACK "
-        f"WITH (file_size_limit = '{target_file_size_mb}MB'){where_clause}"
-    )
+    sql = f"OPTIMIZE {database}.{table} REWRITE DATA USING BIN_PACK{where_clause}"
 
     log.info(
         "binpack.sql_built",
