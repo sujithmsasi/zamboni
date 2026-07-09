@@ -71,7 +71,7 @@
 .zamboni-login-card {
   position: relative;
   z-index: 1;
-  width: 480px;
+  width: 600px;
   max-width: calc(100vw - 32px);
   padding: 44px 48px 36px;
   border-radius: 18px;
