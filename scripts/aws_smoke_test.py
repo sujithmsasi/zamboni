@@ -3,17 +3,27 @@ Zamboni — AWS Connectivity Smoke Test (Phase 6, closes the backlog item)
 
 Exercises every AWS service Zamboni touches in aws_local/aws_ec2 mode --
 STS identity, Glue catalog read, Athena query, S3 read/write, SNS, the
-DynamoDB lock table, and one live Glue GetTableOptimizer call -- so a demo
+DynamoDB lock table, one live Glue GetTableOptimizer call, and the
+SQLite control-plane DB (engine/core/control_plane.py) -- so a demo
 laptop or a freshly-deployed EC2 instance can be checked in one command
-before relying on it. In ZAMBONI_MODE=local every AWS check reports
-SKIPPED (no AWS calls happen at all); this is the expected, not-broken,
-result when running against the local SQLite fallback.
+before relying on it. In ZAMBONI_MODE=local every check reports SKIPPED
+(no AWS calls happen at all); this is the expected, not-broken, result
+when running against the local SQLite fallback.
+
+The control-plane check is the one most worth paying attention to on a
+fresh EC2 deploy: in aws_ec2 mode it FAILs if ZAMBONI_CONTROL_PLANE_DB
+resolves inside /opt/zamboni, since CodeDeploy wipes that directory on
+every revision -- catching the exact silent-data-loss trap this check
+was added for, not just "is the file there right now."
 
 Usage:
-    python scripts/aws_smoke_test.py                    # uses get_mode()
-    python scripts/aws_smoke_test.py --create-lock-table # create the DynamoDB
-                                                          # lock table if missing
-    python scripts/aws_smoke_test.py --json              # machine-readable output
+    python scripts/aws_smoke_test.py                       # uses get_mode()
+    python scripts/aws_smoke_test.py --create-lock-table    # create the DynamoDB
+                                                             # lock table if missing
+    python scripts/aws_smoke_test.py --init-control-plane-db # run
+                                                             # scripts/init_control_plane_db.py
+                                                             # if the control-plane DB/tables are missing
+    python scripts/aws_smoke_test.py --json                 # machine-readable output
 """
 from __future__ import annotations
 
@@ -53,7 +63,7 @@ def _skip(name: str, reason: str) -> CheckResult:
     return CheckResult(name, SKIP, reason)
 
 
-def _run_checks(mode: str, create_lock_table: bool) -> list[CheckResult]:
+def _run_checks(mode: str, create_lock_table: bool, init_control_plane_db: bool) -> list[CheckResult]:
     if mode == "local":
         reason = "ZAMBONI_MODE=local -- no AWS calls are made in local mode"
         return [
@@ -64,6 +74,7 @@ def _run_checks(mode: str, create_lock_table: bool) -> list[CheckResult]:
             _skip("sns_get_topic_attributes", reason),
             _skip("dynamodb_lock_table", reason),
             _skip("glue_get_table_optimizer", reason),
+            _skip("control_plane_db", reason),
         ]
 
     session = get_boto3_session()
@@ -76,6 +87,7 @@ def _run_checks(mode: str, create_lock_table: bool) -> list[CheckResult]:
     results.append(_check_sns(session))
     results.append(_check_dynamodb_lock_table(session, create_lock_table))
     results.append(_check_get_table_optimizer(session))
+    results.append(_check_control_plane_db(mode, init_control_plane_db))
     return results
 
 
@@ -207,6 +219,72 @@ def _check_get_table_optimizer(session) -> CheckResult:
     return CheckResult("glue_get_table_optimizer", PASS, f"probed {database}.{table}")
 
 
+_CONTROL_PLANE_TABLES = {"stream_registry", "hk_config", "domain_registry", "nonprod_registry", "controlm_jobs"}
+
+
+def _check_control_plane_db(mode: str, init_if_missing: bool) -> CheckResult:
+    """
+    Verifies the SQLite control-plane DB (engine/core/control_plane.py) is
+    reachable and has the 5 expected tables. In aws_ec2 mode, also verifies
+    ZAMBONI_CONTROL_PLANE_DB isn't pointing inside /opt/zamboni -- CodeDeploy
+    wipes that directory on every revision, so a bare/relative path there
+    would silently destroy every registered domain/table/policy on the next
+    deploy. See the warning in .env.example for the same trap.
+    """
+    import os
+    import sqlite3
+
+    from config.settings import ZAMBONI_CONTROL_PLANE_DB
+
+    path = ZAMBONI_CONTROL_PLANE_DB
+    if mode == "aws_ec2":
+        # Deliberately a raw string-prefix check, not os.path.abspath() --
+        # this target path is always a Linux path on the real EC2 instance
+        # this mode runs on, and abspath() would resolve a leading "/" onto
+        # whatever drive this happens to run from if ever invoked on
+        # Windows, silently defeating the /opt/zamboni prefix check.
+        normalized = path.replace("\\", "/")
+        if not normalized.startswith("/") or normalized.startswith("/opt/zamboni"):
+            return CheckResult(
+                "control_plane_db", FAIL,
+                f"ZAMBONI_CONTROL_PLANE_DB='{path}' is not a persistent absolute path outside "
+                "/opt/zamboni -- CodeDeploy wipes /opt/zamboni on every revision, which would "
+                "silently destroy this database on the next deploy. Set it to "
+                "/data/zamboni/zamboni_control.db in the instance's .env.",
+            )
+
+    if not os.path.isfile(path):
+        if init_if_missing:
+            try:
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                from scripts.init_control_plane_db import main as init_main
+                init_main()
+            except Exception as e:
+                return CheckResult("control_plane_db", FAIL, f"init failed for '{path}': {e}")
+        else:
+            return CheckResult(
+                "control_plane_db", FAIL,
+                f"control-plane DB not found at '{path}' -- re-run with --init-control-plane-db",
+            )
+
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        finally:
+            conn.close()
+    except Exception as e:
+        return CheckResult("control_plane_db", FAIL, f"could not open '{path}': {e}")
+
+    missing = _CONTROL_PLANE_TABLES - tables
+    if missing:
+        return CheckResult(
+            "control_plane_db", FAIL,
+            f"'{path}' is missing table(s) {sorted(missing)} -- re-run with --init-control-plane-db",
+        )
+    return CheckResult("control_plane_db", PASS, f"path={path}, {len(_CONTROL_PLANE_TABLES)} control-plane table(s) present")
+
+
 def _print_table(mode: str, results: list[CheckResult]) -> None:
     from rich.console import Console
     from rich.table import Table
@@ -239,11 +317,15 @@ def main() -> int:
         "--create-lock-table", action="store_true",
         help="Create the DynamoDB lock table via scripts/create_lock_table.py if it's missing",
     )
+    parser.add_argument(
+        "--init-control-plane-db", action="store_true",
+        help="Run scripts/init_control_plane_db.py if the control-plane DB/tables are missing",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON instead of a table")
     args = parser.parse_args()
 
     mode = get_mode()
-    results = _run_checks(mode, args.create_lock_table)
+    results = _run_checks(mode, args.create_lock_table, args.init_control_plane_db)
     all_ok = all(r.status != FAIL for r in results)
 
     if args.json:

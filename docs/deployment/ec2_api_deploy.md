@@ -152,14 +152,61 @@ the manual commands above are for orgs not using CodeDeploy at all.
 
 ---
 
+## Control Plane (added post-Phase-6, SQLite-primary for config tables)
+
+`stream_registry`/`hk_config`/`domain_registry`/`nonprod_registry`/
+`controlm_jobs` are SQLite-primary in production now
+(`engine/core/control_plane.py`) — the UI/API and engine both read/write
+one SQLite file directly instead of round-tripping to Athena for every
+config change. `execution_log`/`audit_log`/`vacuum_audit` are unaffected,
+still 100% Athena.
+
+**This needs no CFN/IAM changes** — the existing `MetadataBucketName` S3
+grant and the existing Athena/Glue permissions already cover the
+sync/backup daemons below. What it DOES need, on every EC2 instance:
+
+- `/data/zamboni/` — the persistent home for the control-plane SQLite file,
+  **outside** `/opt/zamboni` (which CodeDeploy wipes on every revision).
+  `deploy/scripts/after_install.sh` creates this unconditionally on every
+  deploy (`mkdir -p /data/zamboni`), then runs
+  `scripts/init_control_plane_db.py` (idempotent — creates the 5 tables if
+  missing, applies any pending column migrations).
+- `.env`'s `ZAMBONI_CONTROL_PLANE_DB` **must** be an absolute path under
+  `/data/zamboni/` (i.e. `/data/zamboni/zamboni_control.db`) — see the
+  warning in `.env.example`. A bare/relative filename would resolve
+  inside `/opt/zamboni` and silently lose every registered domain/table/
+  policy on the next deploy. There's no code-level default that protects
+  against this — it depends entirely on `.env` being set correctly, which
+  is exactly what the smoke test's `control_plane_db` check now verifies
+  (see below).
+- Three systemd units, all installed/enabled by `after_install.sh`, no
+  manual step needed on the CFN/CodeDeploy path:
+  `zamboni-control-plane-sync` (pushes the SQLite DB to real Athena on an
+  interval, one-way, full-table overwrite — no MERGE, since Trino MERGE
+  can't express a SQLite-side DELETE), `zamboni-control-plane-backup`
+  (`VACUUM INTO` → S3 under `control-plane-backups/`, hourly/daily
+  retention), `zamboni-control-plane-integrity` (daily `PRAGMA
+  integrity_check` timer, alerts via SNS on failure). All three intervals
+  are tunable live via Settings → Advanced, no redeploy needed.
+- `app_start.sh`'s control-plane DB liveness check (`SELECT 1`) is
+  **fatal** — unlike the pre-existing Athena connectivity check, which
+  stays a warning. This file is primary storage now, not a fallback.
+
 ## Post-deploy validation
 
 ```bash
-python scripts/aws_smoke_test.py                    # every AWS check should PASS
-python scripts/aws_smoke_test.py --create-lock-table # if the lock table check FAILs the first time
-curl http://localhost:8000/api/system/mode           # FastAPI up
-curl http://localhost:8501/_stcore/health            # Streamlit fallback still up
+python scripts/aws_smoke_test.py                        # every check should PASS
+python scripts/aws_smoke_test.py --create-lock-table     # if dynamodb_lock_table FAILs the first time
+python scripts/aws_smoke_test.py --init-control-plane-db # if control_plane_db FAILs because the DB/tables don't exist yet
+curl http://localhost:8000/api/system/mode               # FastAPI up
+curl http://localhost:8501/_stcore/health                # Streamlit fallback still up
 ```
+
+Pay particular attention to the `control_plane_db` check specifically —
+it FAILs if `ZAMBONI_CONTROL_PLANE_DB` resolves inside `/opt/zamboni`,
+which is the exact silent-data-loss trap described above. A PASS here
+means the control-plane DB is both reachable and correctly placed outside
+CodeDeploy's wipe zone, not just "the file happens to exist right now."
 
 ---
 

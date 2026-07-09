@@ -3,6 +3,9 @@
 # Updated Phase 6 (2026-07-08): the CFN, smoke test, and systemd units this
 # checklist references now actually exist in deploy/ and scripts/ — see the
 # "Phase 6 checklist" section below for the concrete adaptation steps.
+# Updated 2026-07-09: SQLite control plane migration added a required
+# manual .env step (4a) and a new smoke-test check -- see "Control Plane"
+# in docs/deployment/ec2_api_deploy.md for the full detail.
 
 ## Delivery
 1. Finish Phases 0–6 on the personal repo; final commit pushed to public dev.
@@ -41,12 +44,24 @@ The old org branch remains untouched and deployable — it IS the rollback.
    full parameter list). First CodeDeploy run installs both
    `zamboni-app` (Streamlit fallback) and `zamboni-api` (FastAPI,
    primary) side by side — Phase 6's `deploy/scripts/after_install.sh`
-   already handles both.
-5. **Smoke test.** `python scripts/aws_smoke_test.py --create-lock-table`
-   — every check (STS, Glue, Athena, S3, SNS, DynamoDB lock table, one
-   live `GetTableOptimizer` call) should PASS against the org's real AWS
+   already handles both, plus (post-Phase-6) `/data/zamboni` provisioning
+   and the 3 `zamboni-control-plane-*` services (see
+   `docs/deployment/ec2_api_deploy.md`'s "Control Plane" section).
+4a. **Set `ZAMBONI_CONTROL_PLANE_DB` in the instance's `.env`** to
+   `/data/zamboni/zamboni_control.db` (absolute path, must stay outside
+   `/opt/zamboni`) — this is a manual `.env` edit, not something the CFN
+   or CodeDeploy scripts set for you. Getting this wrong doesn't fail
+   loudly on first deploy; it silently loses every registered domain/
+   table/policy on the *second* deploy, once CodeDeploy wipes `/opt/
+   zamboni` again. Step 5's smoke test is what actually catches this if
+   missed.
+5. **Smoke test.** `python scripts/aws_smoke_test.py --create-lock-table
+   --init-control-plane-db` — every check (STS, Glue, Athena, S3, SNS,
+   DynamoDB lock table, one live `GetTableOptimizer` call, and the
+   SQLite control-plane DB) should PASS against the org's real AWS
    account. This is the "did the adaptation actually work" gate, not just
-   "did the stack finish creating."
+   "did the stack finish creating" — and it's the gate that specifically
+   catches step 4a if it was missed or set wrong.
 6. **No merge, ever.** If something in `new-phase1` needs a fix, fix it on
    `new-phase1` directly. The old org branch stays untouched as the
    rollback (see above) for the duration of the parity-confirmation
