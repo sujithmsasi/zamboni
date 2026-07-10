@@ -236,6 +236,17 @@ a small, deliberately-chosen set.
   and via SSM Run Command's command history (useful when a scheduled run
   never appears in `execution_log` at all — check SSM first, that means
   the command itself failed before the Python process even started).
+- **`Zamboni/BootstrapSuccess` metric** (namespace `Zamboni`, dimension
+  `InstanceId`) — published once by UserData at the end of every EC2
+  boot, `1` if the CodeDeploy agent came up and is active, `0` if any
+  fatal step failed (package install, agent download, `./install auto`,
+  or the agent not actually running at the end). This is what catches a
+  silently-failed bootstrap *before* it costs you a failed deployment —
+  build a CloudWatch alarm on this metric (`< 1` for one datapoint) so a
+  bad instance pages someone right after boot instead of surfacing hours
+  later as an unexplained CodeDeploy failure. Full step-by-step log is on
+  the instance at `/var/log/zamboni/bootstrap.log` (retry attempts,
+  which step failed, timestamps).
 
 ---
 
@@ -252,6 +263,18 @@ a small, deliberately-chosen set.
   tripped and halted remaining steps for that table — check
   `execution_log.integrity_status`, the Health Dashboard's Recent
   Integrity Failures grid names the table and operation.
+- **A deployment fails with "CodeDeploy agent was not able to receive
+  the lifecycle event"**, especially against a recently-replaced
+  instance: this is the signature of a silently-failed UserData
+  bootstrap (root-caused 2026-07-10 from a real incident — a transient
+  `dnf`/download hiccup aborted the whole boot script before the agent
+  install ran, leaving an instance that passed EC2 status checks but had
+  no agent). Check the `Zamboni/BootstrapSuccess` metric for the
+  instance first (§8) — if it's `0` or missing entirely, SSH/Session
+  Manager in and read `/var/log/zamboni/bootstrap.log` for the specific
+  step that failed, fix the underlying cause (usually transient — retry
+  logic already covers most of these), then re-run the UserData manually
+  or replace the instance.
 
 ---
 
