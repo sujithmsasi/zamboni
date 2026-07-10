@@ -2681,3 +2681,71 @@ disabled, the identified candidates should not get dropped." 629 unit +
 - Verified: `python -m pytest tests/unit -q` → 629 passed;
   `python -m pytest tests/api -q` → 100 passed; `ruff check .` → All
   checks passed.
+
+2026-07-09 aws_local profile-setup tooling + CFN flow audit. Two asks: (1)
+a script to set up a local AWS profile for aws_local mode, ahead of Sujith
+provisioning preprod infra manually; (2) an explanation of the current
+CloudFormation flow, prompted by a bad experience with an org's prior
+setup where a single pipeline recreated the EC2 instance (and lost local
+state) on every push. cfn-lint clean, tests/ruff unaffected (no Python
+touched).
+- `setup_aws_local_profile.ps1` (new): interactively configures a named
+  AWS CLI profile for `aws_local` mode and writes it into
+  `.env.aws_local`'s `AWS_SSO_PROFILE`. Two modes: paste static/session
+  credentials directly, or (recommended for a multi-day window, since it
+  auto-refreshes) chain to an existing long-lived profile — e.g. a dev
+  SSO profile already in daily use — via `role_arn`/`source_profile`.
+  Never assumes `prod-toolsgenai-sso` (a cross-team, Bedrock-only profile
+  in some environments) is usable.
+- **Real bug fixed in `run_aws_local.ps1`**: it resolved and validated/
+  logged into a profile from the *ambient* `$env:AWS_SSO_PROFILE` (falling
+  back to the wrong hardcoded default) *before* `.env.aws_local` was ever
+  loaded — so on a machine without that env var already set in the shell
+  (the normal case), it would try to SSO-login the unrelated default
+  profile and abort before ever reading the real profile name out of the
+  env file. Reordered: load `.env.aws_local` first, then validate using
+  the value it actually contains.
+- **Real gap fixed in both `run_aws_local.ps1` and `run_ui_dev.ps1`**:
+  only `lock_service.py`/`create_lock_table.py`/`control_plane_sync.py`/
+  `aws_smoke_test.py` call `get_boto3_session()`, which honors
+  `AWS_SSO_PROFILE` explicitly. Everything else that actually talks to
+  AWS — `athena_client.py`, `glue_client.py`, `s3_client.py`,
+  `notifier.py`, i.e. the vast majority of real traffic — builds a plain
+  `boto3.client(...)` with no `profile_name`, relying entirely on boto3's
+  default credential chain. Neither launcher ever set `AWS_PROFILE`, so a
+  configured SSO/assumed-role profile would never have reached
+  Athena/Glue/S3/SNS at all. Both scripts now export `AWS_PROFILE` too.
+- **CFN flow audit** (`deploy/zamboni-cfn.yaml`, `.github/workflows/
+  {ci,deploy}.yml`, `deploy/buildspec.yml` all read end-to-end):
+  confirmed the org's prior single-pipeline-recreates-EC2-on-every-push
+  failure mode does not exist in this template's design — the EC2
+  instance is a first-class CFN resource created once by a deliberate,
+  manual `aws cloudformation deploy`; ongoing pushes flow entirely
+  through the separate `ZamboniPipeline` (CodeStar connection → CodeBuild
+  → CodeDeploy in-place file copy onto the *existing* instance via
+  `appspec.yml` hooks), which never touches CloudFormation or the EC2
+  resource. `.github/workflows/deploy.yml` is a lint/test gate only — it
+  doesn't call CloudFormation or trigger the pipeline either (the
+  CodeStar connection watches GitHub directly, independent of Actions).
+- **One real latent risk found and fixed**: `AmiId`'s
+  `AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>` type resolves the
+  `.../al2023-ami-kernel-default-x86_64` SSM path fresh on every
+  `aws cloudformation deploy` call, and that path's target drifts over
+  time as AWS publishes newer patched AMIs. Changing `ImageId` forces
+  CloudFormation to replace the EC2 instance (terminate + relaunch) — so
+  any future redeploy of this stack for an unrelated reason (or just
+  re-running the same command later) could silently pick up a newer AMI
+  and reproduce the exact "EC2 terminates and respawns" symptom the prior
+  org setup had, just via stack-update AMI drift instead of a
+  push-triggered pipeline. Documented prominently in the `AmiId`
+  parameter's description and added a new `ResolvedAmiId` output so
+  operators can pin the exact value (`--parameter-overrides
+  AmiId=<ResolvedAmiId output>`) on every deploy after the first.
+  `docs/deployment/ec2_api_deploy.md` gained a matching "CloudFormation
+  vs. ongoing code deploys" section spelling out both of the above for
+  anyone who wasn't in this conversation.
+- Verified: `cfn-lint deploy/zamboni-cfn.yaml` → zero errors, zero
+  warnings. `setup_aws_local_profile.ps1`/`run_aws_local.ps1` changes
+  verified via the PowerShell parser (syntax only) and the `.env.aws_local`
+  regex-update logic tested in isolation — not yet run end-to-end against
+  real AWS (no credentials in this environment).

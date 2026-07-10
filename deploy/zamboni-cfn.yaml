@@ -71,7 +71,22 @@ Parameters:
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: Amazon Linux 2023 AMI, resolved via the public SSM parameter.
+    Description: >-
+      Amazon Linux 2023 AMI, resolved via the public SSM parameter.
+      IMPORTANT (2026-07-09): this SSM path resolves to whatever AMI AWS
+      currently publishes there -- it drifts over time as new patched AMIs
+      ship. Changing an EC2 instance's ImageId forces CloudFormation to
+      REPLACE the instance (terminate + relaunch). This default is only
+      safe for the FIRST deploy of this stack. On every deploy after that,
+      pass the exact value from this stack's ResolvedAmiId output
+      explicitly as --parameter-overrides AmiId=ami-xxxxxxxx -- otherwise
+      a routine, unrelated stack update (or just re-running the same
+      deploy command later) can silently pick up a newer AMI and tear
+      down/respawn the running EC2 instance, the same "entire EC2
+      terminates and respawns" failure this stack's Source→Build→Deploy
+      CodePipeline (below) exists specifically to avoid for ordinary code
+      pushes -- this is the one way that same symptom can still happen,
+      via a stack update instead of a push.
 
   RootVolumeSizeGiB:
     Type: Number
@@ -589,6 +604,16 @@ Outputs:
   InstancePrivateIp:
     Description: Private IP of the Zamboni EC2 instance.
     Value: !GetAtt ZamboniInstance.PrivateIp
+
+  ResolvedAmiId:
+    Description: >-
+      The literal AMI ID the AmiId SSM parameter resolved to for THIS
+      deploy. Pass this exact value as --parameter-overrides
+      AmiId=<this> on every subsequent `aws cloudformation deploy` of
+      this stack -- see AmiId parameter's description for why leaving
+      the SSM-path default in place risks an unintended EC2 replacement
+      on a later redeploy.
+    Value: !Ref AmiId
 
   SecurityGroupId:
     Description: Security group gating :8000/:8501/:22 access.

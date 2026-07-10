@@ -67,7 +67,39 @@ After the stack is up, CodeDeploy still needs `deploy/appspec.yml` +
 below) to actually install and start both services on first deploy.
 
 Outputs worth noting: `InstanceId`, `SecurityGroupId`, `LockTableName`,
-`InstanceRoleArn`, `CodeDeployApplicationName`, `PipelineArtifactBucket`.
+`InstanceRoleArn`, `CodeDeployApplicationName`, `PipelineArtifactBucket`,
+`ResolvedAmiId` (see the AMI-pinning warning below).
+
+### CloudFormation vs. ongoing code deploys — don't confuse the two
+
+`aws cloudformation deploy` above is a **one-time, deliberate** action —
+it provisions the EC2 instance and its surrounding infra exactly once.
+Ongoing code pushes never touch CloudFormation at all: the CodeStar
+connection watches the GitHub repo directly and triggers `ZamboniPipeline`
+(Source → CodeBuild → CodeDeploy) automatically, and CodeDeploy does an
+in-place file copy + service restart onto the *already-running* EC2
+instance via `deploy/appspec.yml`'s hooks — the instance is never
+terminated/recreated by a normal push. `.github/workflows/deploy.yml`
+only runs lint/tests as a pre-deploy gate; it doesn't call CloudFormation
+or CodePipeline either. If your org's previous setup had a single
+pipeline that re-created the EC2 instance (and lost local state/config)
+on every push, that problem doesn't exist in this template's design —
+CFN and the code-deploy pipeline are architecturally separate here.
+
+**The one way to still trigger an unintended EC2 replacement**: `AmiId`
+resolves the SSM path `.../al2023-ami-kernel-default-x86_64` fresh on
+every `aws cloudformation deploy` call, and that path's target drifts as
+AWS publishes newer patched AMIs. Changing an EC2 instance's `ImageId`
+forces CloudFormation to replace it. So the SSM-path default is only
+safe for the *first* deploy — after that, always pass the exact value
+from the `ResolvedAmiId` output explicitly:
+```bash
+aws cloudformation deploy ... --parameter-overrides AmiId=ami-xxxxxxxx ...
+```
+Skipping this is the one remaining way a routine, unrelated stack update
+(or just re-running the same deploy command later) could silently pick
+up a newer AMI and tear down/respawn the instance — the same symptom as
+a bad push-triggered pipeline, just from a different cause.
 
 ## Manual path (no CFN, matches the existing docx's conventions)
 
