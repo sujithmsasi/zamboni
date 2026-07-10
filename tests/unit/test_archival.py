@@ -184,3 +184,125 @@ def test_archive_partition_blocks_delete_on_pre_fail():
     assert result["pre_validation"] == "FAIL"
     mock_export.assert_not_called()
     mock_delete.assert_not_called()
+
+
+# ── Pre-delete freshness re-check (2026-07-09 audit: export-to-delete TOCTOU) ──
+# archive_partition's DELETE is unconditional on the partition's *current*
+# state -- a row written into the partition after export but before delete
+# would be silently destroyed, never archived, with no gate to catch it.
+# _pre_delete_check() re-counts immediately before delete and refuses to
+# delete if the count no longer matches what was actually exported.
+
+def test_pre_delete_check_passes_when_count_unchanged():
+    with patch("engine.operations.archival.read_sql") as mock_sql:
+        mock_sql.return_value = pd.DataFrame([{"row_count": 50_000}])
+        from engine.operations.archival import _pre_delete_check
+        ok, detail = _pre_delete_check(
+            table_fqn="glue_catalog.finance_db.finance_staging",
+            partition_col="partition_date",
+            partition_date=date(2026, 1, 1),
+            workgroup="archival",
+            expected_row_count=50_000,
+        )
+    assert ok is True
+    assert detail["current_row_count"] == 50_000
+
+
+def test_pre_delete_check_fails_when_row_added_after_export():
+    """A row written into the partition after export completed must block
+    the delete, not silently be destroyed along with the rest."""
+    with patch("engine.operations.archival.read_sql") as mock_sql:
+        mock_sql.return_value = pd.DataFrame([{"row_count": 50_001}])
+        from engine.operations.archival import _pre_delete_check
+        ok, detail = _pre_delete_check(
+            table_fqn="glue_catalog.finance_db.finance_staging",
+            partition_col="partition_date",
+            partition_date=date(2026, 1, 1),
+            workgroup="archival",
+            expected_row_count=50_000,
+        )
+    assert ok is False
+    assert "changed since export" in detail["fail_reason"]
+
+
+def test_archive_partition_blocks_delete_when_partition_changes_after_export():
+    """End-to-end: pre-validate and post-validate both pass, but a fresh
+    row lands in the partition before the delete step runs -- the delete
+    must not execute."""
+    table_row = {
+        "table_fqn":              "glue_catalog.finance_db.finance_staging",
+        "domain":                 "finance",
+        "tier":                   "standard",
+        "environment":            "prod",
+        "archive_retention_days": 30,
+        "archive_min_row_count":  1_000,
+        "archive_max_null_pct":   5.0,
+        "archive_bucket":         None,
+    }
+
+    with patch("engine.operations.archival.read_sql") as mock_sql, \
+         patch("engine.operations.archival._resolve_partition_column",
+               return_value="partition_date"), \
+         patch("engine.operations.archival._export_partition",
+               return_value=(50_000, 123_456)), \
+         patch("engine.operations.archival._post_validate",
+               return_value=(True, {"source_rows": 50_000, "archived_rows": 50_000})), \
+         patch("engine.operations.archival._delete_partition") as mock_delete:
+
+        # First read_sql call = pre-validate (50_000 rows); second =
+        # pre-delete re-check, simulating a row landing in between.
+        mock_sql.side_effect = [
+            pd.DataFrame([{"row_count": 50_000, "null_pct": 0.0}]),
+            pd.DataFrame([{"row_count": 50_001}]),
+        ]
+
+        from engine.operations.archival import archive_partition
+        result = archive_partition(
+            table_row=table_row,
+            partition_date=date(2026, 1, 1),
+            dry_run=False,
+        )
+
+    assert result["status"] == "FAILURE"
+    assert result["pre_delete_check"] == "FAIL"
+    mock_delete.assert_not_called()
+
+
+def test_archive_partition_deletes_when_partition_still_stable():
+    """Happy path: nothing changed between export and delete -- the delete
+    must still run (the new gate isn't a blanket block)."""
+    table_row = {
+        "table_fqn":              "glue_catalog.finance_db.finance_staging",
+        "domain":                 "finance",
+        "tier":                   "standard",
+        "environment":            "prod",
+        "archive_retention_days": 30,
+        "archive_min_row_count":  1_000,
+        "archive_max_null_pct":   5.0,
+        "archive_bucket":         None,
+    }
+
+    with patch("engine.operations.archival.read_sql") as mock_sql, \
+         patch("engine.operations.archival._resolve_partition_column",
+               return_value="partition_date"), \
+         patch("engine.operations.archival._export_partition",
+               return_value=(50_000, 123_456)), \
+         patch("engine.operations.archival._post_validate",
+               return_value=(True, {"source_rows": 50_000, "archived_rows": 50_000})), \
+         patch("engine.operations.archival._delete_partition") as mock_delete:
+
+        mock_sql.side_effect = [
+            pd.DataFrame([{"row_count": 50_000, "null_pct": 0.0}]),
+            pd.DataFrame([{"row_count": 50_000}]),
+        ]
+
+        from engine.operations.archival import archive_partition
+        result = archive_partition(
+            table_row=table_row,
+            partition_date=date(2026, 1, 1),
+            dry_run=False,
+        )
+
+    assert result["status"] == "SUCCESS"
+    assert result["pre_delete_check"] == "PASS"
+    mock_delete.assert_called_once()

@@ -176,8 +176,27 @@ class ParquetLogBuffer:
     # ── Athena INSERT fallback ────────────────────────────────────────────────
 
     def _write_via_insert(self, dry_run: bool = False) -> dict:
-        """Per-row Athena INSERT — legacy path."""
+        """
+        Athena INSERT fallback — one multi-row INSERT for the whole buffer
+        instead of one INSERT per entry (2026-07-09 audit: this path did a
+        real per-table Athena round trip on every HK run whenever
+        EXECUTION_LOG_MODE=insert, or as the auto/both fallback whenever the
+        Parquet path failed). Falls back to the old one-row-at-a-time loop
+        only if the batched INSERT itself fails, so one malformed entry
+        can't silently drop every other table's log row for the run.
+        """
         from engine.core import execution_log
+        try:
+            rows_written = execution_log.write_many(self.entries, dry_run=dry_run)
+            self.flushed = True
+            return {"mode": "insert", "rows_written": rows_written,
+                    "s3_path": None, "error": None}
+        except Exception as e:
+            log.warning(
+                "execution_log_parquet.batched_insert_failed_falling_back_per_row",
+                error=str(e), rows=len(self.entries),
+            )
+
         rows_written = 0
         for entry in self.entries:
             try:

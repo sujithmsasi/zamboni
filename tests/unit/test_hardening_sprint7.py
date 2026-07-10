@@ -269,6 +269,39 @@ class TestAthenaTimeout:
         sig = inspect.signature(cancel_query)
         assert "query_id" in sig.parameters
 
+    def test_read_sql_actually_enforces_timeout(self):
+        """
+        Real bug fixed here (2026-07-09 audit): read_sql() used to delegate
+        straight to wr.athena.read_sql_query(), which polls with no
+        caller-side timeout at all -- timeout_s was accepted but never
+        enforced, unlike run_query()'s real _poll()-based enforcement. A
+        query stuck RUNNING must now raise AthenaQueryTimeout from
+        read_sql() itself, the same as it already does from run_query().
+        """
+        import engine.utils.athena_client as athena_client_mod
+        from engine.utils.athena_client import AthenaQueryTimeout
+
+        mock_client = MagicMock()
+        mock_client.start_query_execution.return_value = {"QueryExecutionId": "q-read-timeout"}
+        mock_client.get_query_execution.return_value = {
+            "QueryExecution": {"Status": {"State": "RUNNING"}, "Statistics": {}},
+        }
+
+        with patch.object(athena_client_mod, "ZAMBONI_LOCAL_MODE", False), \
+             patch.object(athena_client_mod, "_get_client", return_value=mock_client), \
+             patch.object(athena_client_mod, "_poll", wraps=athena_client_mod._poll) as spy_poll:
+            with pytest.raises(AthenaQueryTimeout):
+                athena_client_mod.read_sql(
+                    "SELECT 1", workgroup="app", timeout_s=0,
+                )
+
+        # Confirms read_sql() genuinely routes through the same timeout-
+        # enforcing _poll() run_query() uses, not a no-op passthrough.
+        assert spy_poll.called
+        mock_client.stop_query_execution.assert_called_once_with(
+            QueryExecutionId="q-read-timeout"
+        )
+
     def test_timeout_metric_emitted(self):
         """_emit_timeout_metric must call put_metric (best-effort)."""
         from engine.utils.athena_client import _emit_timeout_metric

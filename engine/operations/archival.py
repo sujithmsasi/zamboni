@@ -130,8 +130,12 @@ def archive_partition(
         return result
 
     # ── Step 3 — Post-archive validation ─────────────────────────────────────
+    # Compare against rows_exported (the count actually read at export time,
+    # step 2) rather than pre_detail's step-1 count -- tighter, since a row
+    # written between steps 1 and 2 would already be reflected in what was
+    # exported but not in the older pre-validate count.
     post_ok, post_detail = _post_validate(
-        source_row_count=pre_detail.get("row_count", 0),
+        source_row_count=rows_exported,
         archive_path=archive_path,
         workgroup=workgroup,
     )
@@ -151,6 +155,37 @@ def archive_partition(
 
     log.info("archival.post_validation_passed", table_fqn=table_fqn,
              partition_date=str(partition_date))
+
+    # ── Step 3.5 — Pre-delete freshness re-check ─────────────────────────────
+    # Real gap fixed here (2026-07-09 audit): steps 1-3 above validate a
+    # snapshot of the partition taken *before* delete, but DELETE (step 4)
+    # is unconditional on the partition's *current* state at delete time --
+    # Athena/Iceberg's DELETE has no "AS OF snapshot" scoping to pin it to
+    # exactly the rows that were exported. A row written into this partition
+    # after export but before delete would be silently destroyed, never
+    # archived. Closed by re-counting the partition immediately before
+    # delete and refusing to delete (fail closed, same as every other gate
+    # in this sequence) if it no longer matches what was actually exported.
+    fresh_ok, fresh_detail = _pre_delete_check(
+        table_fqn=table_fqn,
+        partition_col=partition_col,
+        partition_date=partition_date,
+        workgroup=workgroup,
+        expected_row_count=rows_exported,
+    )
+    result["pre_delete_check"] = "PASS" if fresh_ok else "FAIL"
+    result["pre_delete_detail"] = fresh_detail
+
+    if not fresh_ok:
+        log.error(
+            "archival.pre_delete_check_failed",
+            table_fqn=table_fqn,
+            partition_date=str(partition_date),
+            detail=fresh_detail,
+        )
+        result["status"] = "FAILURE"
+        result["error"]  = f"Pre-delete check failed (partition changed since export): {fresh_detail}"
+        return result
 
     # ── Step 4 — Delete from staging ─────────────────────────────────────────
     try:
@@ -256,6 +291,41 @@ def _post_validate(
         detail["fail_reason"] = (
             f"Row count mismatch: source={source_row_count}, "
             f"archived={archived_count}"
+        )
+        return False, detail
+
+    return True, detail
+
+
+def _pre_delete_check(
+    table_fqn: str,
+    partition_col: str,
+    partition_date: date,
+    workgroup: str,
+    expected_row_count: int,
+) -> tuple[bool, dict]:
+    """
+    Re-count the partition immediately before DELETE and confirm it still
+    matches what was exported. See the "Step 3.5" comment at the call site
+    for why this exists -- closes the export-to-delete TOCTOU window.
+    """
+    _, database, table = parse_table_fqn(table_fqn)
+    sql = f"""
+        SELECT COUNT(*) AS row_count
+        FROM glue_catalog.{database}.{table}
+        WHERE {partition_col} = DATE '{partition_date.isoformat()}'
+    """
+    df = read_sql(sql, workgroup=workgroup)
+    if df.empty:
+        return False, {"error": "Pre-delete count query returned no results"}
+
+    current_count = int(df.iloc[0].get("row_count") or 0)
+    detail = {"expected_row_count": expected_row_count, "current_row_count": current_count}
+
+    if current_count != expected_row_count:
+        detail["fail_reason"] = (
+            f"Partition row count changed since export: "
+            f"expected {expected_row_count}, now {current_count}"
         )
         return False, detail
 

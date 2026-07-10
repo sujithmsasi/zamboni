@@ -270,6 +270,26 @@ def test_any_optimizer_type_enabled_is_conflict(monkeypatch):
     assert result["conflict"] is True
 
 
+def test_scan_fleet_batches_write_back_instead_of_one_update_per_table(monkeypatch):
+    """2026-07-09 audit finding: scan_fleet() issued one Athena UPDATE per
+    table -- the "Rescan conflicts" button doing a real row-by-row write
+    against the whole fleet. Now one UPDATE per `batch` chunk."""
+    fqns = [f"glue_catalog.db.t{i}" for i in range(7)]
+    monkeypatch.setattr(
+        cd, "check_table",
+        lambda fqn: {"aws_opt_compaction": fqn.endswith("t3"), "aws_opt_retention": False, "aws_opt_orphan": False},
+    )
+    write_backs = []
+    monkeypatch.setattr(cd, "run_query", lambda sql, **k: write_backs.append(sql))
+
+    result = cd.scan_fleet(fqns, batch=3)
+
+    assert result == {"scanned": 7, "conflicts": 1}
+    # 7 tables at batch=3 -> 3 batched UPDATEs (3+3+1), not 7 individual ones
+    assert len(write_backs) == 3
+    assert all("WHERE table_fqn IN" in sql for sql in write_backs)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Gate 0 — engine/engines/hk_engine.py
 # ══════════════════════════════════════════════════════════════════════════════

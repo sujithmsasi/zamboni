@@ -238,9 +238,20 @@ def read_sql(
 ):
     """
     Execute a SELECT and return results as a pandas DataFrame.
-    Uses awswrangler for clean result fetching.
 
-    Raises AthenaQueryTimeout if the query exceeds timeout.
+    Raises AthenaQueryTimeout if the query exceeds timeout_s (or
+    ATHENA_QUERY_TIMEOUT_SECONDS if not given).
+
+    Real bug fixed here (2026-07-09 audit): this used to delegate straight
+    to wr.athena.read_sql_query(), which polls internally with no
+    caller-side timeout at all -- despite the docstring's claim,
+    `timeout_s` was dead code, and a hang here (every Gate 0/health-check/
+    capture_state call in orchestrator.py uses read_sql) could block an HK
+    worker thread indefinitely. Now submits via the same
+    start_query_execution + _poll() path run_query() already uses (which
+    genuinely enforces the timeout and auto-cancels on expiry), then fetches
+    results for that completed query_id via wr.athena.get_query_results --
+    same return shape as before, real timeout enforcement underneath.
     """
     # ── Local mode (no AWS) ──────────────────────────────────────────────────
     if ZAMBONI_LOCAL_MODE:
@@ -248,22 +259,25 @@ def read_sql(
         return read_sql_local(sql)
 
     import awswrangler as wr
-    import boto3 as _boto3
 
     wg  = ATHENA_WORKGROUPS.get(workgroup, workgroup)
     db  = database or ATHENA_DATABASE
+    tmo = timeout_s if timeout_s is not None else ATHENA_QUERY_TIMEOUT_SECONDS
 
-    log.info("athena.read_sql", workgroup=wg, database=db, sql=sql[:300])
+    log.info("athena.read_sql", workgroup=wg, database=db, sql=sql[:300], timeout_s=tmo)
 
-    # awswrangler handles polling internally; we wrap with our own timeout
-    # by using a thread with join -- simpler: delegate to run_query for
-    # DML and use wr only for the result fetch after the query_id is known.
-    # For read_sql we use wr directly and rely on workgroup scan limits as
-    # the primary safety gate; soft timeout via ctas_approach=False.
-    return wr.athena.read_sql_query(
-        sql=sql,
-        database=db,
-        workgroup=wg,
-        boto3_session=_boto3.Session(region_name=AWS_REGION),
-        ctas_approach=False,
+    client   = _get_client()
+    response = client.start_query_execution(
+        QueryString=sql,
+        WorkGroup=wg,
+        ResultConfiguration={"OutputLocation": ATHENA_RESULTS_BUCKET},
+        QueryExecutionContext={"Catalog": ATHENA_CATALOG, "Database": db},
+    )
+    query_id = response["QueryExecutionId"]
+
+    _poll(client, query_id, wg, timeout_s=tmo)  # raises AthenaQueryTimeout/AthenaQueryFailed
+
+    return wr.athena.get_query_results(
+        query_execution_id=query_id,
+        boto3_session=boto3.Session(region_name=AWS_REGION),
     )

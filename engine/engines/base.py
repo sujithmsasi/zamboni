@@ -55,13 +55,35 @@ class BaseEngine(ABC):
         )
 
     def _log_complete(self, result: dict) -> None:
+        """
+        Real bug fixed here (found while testing an unrelated lifecycle_engine
+        change, 2026-07-09): summary_dict() always includes "engine",
+        "run_id", and "elapsed_seconds" keys in its returned dict, and this
+        call also passes those same three as explicit kwargs -- Python
+        raises TypeError ("got multiple values for keyword argument") for
+        **any** call shaped like
+        f(engine=x, **{"engine": y}), unconditionally, regardless of
+        structlog's own internals. This meant every top-level HKEngine.run(),
+        ArchivalEngine.run(), and LifecycleEngine.run()/run_scan()/
+        run_cleanup() call crashed with an unhandled TypeError on this line,
+        right after all real maintenance work for the run had already
+        completed -- the actual engine.scripts.run_hk/run_archival/
+        run_cleanup/run_lifecycle_cycle/run_lifecycle_scan.py entry points
+        (the real EventBridge/Control-M-triggered jobs) never returned a
+        result or exited cleanly. Reproduced directly against real
+        HKEngine/LifecycleEngine instances with zero mocking before fixing.
+        """
         elapsed = (datetime.now(UTC) - self.started_at).total_seconds()
+        _already_explicit = {"engine", "run_id", "elapsed_seconds"}
         log.info(
             "engine.run_complete",
             engine=self.engine_name,
             run_id=self.run_id,
             elapsed_seconds=round(elapsed, 1),
-            **{k: v for k, v in result.items() if isinstance(v, (int, float, str, bool))},
+            **{
+                k: v for k, v in result.items()
+                if k not in _already_explicit and isinstance(v, (int, float, str, bool))
+            },
         )
 
     def _log_table_skip(self, table_fqn: str, reason: str) -> None:

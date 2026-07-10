@@ -25,6 +25,7 @@ from config.settings import NONPROD_REGISTRY_TABLE
 from engine.core import execution_log, notifier, registry
 from engine.core.control_plane import read_sql, run_query
 from engine.core.execution_log import LogEntry
+from engine.core.lock_service import LockService
 from engine.engines.base import BaseEngine
 from engine.monitoring.activity_scanner import get_activity_signals
 from engine.operations.catalog_cleanup import cleanup_table, is_backup_pattern
@@ -163,17 +164,55 @@ class LifecycleEngine(BaseEngine):
                     log.info("lifecycle_engine.cleanup.not_expired", table_fqn=fqn)
                     continue
 
-                result = cleanup_table(fqn, dry_run=self.dry_run)
+                # Hold the same per-table lock HKEngine/orchestrator.py uses
+                # (keyed on table_fqn alone, engine/core/lock_service.py) for
+                # the state re-check through the delete -- real gap fixed
+                # here (2026-07-09 audit): without it, a concurrent HK
+                # orchestrated run on this same table (or two overlapping
+                # cleanup runs) could mutate/read the table's Iceberg
+                # metadata at the same moment this hard delete runs.
+                lock_service = LockService()
+                lock = lock_service.acquire(fqn, "lifecycle_cleanup")
+                if lock is None:
+                    skipped += 1
+                    log.warning("lifecycle_engine.cleanup.lock_held", table_fqn=fqn)
+                    continue
 
-                if result.get("catalog_dropped") and result.get("s3_cleaned"):
-                    succeeded += 1
-                    self._mark_dropped(table_row, result)
-                    self._write_log(table_row, "catalog_cleanup", "SUCCESS" if not self.dry_run else "DRY_RUN",
-                                    bytes_reclaimed=result.get("bytes_reclaimed", 0))
-                else:
-                    failed += 1
-                    self._write_log(table_row, "catalog_cleanup", "FAILURE",
-                                    error_message=result.get("error"))
+                try:
+                    # Re-check state immediately before the hard delete, not
+                    # just at the top-of-run snapshot fetched into `tables`
+                    # above. Real gap fixed here (2026-07-09 audit): `tables`
+                    # is fetched once at the start of this run and this loop
+                    # can take real wall-clock time (per-table Glue/S3 calls)
+                    # working through it -- an owner exempting or claiming a
+                    # table (both flip lifecycle_state to ACTIVE immediately,
+                    # see api/services/lifecycle_svc.py) *after* this
+                    # snapshot was taken but *before* this row's turn in the
+                    # loop would otherwise still get hard-deleted on stale
+                    # state. A fresh re-read right here closes that window.
+                    current = self._get_current_state(fqn)
+                    if current is None or current.get("lifecycle_state") != PENDING_DROP:
+                        skipped += 1
+                        log.info(
+                            "lifecycle_engine.cleanup.state_changed_since_scan",
+                            table_fqn=fqn,
+                            current_state=(current or {}).get("lifecycle_state"),
+                        )
+                        continue
+
+                    result = cleanup_table(fqn, dry_run=self.dry_run)
+
+                    if result.get("catalog_dropped") and result.get("s3_cleaned"):
+                        succeeded += 1
+                        self._mark_dropped(table_row, result)
+                        self._write_log(table_row, "catalog_cleanup", "SUCCESS" if not self.dry_run else "DRY_RUN",
+                                        bytes_reclaimed=result.get("bytes_reclaimed", 0))
+                    else:
+                        failed += 1
+                        self._write_log(table_row, "catalog_cleanup", "FAILURE",
+                                        error_message=result.get("error"))
+                finally:
+                    lock_service.release(lock)
 
             except Exception as e:
                 failed += 1
@@ -261,6 +300,20 @@ class LifecycleEngine(BaseEngine):
         Insert or update a table in nonprod_registry.
         On every scan, refreshes activity signals (last_query_at, last_write_at,
         days_since_activity) via CloudTrail or falls back to Glue CreateTime.
+
+        Column list matches config/control_plane_schema.py's 27-column
+        nonprod_registry shape (the SQLite control plane this table has been
+        primary-written to since the 2026-07-09 migration) -- NOT the
+        legacy 29-column sql/create_nonprod_registry.sql Athena DDL this
+        statement was originally positional-VALUES-written against. A
+        positional INSERT against the old column count/order silently
+        failed here on every new-table discovery post-migration (caught by
+        run_scan's per-table try/except, only visible as an error count),
+        and the old UPDATE branch referenced last_scanned_at, a column that
+        was never part of the new schema either -- so scans of
+        already-registered tables were silently failing too. Named columns
+        + ON CONFLICT below is deliberately schema-order-independent so this
+        class of drift can't reoccur silently.
         """
         name       = table.get("Name", "")
         table_fqn  = f"glue_catalog.{database}.{name}"
@@ -290,50 +343,31 @@ class LifecycleEngine(BaseEngine):
             str(signals.days_since_activity)
             if signals.days_since_activity is not None else "NULL"
         )
+        created_str = (
+            f"TIMESTAMP '{created_at.strftime('%Y-%m-%d %H:%M:%S')}'"
+            if created_at else "NULL"
+        )
 
-        # Check if already registered
-        existing = self._get_registry_row(table_fqn)
-
-        if existing:
-            # Update scan metadata + refresh activity signals
-            sql = f"""
-                UPDATE {NONPROD_REGISTRY_TABLE}
-                SET last_scanned_at     = TIMESTAMP '{now}',
-                    scan_count          = scan_count + 1,
-                    last_query_at       = {last_query_str},
-                    last_write_at       = {last_write_str},
-                    days_since_activity = {days_since_str}
-                WHERE table_fqn = '{table_fqn}'
-            """
-        else:
-            # New table — insert with activity signals
-            created_str = (
-                f"TIMESTAMP '{created_at.strftime('%Y-%m-%d %H:%M:%S')}'"
-                if created_at else "NULL"
-            )
-            sql = f"""
-                INSERT INTO {NONPROD_REGISTRY_TABLE} VALUES (
-                    '{table_fqn}', '{database}', '{_esc(name)}',
-                    '{environment}', '{_infer_domain(database)}', '{fmt}',
-                    'ACTIVE', NULL, TIMESTAMP '{now}',
-                    {last_query_str}, {last_write_str}, {created_str},
-                    {days_since_str},
-                    NULL, NULL, false, NULL, NULL,
-                    NULL, NULL,
-                    NULL, false, false, 0,
-                    {str(is_backup).lower()}, '{pattern}',
-                    TIMESTAMP '{now}', TIMESTAMP '{now}', 1
-                )
-            """
-        run_query(sql, workgroup="nonprod", dry_run=self.dry_run)
-
-    def _get_registry_row(self, table_fqn: str) -> dict | None:
         sql = f"""
-            SELECT * FROM {NONPROD_REGISTRY_TABLE}
-            WHERE table_fqn = '{table_fqn}' LIMIT 1
+            INSERT INTO {NONPROD_REGISTRY_TABLE} (
+                table_fqn, domain, environment, table_format, database_name,
+                lifecycle_state, last_query_at, last_write_at,
+                days_since_activity, created_at, is_backup, is_backup_pattern,
+                pattern_matched, first_seen_at, scan_count
+            ) VALUES (
+                '{table_fqn}', '{_infer_domain(database)}', '{environment}',
+                '{fmt}', '{database}',
+                'ACTIVE', {last_query_str}, {last_write_str},
+                {days_since_str}, {created_str}, {str(is_backup).lower()}, {str(is_backup).lower()},
+                '{pattern}', TIMESTAMP '{now}', 1
+            )
+            ON CONFLICT (table_fqn) DO UPDATE SET
+                last_query_at       = excluded.last_query_at,
+                last_write_at       = excluded.last_write_at,
+                days_since_activity = excluded.days_since_activity,
+                scan_count          = scan_count + 1
         """
-        df = read_sql(sql, workgroup="nonprod")
-        return df.iloc[0].to_dict() if not df.empty else None
+        run_query(sql, workgroup="nonprod", dry_run=self.dry_run)
 
     def _get_active_registry_tables(self, environment: str) -> list[dict]:
         sql = f"""
@@ -355,6 +389,19 @@ class LifecycleEngine(BaseEngine):
         """
         df = read_sql(sql, workgroup="nonprod")
         return df.to_dict(orient="records")
+
+    def _get_current_state(self, table_fqn: str) -> dict | None:
+        """Fresh single-row read used immediately before a hard delete in
+        run_cleanup() -- see the comment there for why this can't just
+        reuse the row from the run's opening scan."""
+        sql = f"""
+            SELECT lifecycle_state, owner_exempted, pending_drop_expires_at
+            FROM {NONPROD_REGISTRY_TABLE}
+            WHERE table_fqn = '{_esc(table_fqn)}'
+            LIMIT 1
+        """
+        df = read_sql(sql, workgroup="nonprod")
+        return df.iloc[0].to_dict() if not df.empty else None
 
     def _transition(
         self,

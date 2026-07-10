@@ -337,6 +337,34 @@ def test_gap6_parquet_buffer_auto_falls_back_to_insert_on_error():
         "Should fall back to insert when Parquet fails in auto mode"
 
 
+def test_gap6_insert_fallback_is_one_batched_insert_not_per_row(monkeypatch):
+    """2026-07-09 audit finding: the insert fallback looped write() once per
+    table -- a real per-table Athena round trip on every HK run. Now one
+    multi-row INSERT via write_many()."""
+    import engine.core.execution_log as execution_log_mod
+    from engine.core.execution_log import LogEntry
+    from engine.core.execution_log_parquet import ParquetLogBuffer
+
+    queries = []
+    monkeypatch.setattr(execution_log_mod, "run_query", lambda sql, **k: queries.append(sql))
+
+    with patch("engine.core.execution_log_parquet.EXECUTION_LOG_MODE", "insert"):
+        buffer = ParquetLogBuffer(run_id="test-batch")
+        for i in range(5):
+            buffer.append(LogEntry(
+                run_id="r", engine="hk", operation="hk_run",
+                table_fqn=f"t{i}", domain="d", layer="staging",
+                tier="standard", environment="prod", status="SUCCESS",
+            ))
+        result = buffer.flush(dry_run=False)
+
+    assert result["mode"] == "insert"
+    assert result["rows_written"] == 5
+    assert len(queries) == 1, "5 entries should produce exactly 1 INSERT, not 5"
+    assert all(f"'t{i}'" in queries[0] for i in range(5)), \
+        "all 5 table_fqns should be present in the single batched INSERT"
+
+
 def test_gap6_parquet_buffer_strict_mode_does_not_fallback():
     """mode=parquet must raise/return error without falling back to insert."""
     from engine.core.execution_log import LogEntry

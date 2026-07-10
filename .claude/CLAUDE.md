@@ -49,8 +49,8 @@ ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5b) — all
                      Streamlit is fallback-only; see ui/PATTERN.md for the
                      canonical page structure and the page/endpoint
                      inventory table
-tests/unit/          593 tests, all passing
-tests/api/           99 tests — run as its own `pytest tests/api`
+tests/unit/          619 tests, all passing
+tests/api/           100 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
 ```
@@ -127,10 +127,10 @@ tests/api/           99 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-09 SQLite control-plane migration)
+## Test Baseline (2026-07-06, updated through 2026-07-09 concurrency/correctness audit)
 ```
-python -m pytest tests/unit -q   → 593 passed
-python -m pytest tests/api -q    → 99 passed   (separate invocation — see Phase 2 entry)
+python -m pytest tests/unit -q   → 619 passed
+python -m pytest tests/api -q    → 100 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
 cd ui && npm run build           → clean
@@ -2482,3 +2482,127 @@ to the right card, zero console errors).
   it was a forward-looking deferred item and is no longer deferred, not
   historical content worth preserving in place. This entry is the
   historical record now.
+
+2026-07-09 Concurrency/correctness audit — engine hardening pass. This
+session's work was interrupted mid-flight (the previous Claude Code
+process was killed while VSCode was unresponsive); resumed by first
+confirming no orphaned processes were left running (none were — no stray
+uvicorn/python/node dev servers, no dev ports held), then reviewing the
+already-complete uncommitted diff before continuing. 619 unit + 100 api
+tests passing (593 + 26 new), ruff clean.
+- **`engine/engines/base.py::_log_complete()`** — real, severe bug: this
+  always passed `engine=`/`run_id=`/`elapsed_seconds=` as explicit kwargs
+  while also spreading `**result`, and `summary_dict()` always includes
+  those same three keys — Python raises `TypeError` unconditionally for
+  any call shaped like `f(x=1, **{"x": 2})`. Every top-level `HKEngine.run()`/
+  `ArchivalEngine.run()`/`LifecycleEngine.run()`/`run_scan()`/`run_cleanup()`
+  call crashed on this line, right after all real maintenance work for the
+  run had already completed — so the actual EventBridge/Control-M entry
+  points (`engine/scripts/run_*.py`) never returned or exited cleanly.
+  Fixed by excluding the three already-explicit keys from the spread.
+- **`engine/utils/athena_client.py::read_sql()`** — delegated straight to
+  `wr.athena.read_sql_query()`, which polls internally with no caller-side
+  timeout at all; `timeout_s` was accepted but dead code. Now submits via
+  the same `start_query_execution` + `_poll()` path `run_query()` already
+  uses (genuine timeout enforcement + auto-cancel), then fetches results
+  for the completed query_id.
+- **`engine/operations/compaction.py::_wait_for_glue_job()`** — was a bare
+  `while True` with no timeout; a stuck Glue job would hang the worker
+  thread forever. Bounded by the new `GLUE_JOB_TIMEOUT_SECONDS`
+  (`config/settings.py`, default 3600s) — auto-stops the job and raises on
+  expiry, same pattern as `_poll()`.
+  - **Found and fixed during this session's own verification** (not
+    pre-existing to the pass, this session's real catch): the timeout
+    check used `if tmo and elapsed >= tmo` — Python truthiness, not
+    `is not None`. `timeout_s=0` (a legitimate "expire immediately" value —
+    exactly what `test_wait_for_glue_job_times_out_on_stuck_job` passes)
+    is falsy, so the check silently never fired, spinning the polling loop
+    forever until the test process hit `MemoryError` from unbounded
+    `MagicMock.mock_calls` growth. Caught by actually running the full
+    suite (795s wall-clock before the crash, vs. 29s after the fix) rather
+    than trusting the diff looked complete. Fixed to `if tmo is not None`,
+    matching `_poll()`'s existing, correct convention exactly.
+- **`engine/engines/archival_engine.py`, `engine/engines/lifecycle_engine.py`**
+  — neither engine acquired the maintenance lock `orchestrator.py`/HK
+  already use, so an archival run, a lifecycle cleanup run, and a
+  concurrent HK orchestrated run could mutate the same table's Iceberg
+  metadata at the same time. Both now acquire/release the same
+  `table_fqn`-keyed lock (`engine/core/lock_service.py`) around their
+  per-table work.
+- **`engine/engines/lifecycle_engine.py::run_cleanup()`** — the
+  PENDING_DROP table list is fetched once at the start of the run, then
+  looped through calling a real Glue DROP + S3 sweep per row; an owner
+  exempting/claiming a table after that snapshot but before its turn in
+  the loop would still get hard-deleted on stale state. Fixed with a
+  fresh `_get_current_state()` re-read immediately before the delete.
+- **`engine/engines/lifecycle_engine.py::_upsert_nonprod_registry()`** —
+  real, reproducible bug: its INSERT was a positional VALUES tuple written
+  against the legacy 29-column Athena DDL, but this table has been written
+  through the 27-column SQLite control plane since the 2026-07-09
+  control-plane migration — a column-count mismatch that silently failed
+  every new non-prod table discovery (caught by `run_scan`'s per-table
+  try/except) and referenced `last_scanned_at`, a column that no longer
+  exists, breaking refresh-of-existing-table scans too. Fixed with a named
+  column INSERT + `ON CONFLICT (table_fqn) DO UPDATE`, schema-order-
+  independent so this class of drift can't reoccur silently.
+- **`engine/operations/archival.py::archive_partition()`** — steps 1-3
+  validate a snapshot of the partition taken before delete, but Athena/
+  Iceberg's DELETE has no "AS OF snapshot" scoping — a row written into
+  the partition after export but before delete would be silently
+  destroyed, never archived. Closed with a new pre-delete freshness
+  re-check (`_pre_delete_check()`) that re-counts the partition
+  immediately before DELETE and refuses to delete (fails closed) if the
+  count no longer matches what was actually exported. Also switched
+  post-validation to compare against `rows_exported` (the count read at
+  export time) rather than the older step-1 snapshot count — tighter,
+  since a row written between steps 1-2 is already reflected in what was
+  exported.
+- **N+1 write patterns batched** (found during the same audit, all
+  verified against real per-table Athena round trips at fleet scale):
+  `conflict_detector.scan_fleet()`'s cache write-back (one UPDATE per
+  `batch` chunk via a `CASE table_fqn` instead of one per table — this is
+  the Health Dashboard's "Rescan conflicts" button); `execution_log.py`
+  gained `write_many()` (shared `_values_tuple()` helper with `write()`)
+  and `execution_log_parquet.py::ParquetLogBuffer._write_via_insert()`
+  now does one multi-row INSERT instead of looping `write()` per table,
+  falling back to the old per-row loop only if the batched INSERT itself
+  fails; `2_Table_Registration.py`'s Bulk Control-M apply and
+  `9_NonProd_Lifecycle.py`'s bulk exempt/claim (Streamlit legacy, kept
+  consistent with the React app even though it's fallback-only) batched
+  into one `WHERE table_fqn IN (...)` UPDATE with a `CASE` for any
+  per-row column.
+- **`execution_log.get_running()`** — real bug: `execution_log` is
+  append-only (a RUNNING row is never updated in place, only superseded
+  by a later terminal row), but this query only filtered on
+  `status='RUNNING'` with no correlation to that later row — so ANY table
+  that ever completed a single orchestrated run would show as
+  permanently "already running" on every subsequent trigger, and Gate 0's
+  in-flight check would never clear once tripped. Fixed two ways: (a) a
+  `NOT EXISTS` correlated subquery excluding rows superseded by a later
+  terminal-status row with the same `run_id`+`operation`, (b) a staleness
+  bound of `LOCK_TTL_MINUTES` so a genuinely crashed run (RUNNING written,
+  process killed before any terminal write) can't lock a table out
+  forever either.
+- `2_Table_Registration.py`'s Bulk Control-M job-import also fixed to
+  route through `engine.core.control_plane.run_query()` instead of
+  `execute_write()` (real Athena) — `controlm_jobs` is one of the 5
+  SQLite-primary control-plane tables, so writing it via Athena was two
+  bugs at once: `INSERT OR REPLACE` is SQLite-only syntax Athena rejects,
+  and a direct Athena write would get silently clobbered by the next
+  `control_plane_sync.py` cycle's one-way SQLite→Athena overwrite anyway.
+- New/updated tests: `test_engine_base_log_complete.py` (`_log_complete`
+  crash matrix across all 3 engines), `test_archival_engine_lock.py`,
+  `test_lifecycle_cleanup_race.py` (lock-held + exempted-after-scan +
+  still-genuinely-pending-drop), `test_lifecycle_registry_upsert.py`
+  (real SQLite control-plane schema, insert + refresh-without-resetting-
+  state), `test_execution_log_get_running.py` (genuinely-running,
+  completed-no-longer-blocks, completed-doesn't-mask-a-new-run, stale-
+  past-TTL, recent-within-TTL — all against real SQL, not mocked
+  `read_sql`), plus additions to `test_hardening_sprint7.py` (`read_sql`
+  timeout enforcement), `test_safety_core.py` (`scan_fleet` batching),
+  `test_gap_closure_final.py` (insert-fallback batching), and
+  `test_compaction.py` (Glue timeout + the truthiness-bug regression).
+- No UI (`ui/`) changes this session — engine/Streamlit-legacy only.
+- Verified: `python -m pytest tests/unit -q` → 619 passed;
+  `python -m pytest tests/api -q` → 100 passed; `ruff check .` → All
+  checks passed.
