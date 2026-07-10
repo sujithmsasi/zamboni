@@ -67,17 +67,30 @@ If you ever need to wipe and re-seed: `python scripts/seed_local_db.py --reset`.
 
 ## 2. aws_local Mode (laptop demo against real AWS)
 
-Runs from your own machine, but talks to a real AWS account via an SSO
+Runs from your own machine, but talks to a real AWS account via a named
 profile — no EC2 instance needed. Useful for demos where the data needs to
 be real, or for validating a change against real Athena/Glue before it goes
-anywhere near a deployed instance.
+anywhere near a deployed instance. Despite the name, `AWS_SSO_PROFILE` works
+with any named profile — SSO, role-chaining (`role_arn`/`source_profile`),
+or static/session credentials — not only real SSO.
 
 **Prerequisites:**
-1. An AWS SSO profile already configured: `aws configure sso --profile <name>`
-2. `cp .env.aws_local.example .env.aws_local` and fill in the real bucket
-   names, SNS topic ARNs, and table names for your AWS account (every value
-   in the template is a placeholder — `your-athena-results-bucket`,
-   `123456789012`, etc.)
+1. A named AWS CLI profile already configured and pointed at in
+   `.env.aws_local`'s `AWS_SSO_PROFILE`. Easiest path:
+   `powershell -ExecutionPolicy Bypass -File setup_aws_local_profile.ps1` —
+   interactively creates/updates the profile (either from pasted
+   credentials, or by chaining to an existing long-lived profile that can
+   assume a role — recommended, since it survives session-token expiry
+   across a multi-day window) and points `.env.aws_local` at it.
+   Manual alternative: `aws configure sso --profile <name>`.
+2. `cp .env.aws_local.example .env.aws_local` (skipped automatically by
+   `setup_aws_local_profile.ps1` if it doesn't exist yet) and fill in the
+   real bucket names, SNS topic ARNs, and table names for your AWS account
+   (every other value in the template is a placeholder —
+   `your-athena-results-bucket`, `123456789012`, etc.). **Never set this to
+   `prod-toolsgenai-sso`** unless that specific cross-team profile is
+   genuinely what you use — it's a Bedrock-only profile in some
+   environments, not a Zamboni AWS account.
 
 ```powershell
 # Windows — handles SSO login, loads .env.aws_local, builds the UI if
