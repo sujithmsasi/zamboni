@@ -2808,3 +2808,34 @@ manual step. cfn-lint clean, zero errors/warnings; tests/ruff unaffected
   "Where to go next" table and directly under the aws_ec2 section as the
   documented next step after first deploy.
 - No engine/api/ui source touched — this session is deploy/docs only.
+
+2026-07-09 GitHub connection troubleshooting doc. Sujith reported a past
+deploy attempt hit a critical blocker using "a second codepipeline via
+github" — it wasn't connecting and the deploy couldn't complete. Matches
+the classic CodeStar/CodeConnections gotcha exactly: `deploy/
+pipeline_config.md`'s legacy checklist already has a step for this
+("verify Available, if not re-authorize it") but with zero explanation of
+*why* it gets stuck or how to avoid it costing a whole deploy attempt.
+Docs-only, no code changes.
+- **`docs/deployment/ec2_api_deploy.md`** gained a "GitHub connection
+  setup & troubleshooting" section: the `PENDING`→`AVAILABLE` two-state
+  lifecycle and why CFN categorically cannot complete it (explicit in
+  this template's own `GitHubConnectionArn` parameter description), the
+  exact console steps including the most common real blocker (a GitHub
+  org restricting third-party App installs, requiring an org owner's
+  approval — an external dependency, not something retryable from the
+  AWS side), the `aws codestar-connections get-connection` verification
+  command to run *before* touching CloudFormation, and the safe
+  sequencing this template already supports: `GitHubConnectionArn`
+  defaults blank and `ZamboniPipeline` is entirely conditional on it
+  (`HasGitHubConnection`), so the base infra + a manual first app deploy
+  can happen independently of whether the GitHub connection is sorted
+  out yet — a stuck connection then costs only the CI/CD convenience
+  layer, not the whole deploy.
+- `docs/deployment/data_operations_guide.md` §2 gained a matching note
+  and cross-link.
+- Deliberately did not rewrite `deploy/pipeline_config.md` itself — it's
+  a frozen, legacy record of a different (two-EC2, fully-manual,
+  dev-then-prod-approval) pipeline topology that predates
+  `zamboni-cfn.yaml` and doesn't match the current single-environment
+  design; same treatment as other superseded docs in this repo.

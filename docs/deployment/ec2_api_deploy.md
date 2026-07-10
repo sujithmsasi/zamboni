@@ -101,6 +101,76 @@ Skipping this is the one remaining way a routine, unrelated stack update
 up a newer AMI and tear down/respawn the instance — the same symptom as
 a bad push-triggered pipeline, just from a different cause.
 
+### GitHub connection setup & troubleshooting (2026-07-09)
+
+`GitHubConnectionArn` is the single most common source of "the pipeline
+won't deploy/won't even trigger" confusion — not because the pipeline
+resources are misconfigured, but because CodeStar/CodeConnections has an
+unavoidable, CFN-cannot-complete manual step baked into it. `deploy/
+pipeline_config.md`'s own legacy checklist has a step for this
+("verify Available, if not re-authorize it") with zero detail on *why*
+it gets stuck — this section is that detail.
+
+**Why it gets stuck**: a connection to GitHub has two states:
+- `PENDING` — the connection resource exists (console, CLI, or a future
+  CFN `AWS::CodeStarConnections::Connection`), but nothing has authorized
+  it against GitHub yet.
+- `AVAILABLE` — a human completed the GitHub OAuth handshake: installed/
+  authorized the "AWS Connector for GitHub" app, and explicitly granted
+  it access to the target repository.
+
+CloudFormation cannot get you from `PENDING` to `AVAILABLE` — this isn't
+a bug, it's explicit in this template's own `GitHubConnectionArn`
+parameter description ("CFN cannot complete the OAuth handshake"). A
+pipeline wired to a still-`PENDING` connection fails its Source stage (or
+never triggers on push at all) — this is almost certainly what happened
+in a prior deploy attempt if the connection step was left half-done.
+
+**The exact steps, in order**:
+1. Console: Developer Tools → Settings → Connections → Create connection
+   → GitHub → name it.
+2. **Complete the authorization immediately, don't leave it half-done**:
+   click through to install (or select an existing) "AWS Connector for
+   GitHub" app, pick the GitHub org/account, and explicitly grant it
+   access to the `zamboni` repo (either directly or via "All
+   repositories," per your org's convention).
+   - **If your GitHub org restricts third-party GitHub App installs**,
+     this step needs a GitHub org owner's approval — this is the single
+     most common reason it gets stuck for more than a few minutes. If
+     you're not an org owner yourself, this becomes an external
+     dependency to chase down, not something retryable from the AWS side.
+3. **Verify before touching CloudFormation at all**:
+   ```bash
+   aws codestar-connections list-connections --region <region>
+   aws codestar-connections get-connection --connection-arn <arn> --region <region>
+   ```
+   Confirm `"ConnectionStatus": "AVAILABLE"`. If it still says
+   `"PENDING"`, go back to step 2 — nothing on the CFN/pipeline side can
+   fix a pending connection.
+4. Only then pass the ARN as `GitHubConnectionArn=<arn>` in the stack
+   deploy.
+
+**The safe sequencing this template already supports**:
+`GitHubConnectionArn` defaults to blank, and the entire `ZamboniPipeline`
+resource is conditional on it (`HasGitHubConnection`) — so:
+- Deploy everything else first (EC2, IAM, security group, lock table,
+  CodeBuild project, CodeDeploy application) with `GitHubConnectionArn`
+  left blank, and get the app running via a manual first deploy (`scp`
+  the repo + `deploy/setup_ec2.sh`, or a manual CodeDeploy
+  `create-deployment` CLI call against an S3-uploaded revision).
+- Sort out the GitHub connection as its own, isolated step, verified via
+  the CLI check above, with zero time pressure from a stalled app deploy.
+- Only then re-run `aws cloudformation deploy` with `GitHubConnectionArn`
+  set — a plain stack update that adds the pipeline resource; it doesn't
+  touch or replace the already-running EC2 instance (same "additive, no
+  replacement" category as everything in this template except the AmiId
+  drift case above).
+
+This decouples "is my app running" from "is the GitHub connection
+authorized" — a stuck connection then costs you nothing but the CI/CD
+convenience layer, not the whole deploy, which is the opposite of what
+happened last time.
+
 ## Manual path (no CFN, matches the existing docx's conventions)
 
 Everything from `docs/zamboni-direct-setup.md`'s IAM/Athena/S3/SNS/EC2

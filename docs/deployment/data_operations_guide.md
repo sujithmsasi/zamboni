@@ -82,6 +82,14 @@ Notes:
   stack without pinning it can silently replace the running EC2 instance.
   Take the `ResolvedAmiId` output from this first deploy and pass it
   explicitly (`AmiId=ami-xxxxxxxx`) on every deploy after this one.
+- **`GitHubConnectionArn` can be left blank on the first deploy.** The
+  pipeline resource is entirely conditional on it — if a prior attempt
+  got stuck on a GitHub connection stuck in `PENDING` (a manual OAuth
+  step CFN can't complete), deploy everything else first, sort the
+  connection out separately and verify it's `AVAILABLE`, then re-deploy
+  with the ARN set. Full troubleshooting steps in
+  `docs/deployment/ec2_api_deploy.md`'s "GitHub connection setup &
+  troubleshooting" section.
 - Full parameter list, IAM specifics, and the CFN-vs-CodeDeploy separation
   (why an ordinary code push never touches the EC2 instance) are in
   `docs/deployment/ec2_api_deploy.md`.
