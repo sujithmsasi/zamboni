@@ -157,7 +157,11 @@ one command) or the manual path. Full detail lives in
 **`docs/deployment/ec2_api_deploy.md`** — this section is just the
 shortest path to a working instance; read that doc for anything beyond
 first deploy (IAM specifics, security group rules, the cutover checklist
-for retiring the Streamlit fallback).
+for retiring the Streamlit fallback). Once the instance is up,
+**`docs/deployment/data_operations_guide.md`** is the next step — it
+covers everything after "the app is running": scheduling the engines,
+registering domains/tables, configuring policies, validating with a dry
+run, and going live safely.
 
 ```bash
 # 1. Lint the CFN template — zero errors required
@@ -209,6 +213,7 @@ the org-specific parameter adaptation and the no-merge branch strategy.
 
 | Doc | What it covers |
 |---|---|
+| `docs/deployment/data_operations_guide.md` | End-to-end: infra deploy → EventBridge engine scheduling → registering domains/tables → policy config → dry-run validation → going live → monitoring → incident response |
 | `docs/deployment/ec2_api_deploy.md` | Full EC2/CFN deploy detail, IAM specifics, the control plane's systemd services, the Streamlit cutover checklist |
 | `docs/ORG_DROP.md` | Adapting this repo into a different org's AWS account — parameter list, no-merge branch strategy |
 | `docs/demo/showcase_runbook.md` | A guided click-path through the app for demos, with a local-mode fallback for every step |

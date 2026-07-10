@@ -147,9 +147,25 @@ Parameters:
     Default: main
     Description: Branch CodePipeline deploys from.
 
+  EnableEngineScheduling:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether the 5 EventBridge rules below actually run the engines on
+      their schedule (contracts.md's documented steady-state: HK hourly,
+      Archival/Lifecycle weekly). Set to "false" during initial setup/
+      testing so nothing fires until domains/tables are registered and
+      you're ready to go live -- the rules themselves still get created
+      either way (DISABLED vs ENABLED state), so flipping this later is a
+      stack update, not a rule re-creation. Independent of DRY_RUN_DEFAULT
+      in .env, which additionally gates whether a triggered run performs
+      real writes at all -- both layers apply.
+
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
   HasGitHubConnection: !Not [!Equals [!Ref GitHubConnectionArn, ""]]
+  EngineSchedulingEnabled: !Equals [!Ref EnableEngineScheduling, "true"]
 
 Resources:
   # ── DynamoDB — maintenance locks (contracts.md §3.1, verbatim) ─────────────
@@ -185,6 +201,16 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Real gap fixed here (2026-07-09): without this, SSM Run Command/
+        # Session Manager can't reach this instance at all -- the AL2023 AMI
+        # ships the SSM agent pre-installed, but the agent still needs the
+        # instance's own IAM role to carry these permissions to register
+        # with the SSM service and receive commands. Needed both for the
+        # EventBridge-scheduled engine runs below (SSM Run Command target)
+        # and for interactive Session Manager access as a KeyName-free SSH
+        # alternative (see the KeyName parameter's own description).
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
       Policies:
         - PolicyName: AthenaQueryExecution
           PolicyDocument:
@@ -398,6 +424,132 @@ Resources:
           mkdir -p /var/log/zamboni
           chown ec2-user:ec2-user /var/log/zamboni
           echo "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh." > /var/log/zamboni/bootstrap.log
+
+  # ── EventBridge — engine scheduling (added 2026-07-09) ─────────────────────
+  # Real gap fixed here: no prior version of this template scheduled the
+  # three engines at all -- a full CFN + CodeDeploy run stood up the app but
+  # left HK/Archival/Lifecycle entirely unscheduled, meaning nothing would
+  # ever actually run the governance work Zamboni exists to do. Schedule
+  # matches docs/zamboni-direct-setup.md's pre-replatform EventBridge table
+  # (HK hourly, Archival/Lifecycle weekly), updated for this repo's current
+  # CodeDeploy layout: /opt/zamboni + a venv (Phase 6), .env sourced
+  # explicitly since SSM Run Command doesn't read a systemd EnvironmentFile.
+  # Each rule's actual DRY_RUN behavior is still gated by .env's
+  # DRY_RUN_DEFAULT (and every Gate 0-3 / lock / domain-active check) same
+  # as any other invocation -- EnableEngineScheduling only controls whether
+  # the script runs on schedule at all, not what it's allowed to do once it
+  # does.
+  ZamboniEventBridgeSsmRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-eventbridge-ssm-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeSsmRunCommand
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ZamboniInstance}"
+
+  ZamboniHkScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-hk"
+      Description: HK Engine — compaction, snapshot expiry, orphan cleanup.
+      ScheduleExpression: rate(1 hour)
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: HkEngineTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_hk >> /var/log/zamboni/hk.log 2>&1"]}'
+
+  ZamboniArchivalScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-archival"
+      Description: Archival Engine — export-then-delete cold staging partitions. Weekly, Sun 04:00 UTC.
+      ScheduleExpression: "cron(0 4 ? * SUN *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: ArchivalEngineTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_archival >> /var/log/zamboni/archival.log 2>&1"]}'
+
+  ZamboniNonprodScanScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-nonprod-scan"
+      Description: Lifecycle Engine — discover non-prod tables, refresh activity signals. Weekly, Sat 02:00 UTC.
+      ScheduleExpression: "cron(0 2 ? * SAT *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: NonprodScanTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_lifecycle_scan >> /var/log/zamboni/lifecycle_scan.log 2>&1"]}'
+
+  ZamboniNonprodLifecycleScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-nonprod-lifecycle"
+      Description: Lifecycle Engine — evaluate states, send GREENZONE/PENDING_DROP notifications. Weekly, Sat 03:00 UTC.
+      ScheduleExpression: "cron(0 3 ? * SAT *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: NonprodLifecycleTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_lifecycle_cycle >> /var/log/zamboni/lifecycle.log 2>&1"]}'
+
+  ZamboniNonprodCleanupScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-nonprod-cleanup"
+      Description: Lifecycle Engine — hard-delete expired PENDING_DROP tables. Weekly, Sun 05:00 UTC.
+      ScheduleExpression: "cron(0 5 ? * SUN *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: NonprodCleanupTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_cleanup >> /var/log/zamboni/cleanup.log 2>&1"]}'
 
   # ── CodeBuild ────────────────────────────────────────────────────────────
   ZamboniCodeBuildServiceRole:
@@ -626,6 +778,15 @@ Outputs:
   InstanceRoleArn:
     Description: IAM role ARN attached to the EC2 instance.
     Value: !GetAtt ZamboniInstanceRole.Arn
+
+  EngineSchedulingState:
+    Description: >-
+      ENABLED means the 5 EventBridge rules (zamboni-hk/-archival/
+      -nonprod-scan/-nonprod-lifecycle/-nonprod-cleanup) are actually
+      firing on schedule right now; DISABLED means they exist but won't
+      fire until EnableEngineScheduling is flipped to "true" in a stack
+      update.
+    Value: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
 
   CodeDeployApplicationName:
     Description: CodeDeploy application name.

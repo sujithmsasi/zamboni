@@ -2749,3 +2749,62 @@ touched).
   verified via the PowerShell parser (syntax only) and the `.env.aws_local`
   regex-update logic tested in isolation — not yet run end-to-end against
   real AWS (no credentials in this environment).
+
+2026-07-09 EventBridge engine scheduling (real gap closed) + Data
+Operations Deployment Guide. Sujith asked for an end-to-end data-ops
+deployment guide; while grounding it in what actually exists, found that
+`deploy/zamboni-cfn.yaml` had never scheduled the three engines at all —
+a full CFN + CodeDeploy deploy would stand up the app but nothing would
+ever actually trigger HK/Archival/Lifecycle, meaning the governance work
+Zamboni exists to do would never run without a separate, undocumented
+manual step. cfn-lint clean, zero errors/warnings; tests/ruff unaffected
+(no Python touched).
+- **`deploy/zamboni-cfn.yaml`**: added 5 `AWS::Events::Rule` resources
+  matching the schedule already documented in the pre-replatform
+  `docs/zamboni-direct-setup.md` (HK hourly, Archival/nonprod-scan/
+  nonprod-lifecycle/nonprod-cleanup weekly), each targeting the EC2
+  instance via SSM Run Command (`AWS-RunShellScript`) — updated for the
+  *current* architecture: explicitly sources `/opt/zamboni/.env` (SSM
+  Run Command doesn't read a systemd `EnvironmentFile`) and invokes
+  `/opt/zamboni/.venv/bin/python -m engine.scripts.run_*` (Phase 6's venv
+  convention), logging to `/var/log/zamboni/*.log`.
+  - New `ZamboniEventBridgeSsmRole` (events.amazonaws.com principal,
+    scoped `ssm:SendCommand` on the `AWS-RunShellScript` document + this
+    specific instance ARN).
+  - **Real, related gap also fixed**: `ZamboniInstanceRole` had no SSM
+    permissions at all (`ManagedPolicyArns` didn't exist on the role) —
+    SSM Run Command couldn't have reached this instance even with the
+    rules above in place. Added `AmazonSSMManagedInstanceCore` (also
+    enables Session Manager as the documented KeyName-free SSH
+    alternative the `KeyName` parameter's own description already
+    referenced but nothing actually granted).
+  - New `EnableEngineScheduling` parameter (default `"true"`, matching
+    contracts' documented steady-state) + `EngineSchedulingEnabled`
+    condition, applied as each rule's `State: ENABLED`/`DISABLED` — not
+    as a `Condition:` on the resources themselves, so toggling it later
+    is a plain stack update (rules stay created, just flip
+    enabled/disabled) rather than a delete+recreate. Independent of
+    `.env`'s `DRY_RUN_DEFAULT` — this only controls whether a scheduled
+    run fires at all, not whether it performs real writes once it does;
+    both layers apply, documented explicitly in the parameter's own
+    description and in the new guide (see below).
+  - New `ResolvedAmiId`-adjacent `EngineSchedulingState` output.
+  - Verified all 5 rules' SSM `Input` JSON payloads parse as valid JSON
+    (`json.loads` against each extracted string) — cfn-lint validates the
+    YAML/CFN structure but doesn't semantically parse a String property's
+    embedded JSON content, so this was checked separately.
+- **`docs/deployment/data_operations_guide.md`** (new): the end-to-end
+  guide — architecture in one paragraph, prerequisites (the AWS resources
+  nothing in this repo provisions automatically), CFN deploy (with the
+  `EnableEngineScheduling=false`-on-first-deploy and AMI-pinning
+  discipline both called out), first-boot control-plane setup, domain/
+  table registration, policy/gate configuration, dry-run validation (CLI
+  + Dry Run Viewer), the schedule table, going live (the two independent
+  switches — EventBridge enablement and `DRY_RUN_DEFAULT`, plus the
+  2026-07-09 domain-gating control as the Lifecycle-specific third
+  layer), monitoring, incident-response pointers, and a reference table
+  linking every other doc rather than duplicating them.
+- `docs/SETUP_GUIDE.md`: cross-linked the new guide from both the
+  "Where to go next" table and directly under the aws_ec2 section as the
+  documented next step after first deploy.
+- No engine/api/ui source touched — this session is deploy/docs only.
