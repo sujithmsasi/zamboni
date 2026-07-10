@@ -70,6 +70,26 @@ def domain_active_filter_sql(column: str = "domain") -> str:
     return f"({column} IS NULL OR {column} NOT IN (SELECT domain_name FROM {DOMAIN_REGISTRY_TABLE} WHERE is_active = false))"
 
 
+def domain_registered_active_filter_sql(column: str = "domain") -> str:
+    """
+    Stricter than domain_active_filter_sql() above: an ALLOWLIST, not a
+    blocklist. Requires `column` to match a domain_registry row that both
+    exists AND has is_active=true -- a table whose domain was never
+    registered at all, or whose domain was explicitly deactivated, is
+    excluded either way (unlike domain_active_filter_sql(), which only
+    excludes explicit deactivations and deliberately lets an unregistered
+    domain pass through).
+
+    Used by the Lifecycle Engine's scan/evaluate/cleanup queries, where
+    the consequence of a false positive (a stale non-prod table getting
+    candidate-marked, or actually hard-deleted) is severe enough to
+    warrant excluding anything not explicitly registered+active. HK/
+    Archival keep the permissive blocklist form -- see that function's
+    docstring for why -- this is intentionally not a shared default.
+    """
+    return f"{column} IN (SELECT domain_name FROM {DOMAIN_REGISTRY_TABLE} WHERE is_active = true)"
+
+
 def register_domain(
     domain_name: str,
     display_name: str,

@@ -55,18 +55,40 @@ class LifecycleEngine(BaseEngine):
     def run_scan(self, environment: str = "preprod") -> dict:
         """
         ZAMBONI-NONPROD-SCAN
-        Discovers all tables in non-prod Glue databases.
-        Updates nonprod_registry with new tables and refreshes activity signals.
+        Discovers all tables in non-prod Glue databases whose inferred
+        domain is a registered, active domain_registry row. Updates
+        nonprod_registry with new tables and refreshes activity signals.
+
+        Control added here (2026-07-09): a database whose inferred domain
+        has no active domain_registry row is skipped entirely -- not just
+        excluded from later state-machine evaluation. An unregistered or
+        deactivated domain's tables never get a nonprod_registry row
+        created (or refreshed) in the first place, so they can never be
+        candidate-marked or dropped downstream either -- this is the first
+        of three gates (scan / evaluate / pre-delete) that all enforce the
+        same rule independently, see run_cleanup() for the last one.
         """
         self._log_start(scope="scan", environment=environment)
 
-        discovered = 0
-        errors     = 0
+        discovered      = 0
+        errors          = 0
+        skipped_domains = 0
+
+        active_domains = {d["domain_name"] for d in registry.get_all_domains(active_only=True)}
 
         databases = get_databases()
         log.info("lifecycle_engine.scan.databases", count=len(databases))
 
         for database in databases:
+            domain = _infer_domain(database)
+            if domain not in active_domains:
+                skipped_domains += 1
+                log.info(
+                    "lifecycle_engine.scan.domain_not_registered_or_inactive",
+                    database=database, domain=domain,
+                )
+                continue
+
             try:
                 tables = get_tables(database)
                 for table in tables:
@@ -89,7 +111,7 @@ class LifecycleEngine(BaseEngine):
             tables_processed=discovered,
             succeeded=discovered - errors,
             failed=errors,
-            skipped=0,
+            skipped=skipped_domains,
             discovered=discovered,
         )
         self._log_complete(result)
@@ -197,6 +219,23 @@ class LifecycleEngine(BaseEngine):
                             "lifecycle_engine.cleanup.state_changed_since_scan",
                             table_fqn=fqn,
                             current_state=(current or {}).get("lifecycle_state"),
+                        )
+                        continue
+
+                    # Third gate, and the one that matters most: even if
+                    # this table was legitimately marked PENDING_DROP while
+                    # its domain was active, the domain may have been
+                    # disabled since -- during the multi-day grace window,
+                    # or mid-run right now. A disabled domain must block
+                    # the drop unconditionally, fail-closed if the check
+                    # itself can't determine an active domain (missing/None
+                    # is treated the same as inactive).
+                    if not current.get("domain_active"):
+                        skipped += 1
+                        log.warning(
+                            "lifecycle_engine.cleanup.domain_not_registered_or_inactive",
+                            table_fqn=fqn,
+                            domain=current.get("domain"),
                         )
                         continue
 
@@ -370,11 +409,18 @@ class LifecycleEngine(BaseEngine):
         run_query(sql, workgroup="nonprod", dry_run=self.dry_run)
 
     def _get_active_registry_tables(self, environment: str) -> list[dict]:
+        # Second gate: only registered, active domains get state-machine
+        # evaluation (transitions into STALE_CANDIDATE/GREENZONE/
+        # PENDING_DROP happen in _evaluate_table(), called per row this
+        # returns). Deliberately the stricter allowlist filter (see
+        # registry.domain_registered_active_filter_sql()'s docstring), not
+        # HK/Archival's permissive blocklist -- a table under a domain that
+        # was never registered must not progress toward a drop.
         sql = f"""
             SELECT * FROM {NONPROD_REGISTRY_TABLE}
             WHERE environment   = '{environment}'
               AND lifecycle_state != 'DROPPED'
-              AND {registry.domain_active_filter_sql()}
+              AND {registry.domain_registered_active_filter_sql()}
             ORDER BY lifecycle_state, days_since_activity DESC
         """
         df = read_sql(sql, workgroup="nonprod")
@@ -385,19 +431,30 @@ class LifecycleEngine(BaseEngine):
             SELECT * FROM {NONPROD_REGISTRY_TABLE}
             WHERE environment   = '{environment}'
               AND lifecycle_state = 'PENDING_DROP'
-              AND {registry.domain_active_filter_sql()}
+              AND {registry.domain_registered_active_filter_sql()}
         """
         df = read_sql(sql, workgroup="nonprod")
         return df.to_dict(orient="records")
 
     def _get_current_state(self, table_fqn: str) -> dict | None:
-        """Fresh single-row read used immediately before a hard delete in
+        """
+        Fresh single-row read used immediately before a hard delete in
         run_cleanup() -- see the comment there for why this can't just
-        reuse the row from the run's opening scan."""
+        reuse the row from the run's opening scan.
+
+        Also re-verifies the table's domain is still a registered, active
+        domain_registry row (`domain_active`) -- the third and final gate.
+        A domain disabled any time after this table entered PENDING_DROP
+        (during the multi-day grace window, or even mid-run between
+        _get_pending_drop_tables()'s fetch and this specific table's turn
+        in the loop) must block the drop, the same way an owner exemption
+        does -- see run_cleanup()'s domain_active check.
+        """
         sql = f"""
-            SELECT lifecycle_state, owner_exempted, pending_drop_expires_at
-            FROM {NONPROD_REGISTRY_TABLE}
-            WHERE table_fqn = '{_esc(table_fqn)}'
+            SELECT r.lifecycle_state, r.owner_exempted, r.pending_drop_expires_at,
+                   r.domain, {registry.domain_registered_active_filter_sql('r.domain')} AS domain_active
+            FROM {NONPROD_REGISTRY_TABLE} r
+            WHERE r.table_fqn = '{_esc(table_fqn)}'
             LIMIT 1
         """
         df = read_sql(sql, workgroup="nonprod")

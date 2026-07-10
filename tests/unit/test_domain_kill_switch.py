@@ -44,6 +44,10 @@ def test_get_archivable_tables_excludes_inactive_domains():
 
 
 def test_lifecycle_active_registry_tables_excludes_inactive_domains():
+    """2026-07-09: tightened from the shared blocklist filter to the
+    Lifecycle-only allowlist (registry.domain_registered_active_filter_sql())
+    -- an unregistered domain must not be evaluated toward a drop either,
+    not just an explicitly deactivated one."""
     from engine.engines.lifecycle_engine import LifecycleEngine
     engine = LifecycleEngine(dry_run=True)
     with patch("engine.engines.lifecycle_engine.read_sql") as msql:
@@ -51,10 +55,13 @@ def test_lifecycle_active_registry_tables_excludes_inactive_domains():
         engine._get_active_registry_tables(environment="preprod")
     sql = msql.call_args[0][0]
     assert "domain_registry" in sql
-    assert "is_active = false" in sql
+    assert "is_active = true" in sql
+    assert "domain IN (SELECT domain_name" in sql
 
 
 def test_lifecycle_pending_drop_tables_excludes_inactive_domains():
+    """2026-07-09: same tightening as above, applied to the cleanup
+    candidate fetch."""
     from engine.engines.lifecycle_engine import LifecycleEngine
     engine = LifecycleEngine(dry_run=True)
     with patch("engine.engines.lifecycle_engine.read_sql") as msql:
@@ -62,4 +69,5 @@ def test_lifecycle_pending_drop_tables_excludes_inactive_domains():
         engine._get_pending_drop_tables(environment="preprod")
     sql = msql.call_args[0][0]
     assert "domain_registry" in sql
-    assert "is_active = false" in sql
+    assert "is_active = true" in sql
+    assert "domain IN (SELECT domain_name" in sql

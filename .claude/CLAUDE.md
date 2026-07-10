@@ -49,7 +49,7 @@ ui/                  React 18 + TS + Vite + Ant Design v5 (Phase 3-5b) — all
                      Streamlit is fallback-only; see ui/PATTERN.md for the
                      canonical page structure and the page/endpoint
                      inventory table
-tests/unit/          619 tests, all passing
+tests/unit/          629 tests, all passing
 tests/api/           100 tests — run as its own `pytest tests/api`
                      invocation, not combined with tests/unit (see Phase 2
                      entry below for why)
@@ -127,9 +127,9 @@ tests/api/           100 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-09 concurrency/correctness audit)
+## Test Baseline (2026-07-06, updated through 2026-07-09 Lifecycle domain-gating control)
 ```
-python -m pytest tests/unit -q   → 619 passed
+python -m pytest tests/unit -q   → 629 passed
 python -m pytest tests/api -q    → 100 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
@@ -2604,5 +2604,80 @@ tests passing (593 + 26 new), ruff clean.
   `test_compaction.py` (Glue timeout + the truthiness-bug regression).
 - No UI (`ui/`) changes this session — engine/Streamlit-legacy only.
 - Verified: `python -m pytest tests/unit -q` → 619 passed;
+  `python -m pytest tests/api -q` → 100 passed; `ruff check .` → All
+  checks passed.
+
+2026-07-09 Lifecycle Engine domain-gating control (demo-prep ask, ahead of
+running the Lifecycle Engine against real preprod candidates). Sujith:
+"only registered active domain should be scanned. if any point domain is
+disabled, the identified candidates should not get dropped." 629 unit +
+100 api tests passing (619 + 10 new), ruff clean.
+- **`engine/core/registry.py`**: new `domain_registered_active_filter_sql()`
+  — deliberately an ALLOWLIST (`domain IN (SELECT domain_name FROM
+  domain_registry WHERE is_active = true)`), not the existing
+  `domain_active_filter_sql()`'s blocklist. The existing filter is
+  permissive by design (its own docstring: an unregistered domain — no
+  matching `domain_registry` row at all — passes through, only an
+  explicit `is_active=false` excludes) for HK/Archival, where a false
+  positive costs a skipped compaction. Lifecycle's false-positive cost is
+  a hard Glue `DROP` + S3 sweep, severe enough to warrant excluding
+  anything not explicitly registered+active — this is intentionally not
+  a shared default, HK/Archival's blocklist queries are untouched.
+- **Three independent gates**, all in `engine/engines/lifecycle_engine.py`,
+  matching the three job entry points:
+  1. `run_scan()` — precomputes the active-domain set once
+     (`registry.get_all_domains(active_only=True)`) and skips an entire
+     Glue database (never calls `get_tables()` on it) if its
+     `_infer_domain()`-mapped domain isn't in that set. An unregistered
+     or deactivated domain's tables never get a `nonprod_registry` row
+     created or refreshed at all, so they can't be candidate-marked or
+     dropped downstream either.
+  2. `_get_active_registry_tables()` (feeds `run()`'s state-machine
+     evaluation — the actual ACTIVE→STALE_CANDIDATE→GREENZONE→
+     PENDING_DROP transitions) and `_get_pending_drop_tables()` (the
+     cleanup candidate fetch) both swapped from `domain_active_filter_sql()`
+     to the new allowlist filter.
+  3. **The one that matters most** — `_get_current_state()`'s pre-delete
+     re-check inside `run_cleanup()` (already added last session to close
+     the exempted-after-scan TOCTOU race) now also selects `domain` and a
+     computed `domain_active` boolean via the same allowlist filter used
+     as a scalar SELECT expression, and `run_cleanup()` refuses the drop
+     (`skipped += 1`) if `domain_active` is falsy — fail-closed, so a
+     missing/unexpected value is treated as "don't drop," not "assume
+     fine." This directly satisfies "at any point domain is disabled" —
+     even a table that legitimately reached `PENDING_DROP` while its
+     domain was active gets re-checked immediately before the actual
+     delete, catching a domain disabled during the multi-day grace
+     window or mid-run between the top-of-run fetch and this table's
+     turn in the loop.
+- `tests/unit/test_domain_kill_switch.py`: the two lifecycle SQL-shape
+  tests (`_get_active_registry_tables`/`_get_pending_drop_tables`)
+  updated to assert the new allowlist shape (`is_active = true` /
+  `domain IN (SELECT domain_name`) instead of the old blocklist shape —
+  intentional test churn, not a regression, since this is a deliberate
+  behavior tightening for Lifecycle specifically.
+  `tests/unit/test_lifecycle_cleanup_race.py`'s
+  `test_cleanup_proceeds_when_state_is_still_pending_drop` mock updated
+  to include `domain`/`domain_active` in its fixture DataFrame — the new
+  field the enriched `_get_current_state()` query now returns.
+- `tests/unit/test_lifecycle_domain_gate.py` (new, 10 tests): the new
+  filter's SQL shape; `run_scan()` skipping an unregistered vs. an
+  explicitly-inactive domain's database (asserting `get_tables()` is
+  never even called for it) vs. still processing an active one;
+  `_get_active_registry_tables()`/`_get_pending_drop_tables()` excluding
+  a never-registered domain's rows against a real SQLite
+  `domain_registry`/`nonprod_registry`; and the critical
+  `run_cleanup()` scenario — gate 2 deliberately bypassed (a
+  `_get_pending_drop_tables()` mock returning the candidate row directly)
+  to isolate gate 3 in isolation, proving a real, unmocked
+  `_get_current_state()` re-check against a real `domain_registry` table
+  refuses the drop when the domain was disabled after the table was
+  marked, and separately when the domain was never registered at all —
+  plus a positive control proving the same setup still drops when the
+  domain stays active (so the gate isn't a tautology that skips
+  everything).
+- No changes to HK Engine, Archival Engine, vacuum.py, orchestrator, or
+  Gate 0-3 logic — this control is Lifecycle-only, per the ask.
+- Verified: `python -m pytest tests/unit -q` → 629 passed;
   `python -m pytest tests/api -q` → 100 passed; `ruff check .` → All
   checks passed.
