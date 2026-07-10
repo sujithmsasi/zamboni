@@ -54,6 +54,15 @@ Get-Content $envFile | ForEach-Object {
     Set-Item -Path "Env:$name" -Value $value
 }
 $env:AWS_SSO_PROFILE = $ssoProfile
+# Real gap fixed here (2026-07-09): only lock_service.py/create_lock_table.py/
+# control_plane_sync.py/aws_smoke_test.py call get_boto3_session(), which
+# honors AWS_SSO_PROFILE explicitly. Everything else that actually talks to
+# AWS -- athena_client.py, glue_client.py, s3_client.py, notifier.py, which
+# together are the vast majority of real AWS traffic -- constructs a plain
+# boto3.client(...) with no profile_name, relying entirely on boto3's
+# default credential chain. Without AWS_PROFILE also set, none of those
+# calls would pick up the SSO/assumed-role session at all.
+$env:AWS_PROFILE     = $ssoProfile
 $env:PYTHONPATH      = $root
 Write-Host "      Loaded. ZAMBONI_MODE=$($env:ZAMBONI_MODE)" -ForegroundColor Green
 
