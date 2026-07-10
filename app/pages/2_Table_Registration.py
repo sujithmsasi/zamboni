@@ -818,7 +818,7 @@ with tab_edit_reg:
                                         updated_at                 = '{_now_edit}'
                                     WHERE table_fqn = '{edit_fqn}'
                                 """
-                                execute_write(upd_sql, dry_run=is_dry_run())
+                                execute_write(upd_sql, dry_run=is_dry_run(), control_plane=True)
                                 audit(AuditEvent(
                                     actor=current_user(),
                                     action_type=AuditAction.TABLE_REGISTER,
@@ -924,7 +924,7 @@ with tab_engine_flags:
                                         updated_at         = '{_now}'
                                     WHERE table_fqn = '{_flag_fqn}'
                                 """
-                                execute_write(_upd, dry_run=is_dry_run())
+                                execute_write(_upd, dry_run=is_dry_run(), control_plane=True)
                                 audit(AuditEvent(
                                     actor=current_user(),
                                     action_type=AuditAction.HK_ENABLE
@@ -1069,7 +1069,7 @@ with tab_engine_flags:
                 )
 
                 if cnt > 0:
-                    execute_write(bulk_sql, dry_run=is_dry_run())
+                    execute_write(bulk_sql, dry_run=is_dry_run(), control_plane=True)
                     audit(AuditEvent(
                         actor=current_user(),
                         action_type=AuditAction.HK_ENABLE,
@@ -1332,6 +1332,7 @@ with tab_bulk_ctrlm:
                         f"SET {', '.join(_sets)} "
                         f"WHERE table_fqn IN ({_in_fqns})",
                         dry_run=is_dry_run(),
+                        control_plane=True,
                     )
                     _applied = len(_full_fqns)
 
@@ -1528,6 +1529,7 @@ with tab_bulk_ctrlm:
                                     f"updated_at='{_now_imp}' "
                                     f"{_mw}",
                                     dry_run=is_dry_run(),
+                                    control_plane=True,
                                 )
                                 _ok += 1
                             except Exception as _be:
@@ -1709,6 +1711,7 @@ with tab_bulk_ctrlm:
                             f"'{_new_job_start.strip()}', {int(_new_job_dur)}, "
                             f"1, '{current_user()}', '{_jnow}', '{_jnow}')",
                             dry_run=False,
+                            control_plane=True,
                         )
                         _load_ctrlm_jobs.clear()
                         st.success(f"✅ `{_new_job_name.strip()}` added to registry.")

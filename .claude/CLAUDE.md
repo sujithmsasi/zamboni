@@ -127,9 +127,9 @@ tests/api/           100 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-09 Lifecycle domain-gating control)
+## Test Baseline (2026-07-06, updated through 2026-07-10 control-plane write-path/sync fixes)
 ```
-python -m pytest tests/unit -q   → 629 passed
+python -m pytest tests/unit -q   → 634 passed
 python -m pytest tests/api -q    → 100 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
@@ -2891,3 +2891,89 @@ agent at all, invisible until someone actually tries to deploy to it.
   first-failure-kills-everything behavior. This is the closest verification
   possible without a real EC2 boot.
 - No changes to engine/api/ui source — deploy-only.
+
+2026-07-10 Local max-effort code review (org-drop prep) + 5 fixes shipped.
+Ran a local fallback review (10 finder angles + verify + sweep) over the
+diff spanning the SQLite control-plane migration through the UserData
+hardening above, ahead of the org repo import — the cloud `/code-review
+ultra` wasn't available in this session. 15 findings surfaced; the 5
+judged blocking are fixed here. 634 unit (629 + 5 new) + 100 api tests
+passing, ruff clean, cfn-lint clean.
+- **Streamlit legacy write-path split-brain, closed**: `2_Table_Registration.py`
+  (6 sites: edit table, single/bulk engine flags, bulk Control-M apply,
+  CSV job-mapping import, add-single-job), `3_Policy_Configuration.py`
+  (hk_config save), and `9_NonProd_Lifecycle.py` (bulk + single-table
+  exempt/claim) were all still writing `stream_registry`/`hk_config`/
+  `nonprod_registry` via `execute_write()` → real Athena, even though
+  those tables became SQLite-primary in the 2026-07-09 control-plane
+  migration. Worst case: an operator exempts a PENDING_DROP table in
+  Non-Prod Lifecycle, sees success, and `run_cleanup()`'s pre-delete
+  check (reading SQLite) never sees the exemption and hard-deletes it
+  anyway — directly defeating that same migration's own TOCTOU fix.
+  Fixed with a new `control_plane: bool` param on
+  `app/components/athena_runner.py::execute_write()` (routes to
+  `engine.core.control_plane.run_query()` instead of real Athena when
+  set) and flipped it on at all 8 call sites; `3_Policy_Configuration.py`
+  swapped its direct `athena_client.run_query` import for
+  `engine.core.control_plane` the same way an earlier session already
+  fixed the one Control-M job-import path in `2_Table_Registration.py`
+  (same precedent, just not carried to every other site at the time).
+  No existing test executes these Streamlit page bodies at all (confirmed
+  by grep — the only file hits were unrelated string literals), so this
+  was verified by directly exercising `execute_write(control_plane=True)`
+  against the real seeded local DB (flip `hk_enabled`, confirm the SQLite
+  row changed, revert) rather than trusting `ruff`/`pytest` alone.
+- **`engine/core/execution_log.py::get_running()` fail-open bug fixed**:
+  `_coerce_datetime()` returns `None` for an unparseable `started_at`
+  (verified: `datetime.fromisoformat('NaT')` — pandas' own NaT sentinel
+  stringifies to exactly `'NaT'` — raises `ValueError`), and the old
+  `if started_dt and ...` staleness check silently fell through to
+  `return row` in that case, treating a crashed/malformed row as
+  genuinely in-flight forever with no TTL bound — reintroducing the exact
+  permanent-lockout bug this function was written to fix for the
+  missing-correlation case, just via a parse failure instead. Now returns
+  `None` (fails closed, not open) when `started_dt is None`, logging a
+  distinct warning. Safe because `LockService`'s acquire/TTL, not this
+  heuristic, is the real mutual-exclusion guarantee downstream. New
+  regression test uses the literal `'NaT'` string, not a synthetic
+  unparseable value.
+- **`deploy/zamboni-cfn.yaml` UserData gap closed**: the `mkdir -p
+  /opt/zamboni` + `chown` step — the actual CodeDeploy destination setup
+  — was the one step in yesterday's hardening pass with no
+  `BOOTSTRAP_OK=0` guard, unlike every sibling step. A failure here would
+  still report `BootstrapSuccess=1`, reproducing the exact silent-failure
+  pattern that pass was built to catch, just relocated. Wrapped in the
+  same if/then/else style as `./install auto` and the `systemctl
+  is-active` check. Verified by re-running the extracted script with
+  `mkdir` forced to fail (permission denied) — confirmed it now logs
+  `FAILED: could not create/chown /opt/zamboni` and ends with
+  `BootstrapSuccess=0`, instead of silently reporting healthy.
+- **`scripts/control_plane_sync.py` schema-mismatch fix, then hardened
+  further same-session**: `sync_table()`'s `SELECT * FROM {bare_name}`
+  against the SQLite mirror omits `stream_registry`'s 7 engine-owned
+  columns (`aws_opt_*`, `last_execution_id`, `metadata_location`,
+  `properties_synced` — excluded per `config/control_plane_schema.py`'s
+  docstring), then pushed that narrower frame via
+  `wr.athena.to_iceberg(mode="overwrite")` onto the real table that still
+  has them. Fixed by fetching those columns fresh from real Athena and
+  merging them back onto the SQLite-sourced frame before the overwrite.
+  First version of the fix treated ANY fetch failure the same as "table
+  doesn't exist yet" and pushed the overwrite with the columns nulled
+  regardless — correct for a genuinely fresh environment's first sync,
+  wrong for a transient failure (throttling, an IAM/workgroup quirk)
+  where the real data is fine and nulling it would be destructive.
+  Hardened same-session: `_fetch_engine_owned_columns()` now only treats
+  a `TABLE_NOT_FOUND`/"does not exist"-shaped error as safe-to-null;
+  anything else raises the new `EngineOwnedColumnsUnavailable`, which
+  propagates out of `sync_table()` uncaught (no overwrite pushed at all)
+  and is caught by `_run_once()`'s existing per-table try/except —
+  aborting that table's sync for the cycle rather than silently
+  corrupting it. `domain_registry`/`hk_config`/`nonprod_registry`/
+  `controlm_jobs` have no engine-owned columns and are provably
+  unaffected (asserted via a test that Athena is never even called for
+  them). 4 new regression tests cover: preserve-on-success,
+  null-on-table-not-found, abort-on-unexpected-error (asserts
+  `to_iceberg` was never called), and the no-op case for the other 4
+  tables.
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, or the lock
+  service this session.

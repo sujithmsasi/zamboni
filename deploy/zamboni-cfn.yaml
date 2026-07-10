@@ -472,9 +472,12 @@ Resources:
           retry 5 10 dnf install -y python3.11 python3.11-pip python3.11-devel git gcc ruby wget --quiet \
             || { log "FAILED: dnf install of required packages."; BOOTSTRAP_OK=0; }
 
-          mkdir -p /opt/zamboni
-          chown ec2-user:ec2-user /opt/zamboni
-          log "Created /opt/zamboni."
+          if mkdir -p /opt/zamboni && chown ec2-user:ec2-user /opt/zamboni; then
+            log "Created /opt/zamboni."
+          else
+            log "FAILED: could not create/chown /opt/zamboni -- CodeDeploy will not be able to deploy to this instance."
+            BOOTSTRAP_OK=0
+          fi
 
           cd /home/ec2-user
           retry 5 10 wget -q "https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install" -O install \
