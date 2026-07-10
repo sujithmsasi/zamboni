@@ -2839,3 +2839,55 @@ Docs-only, no code changes.
   dev-then-prod-approval) pipeline topology that predates
   `zamboni-cfn.yaml` and doesn't match the current single-environment
   design; same treatment as other superseded docs in this repo.
+
+2026-07-10 EC2 UserData hardened against silent bootstrap failure. Root
+cause of a real past incident, diagnosed from Sujith's own CloudFormation
+stack-event log + CodeDeploy error detail: a stack update (a different,
+org-side stack — `zamboni-config-stack`, not this repo's `zamboni-cfn.yaml`
+directly) forced an EC2 replacement at 18:38-18:40 (confirmed by "Requested
+update requires the creation of a new physical resource"); ~2h15m later a
+CodeDeploy deployment against the new instance failed at `BeforeInstall`
+with "CodeDeploy agent was not able to receive the lifecycle event." The
+gap ruled out a live race (the replacement had long finished); the
+2-hour-undetected failure pattern instead points at the new instance's
+UserData bootstrap having failed silently — `set -euo pipefail` means a
+single transient failure anywhere (a `dnf` network hiccup, a flaky S3
+download) aborts the *entire* script, including the CodeDeploy agent
+install, leaving an instance that passes EC2 status checks but has no
+agent at all, invisible until someone actually tries to deploy to it.
+- `deploy/zamboni-cfn.yaml`'s `ZamboniInstance` UserData rewritten:
+  dropped `-e` (kept `-u`/`pipefail`) so no single step can silently
+  skip the rest; `retry()` helper wraps the network-dependent steps
+  (`dnf update`/`dnf install`/the CodeDeploy installer download, 5
+  attempts, 10s apart); `dnf update -y`'s own failure is logged as a
+  non-fatal warning (general system hygiene, not load-bearing) while
+  `dnf install` of the actually-needed packages, the installer download,
+  `./install auto`, and the final `systemctl is-active codedeploy-agent`
+  check are all fatal, tracked via a `BOOTSTRAP_OK` flag; every step
+  logs a UTC timestamp to `/var/log/zamboni/bootstrap.log`; a
+  `Zamboni/BootstrapSuccess` CloudWatch metric (0 or 1) publishes at the
+  end via the `cloudwatch:PutMetricData` permission the instance role
+  already had (scoped to the `Zamboni` namespace) — no new IAM needed —
+  so a failed bootstrap is observable fleet-wide without SSHing into the
+  specific replaced instance; an alarm can be built on that metric
+  org-side instead of discovering a dead agent via a failed deployment
+  hours later, same class of gap as this incident.
+- Real authoring bug caught and fixed during this same pass: a `${sleep_s}`
+  bash variable reference (curly-brace form) inside the retry function's
+  log message was itself interpreted by CloudFormation's `!Sub` as a
+  substitution placeholder, since `Fn::Base64: !Sub` treats *any*
+  `${...}` in the string as CFN syntax unless escaped — `cfn-lint` caught
+  it immediately (`'sleep_s' is not one of [...]`). Reworded to avoid
+  curly-brace bash syntax entirely rather than escaping it, since this
+  class of authoring mistake is easy to reintroduce with `${!sleep_s}`-style
+  escaping and easier to just avoid.
+- Verified beyond `cfn-lint` (zero errors): extracted the actual UserData
+  script from the rendered template and ran it directly on this machine
+  (no `dnf`/`wget`/`systemctl`/`aws` available here, so every single step
+  fails) — confirmed the script runs to completion regardless, with exit
+  code 0, clear retry/FAILED log lines for each missing command, a final
+  "BOOTSTRAP FINISHED WITH ERRORS" summary, and a graceful (not crashing)
+  metric-publish attempt — the exact opposite of the original's silent,
+  first-failure-kills-everything behavior. This is the closest verification
+  possible without a real EC2 boot.
+- No changes to engine/api/ui source — deploy-only.

@@ -411,19 +411,101 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -euo pipefail
-          dnf update -y --quiet
-          dnf install -y python3.11 python3.11-pip python3.11-devel git gcc ruby wget --quiet
+          # Hardened 2026-07-10: the previous version used `set -euo pipefail`,
+          # so a single transient failure anywhere (a dnf network hiccup, a
+          # flaky S3 download) silently aborted the ENTIRE script -- including
+          # the CodeDeploy agent install -- leaving an instance that passes EC2
+          # status checks but has no working agent at all, undetectable until
+          # someone actually tries to deploy to it (a real incident: a replaced
+          # instance's bootstrap likely failed silently, and the resulting
+          # CodeDeploy "agent was not able to receive the lifecycle event"
+          # failure wasn't traced back to it for over 2 hours). This version
+          # retries network-dependent steps, never lets one failure skip the
+          # rest of the script, logs every step with a timestamp to
+          # /var/log/zamboni/bootstrap.log, and publishes a
+          # Zamboni/BootstrapSuccess CloudWatch metric (0 or 1, using the
+          # cloudwatch:PutMetricData permission this role already has) so a
+          # failed bootstrap is observable fleet-wide without SSHing into the
+          # specific replaced instance -- an alarm can be built on that metric
+          # org-side to page on it automatically instead of discovering it via
+          # a failed deployment hours later.
+          set -uo pipefail
+
+          LOG=/var/log/zamboni/bootstrap.log
+          mkdir -p /var/log/zamboni
+          touch "$LOG"
+          chown ec2-user:ec2-user /var/log/zamboni "$LOG" 2>/dev/null || true
+
+          log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG"; }
+
+          retry() {
+            # retry <max_attempts> <sleep_seconds> <command...>
+            local max=$1 sleep_s=$2; shift 2
+            local attempt=1
+            until "$@"; do
+              if [ "$attempt" -ge "$max" ]; then
+                log "FAILED after $attempt attempts: $*"
+                return 1
+              fi
+              log "Attempt $attempt/$max failed: $* -- retrying in $sleep_s seconds"
+              attempt=$((attempt + 1))
+              sleep "$sleep_s"
+            done
+          }
+
+          publish_metric() {
+            # publish_metric <value>
+            aws cloudwatch put-metric-data \
+              --region "${AWS::Region}" \
+              --namespace Zamboni \
+              --metric-name BootstrapSuccess \
+              --value "$1" \
+              --unit None 2>>"$LOG" || log "WARNING: could not publish BootstrapSuccess metric"
+          }
+
+          BOOTSTRAP_OK=1
+          log "Bootstrap starting."
+
+          retry 5 10 dnf update -y --quiet \
+            || log "WARNING: dnf update -y failed after retries -- continuing (non-fatal, general system update only)."
+
+          retry 5 10 dnf install -y python3.11 python3.11-pip python3.11-devel git gcc ruby wget --quiet \
+            || { log "FAILED: dnf install of required packages."; BOOTSTRAP_OK=0; }
+
           mkdir -p /opt/zamboni
           chown ec2-user:ec2-user /opt/zamboni
+          log "Created /opt/zamboni."
+
           cd /home/ec2-user
-          wget -q https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+          retry 5 10 wget -q "https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install" -O install \
+            || { log "FAILED: could not download the CodeDeploy agent installer."; BOOTSTRAP_OK=0; }
           chmod +x install
-          ./install auto
-          systemctl enable codedeploy-agent --now
-          mkdir -p /var/log/zamboni
-          chown ec2-user:ec2-user /var/log/zamboni
-          echo "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh." > /var/log/zamboni/bootstrap.log
+
+          if ./install auto >>"$LOG" 2>&1; then
+            log "CodeDeploy agent installer ran."
+          else
+            log "FAILED: CodeDeploy agent installer (./install auto) exited non-zero."
+            BOOTSTRAP_OK=0
+          fi
+
+          systemctl enable codedeploy-agent --now 2>>"$LOG" \
+            || { log "FAILED: could not enable/start codedeploy-agent."; BOOTSTRAP_OK=0; }
+
+          sleep 5
+          if systemctl is-active --quiet codedeploy-agent; then
+            log "codedeploy-agent is active."
+          else
+            log "FAILED: codedeploy-agent is NOT active after install -- CodeDeploy will not be able to reach this instance."
+            BOOTSTRAP_OK=0
+          fi
+
+          if [ "$BOOTSTRAP_OK" -eq 1 ]; then
+            log "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh."
+            publish_metric 1
+          else
+            log "Zamboni EC2 bootstrap FINISHED WITH ERRORS -- see above. This instance may not be deployable via CodeDeploy until fixed."
+            publish_metric 0
+          fi
 
   # ── EventBridge — engine scheduling (added 2026-07-09) ─────────────────────
   # Real gap fixed here: no prior version of this template scheduled the
