@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config.settings import MAX_CONCURRENT_PARTITIONS
 from engine.core import execution_log, notifier, registry
 from engine.core.execution_log import LogEntry
+from engine.core.lock_service import LockService
 from engine.engines.base import BaseEngine
 from engine.operations.archival import (
     _resolve_partition_column,
@@ -105,12 +106,37 @@ class ArchivalEngine(BaseEngine):
         """
         Discover and archive all cold partitions for one table.
         Runs partitions concurrently up to MAX_CONCURRENT_PARTITIONS.
+
+        Real gap fixed here (2026-07-09 audit): neither this engine nor
+        LifecycleEngine acquired the maintenance lock HKEngine/orchestrator.py
+        already uses -- two overlapping runs (archival + a concurrent HK
+        orchestrated run, or two archival retries) could mutate the same
+        table's Iceberg metadata at the same time. The lock is keyed on
+        table_fqn alone (engine/core/lock_service.py), so acquiring it here
+        contends correctly against HK's own lock on the same table.
         """
         fqn             = table_row["table_fqn"]
         retention_days  = table_row.get("archive_retention_days") or 30
         table_row.get("tier", "standard")
         workgroup       = "archival"
 
+        lock_service = LockService()
+        lock = lock_service.acquire(fqn, "archival")
+        if lock is None:
+            log.warning("archival_engine.lock_held", table_fqn=fqn)
+            return {"partitions_found": 0, "succeeded": 0, "failed": 0, "skipped": 1}
+
+        try:
+            return self._process_table_locked(table_row, fqn, retention_days, workgroup)
+        finally:
+            lock_service.release(lock)
+
+    def _process_table_locked(
+        self, table_row: dict, fqn: str, retention_days: int, workgroup: str,
+    ) -> dict:
+        """The original _process_table body, run while the per-table lock
+        is held -- split out so the lock's finally-release isn't tangled
+        with this function's several early-return paths."""
         # Resolve partition column
         try:
             partition_col = _resolve_partition_column(table_row, fqn, workgroup)

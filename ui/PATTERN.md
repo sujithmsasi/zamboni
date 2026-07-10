@@ -77,6 +77,9 @@ Deviating from any of the above in a Wave 1-2 page requires a note in
 | `/stale` | Stale Resources | `GET /api/stale?kind=hk\|orphan\|zero_row\|nonprod` |
 | `/settings` | Settings | `GET/PUT /api/settings`, `GET/POST/PUT/DELETE /api/escalation`, `GET/DELETE /api/locks` |
 | `/audit` | Audit Log | `GET /api/audit` |
+| `/help` | App Guide | none — static content (`ui/src/pages/AppGuide/content.ts`), added post-Phase-5b |
 
-All 13 routes are real pages — no `PlaceholderPage` usages remain (the
-component itself was deleted in Phase 5b, not just its call sites).
+All 13 contracts §7 routes are real pages — no `PlaceholderPage` usages
+remain (the component itself was deleted in Phase 5b, not just its call
+sites). `/help` is a 14th, additive route, not part of the original
+contract.

@@ -231,41 +231,59 @@ with tab2:
                 from app.components.auth import current_user as _cu_bulk
                 _now_b = _dt_bulk.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                 _action_label = "Exempt" if _do_exempt else "Claim"
-                _ok_b = _fail_b = 0
+                _esc_b = lambda s: str(s).replace(chr(39), chr(39) * 2)  # noqa: E731
 
+                # Resolve full FQNs + each row's own previous_state first --
+                # no DB call yet, matches the old per-row loop's logic
+                # exactly, just deferred to build one batched UPDATE instead
+                # of issuing N (this was the exact row-by-row Athena write
+                # pattern reported as slow -- one UPDATE + one audit() INSERT
+                # per selected row).
+                _resolved_b: list[tuple[str, str]] = []
                 for _, _br in _selected_bulk.iterrows():
-                    # Restore full FQN
                     _fqn_b = _bulk_df[_bulk_df["table_fqn"].str.endswith(
                         str(_br["table_fqn"]).split(".")[-1]
                     )]["table_fqn"].iloc[0] if "glue_catalog" not in str(_br["table_fqn"]) else str(_br["table_fqn"])
+                    _state_b = str(_br.get("lifecycle_state", "")).replace("✅", "").replace("🟡", "").replace("🟠", "").replace("🔴", "").strip()
+                    _resolved_b.append((str(_fqn_b), _state_b))
 
-                    _state_b = str(_br.get("lifecycle_state","")).replace("✅","").replace("🟡","").replace("🟠","").replace("🔴","").strip()
-                    try:
-                        execute_write(
-                            f"UPDATE {NONPROD_REGISTRY_TABLE} "
-                            f"SET lifecycle_state = 'ACTIVE', "
-                            f"previous_state = '{_state_b}', "
-                            f"owner_exempted = 1, "
-                            f"exemption_reason = '{_action_reason.strip().replace(chr(39), chr(39)*2)}', "
-                            f"state_changed_at = '{_now_b}' "
-                            + (f", owner_email = '{_cu_bulk()}' " if _do_claim else "")
-                            + f"WHERE table_fqn LIKE '%{str(_br['table_fqn']).split('.')[-1]}'",
-                            workgroup="app", dry_run=is_dry_run(),
-                        )
+                _ok_b = _fail_b = 0
+                try:
+                    _case_sql = " ".join(
+                        f"WHEN '{_esc_b(fqn)}' THEN '{_esc_b(state)}'" for fqn, state in _resolved_b
+                    )
+                    _in_sql = ", ".join(f"'{_esc_b(fqn)}'" for fqn, _ in _resolved_b)
+                    execute_write(
+                        f"UPDATE {NONPROD_REGISTRY_TABLE} "
+                        f"SET lifecycle_state = 'ACTIVE', "
+                        f"previous_state = CASE table_fqn {_case_sql} END, "
+                        f"owner_exempted = 1, "
+                        f"exemption_reason = '{_esc_b(_action_reason.strip())}', "
+                        f"state_changed_at = '{_now_b}' "
+                        + (f", owner_email = '{_esc_b(_cu_bulk())}' " if _do_claim else "")
+                        + f"WHERE table_fqn IN ({_in_sql})",
+                        workgroup="app", dry_run=is_dry_run(),
+                    )
+                    _ok_b = len(_resolved_b)
+                except Exception as _be2:
+                    _fail_b = len(_resolved_b)
+                    st.error(f"Bulk {_action_label.lower()} failed: {_be2}")
+
+                if _ok_b:
+                    # One audit_log row per table is deliberate (audit trail
+                    # granularity, not a perf concern at bulk-action volume)
+                    # -- only the state-mutating UPDATE above needed batching.
+                    for _fqn_b, _ in _resolved_b:
                         audit(AuditEvent(
                             actor=_cu_bulk(),
                             action_type=AuditAction.LIFECYCLE_EXEMPTION,
                             page_source="9_NonProd_Lifecycle",
                             target_type="table",
-                            target_id=str(_br["table_fqn"]),
+                            target_id=_fqn_b,
                             environment=env, dry_run=is_dry_run(),
                             status="DRY_RUN" if is_dry_run() else "SUCCESS",
                             reason=f"{_action_label}: {_action_reason.strip()}",
                         ))
-                        _ok_b += 1
-                    except Exception as _be2:
-                        _fail_b += 1
-                        st.error(f"{_br['table_fqn']}: {_be2}")
 
                 st.success(
                     f"✅ {_action_label}d {_ok_b} table(s)"

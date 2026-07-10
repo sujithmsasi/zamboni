@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
-from config.settings import EXECUTION_LOG_TABLE
+from config.settings import EXECUTION_LOG_TABLE, LOCK_TTL_MINUTES
 from engine.utils.athena_client import read_sql, run_query
 from engine.utils.logger import get_logger
 
@@ -76,14 +76,40 @@ class LogEntry:
     execution_date: date = field(default_factory=date.today)
 
 
-def write(entry: LogEntry, dry_run: bool = False) -> bool:
-    """
-    Write a log entry to the execution_log Iceberg table.
-    Returns True on success.
-    """
-    now = datetime.now(UTC)
+def _s(v) -> str:
+    """SQL string literal or NULL."""
+    return f"'{str(v).replace(chr(39), chr(39)*2)}'" if v is not None else "NULL"
 
-    # Auto-fill timing if not provided
+
+def _n(v) -> str:
+    """SQL numeric literal or NULL."""
+    return str(int(v)) if v is not None else "NULL"
+
+
+def _b(v) -> str:
+    """SQL boolean."""
+    return str(bool(v)).lower()
+
+
+def _ts(v) -> str:
+    """SQL TIMESTAMP literal or NULL."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, datetime):
+        return f"TIMESTAMP '{v.strftime('%Y-%m-%d %H:%M:%S')}'"
+    return "NULL"
+
+
+def _dt(v) -> str:
+    """SQL DATE literal or NULL."""
+    if v is None:
+        return "NULL"
+    return f"DATE '{v.isoformat()}'"
+
+
+def _fill_timing(entry: LogEntry) -> None:
+    """Auto-fill started_at/completed_at/duration_seconds if not provided."""
+    now = datetime.now(UTC)
     if entry.started_at is None:
         entry.started_at = now
     if entry.completed_at is None:
@@ -93,34 +119,12 @@ def write(entry: LogEntry, dry_run: bool = False) -> bool:
             (entry.completed_at - entry.started_at).total_seconds()
         )
 
-    def _s(v) -> str:
-        """SQL string literal or NULL."""
-        return f"'{str(v).replace(chr(39), chr(39)*2)}'" if v is not None else "NULL"
 
-    def _n(v) -> str:
-        """SQL numeric literal or NULL."""
-        return str(int(v)) if v is not None else "NULL"
-
-    def _b(v) -> str:
-        """SQL boolean."""
-        return str(bool(v)).lower()
-
-    def _ts(v) -> str:
-        """SQL TIMESTAMP literal or NULL."""
-        if v is None:
-            return "NULL"
-        if isinstance(v, datetime):
-            return f"TIMESTAMP '{v.strftime('%Y-%m-%d %H:%M:%S')}'"
-        return "NULL"
-
-    def _dt(v) -> str:
-        """SQL DATE literal or NULL."""
-        if v is None:
-            return "NULL"
-        return f"DATE '{v.isoformat()}'"
-
-    sql = f"""
-        INSERT INTO {EXECUTION_LOG_TABLE} VALUES (
+def _values_tuple(entry: LogEntry) -> str:
+    """Render one LogEntry as a positional SQL VALUES tuple -- shared by
+    write() (single-row) and write_many() (multi-row) so both stay in sync
+    with the execution_log column order."""
+    return f"""(
             {_s(entry.execution_id)},
             {_s(entry.run_id)},
             {_s(entry.engine)},
@@ -158,8 +162,16 @@ def write(entry: LogEntry, dry_run: bool = False) -> bool:
             {_n(entry.snapshot_id_before)},
             {_n(entry.snapshot_id_after)},
             {_s(entry.integrity_status)}
-        )
+        )"""
+
+
+def write(entry: LogEntry, dry_run: bool = False) -> bool:
     """
+    Write a log entry to the execution_log Iceberg table.
+    Returns True on success.
+    """
+    _fill_timing(entry)
+    sql = f"INSERT INTO {EXECUTION_LOG_TABLE} VALUES {_values_tuple(entry)}"
 
     log.info(
         "execution_log.write",
@@ -173,6 +185,28 @@ def write(entry: LogEntry, dry_run: bool = False) -> bool:
 
     run_query(sql, workgroup="app", dry_run=dry_run)
     return True
+
+
+def write_many(entries: list[LogEntry], dry_run: bool = False) -> int:
+    """
+    Write multiple log entries in a single multi-row INSERT instead of one
+    round trip per entry -- the batched counterpart to write(), used by
+    ParquetLogBuffer's Athena-INSERT fallback path (execution_log_parquet.py)
+    which used to loop write() once per table per HK run (2026-07-09 audit:
+    real row-by-row Athena writes at fleet scale). No-op (returns 0) for an
+    empty list. Returns the number of entries written.
+    """
+    if not entries:
+        return 0
+    for entry in entries:
+        _fill_timing(entry)
+
+    values_sql = ",\n        ".join(_values_tuple(e) for e in entries)
+    sql = f"INSERT INTO {EXECUTION_LOG_TABLE} VALUES {values_sql}"
+
+    log.info("execution_log.write_many", count=len(entries), dry_run=dry_run)
+    run_query(sql, workgroup="app", dry_run=dry_run)
+    return len(entries)
 
 
 def new_run_id() -> str:
@@ -253,24 +287,70 @@ def get_last_run(
 def get_running(table_fqn: str) -> dict | None:
     """
     Return the most recent execution_log row with status='RUNNING' for a
-    table, or None. Used by Gate 0's in-flight check (contracts.md §4 step 3).
+    table if that run is still genuinely in flight, or None. Used by Gate
+    0's in-flight check (contracts.md §4 step 3).
 
-    No engine writes status='RUNNING' yet as of Phase 1a -- the Phase 1b
-    orchestrator will mark each step RUNNING at start and terminal at
-    completion. This check is wired into Gate 0 now so it activates without
-    further changes once that write path lands.
+    Real bug fixed here (2026-07-09 audit): execution_log is append-only --
+    a run's RUNNING row is never updated in place, only superseded by a
+    second, terminal row (see orchestrator.py's _write() calls after the
+    unbuffered RUNNING write). The original query here only filtered on
+    status='RUNNING' with no correlation to that later terminal row, so
+    ANY table that ever completed a single orchestrated run -- success,
+    failure, or skip -- would show as permanently "already running" on
+    every subsequent trigger: Gate 0's in-flight check, once tripped by
+    the table's first-ever run, never cleared. Fixed two ways:
+      (a) NOT EXISTS a later row with the same run_id + operation and a
+          terminal status -- a completed run's RUNNING row no longer
+          counts as in-flight.
+      (b) a staleness bound of LOCK_TTL_MINUTES (matching the window
+          LockService already treats a lock as expired/abandoned) so a
+          genuinely crashed run (RUNNING written, process killed before
+          any terminal write) can't lock a table out forever either.
     """
     sql = f"""
-        SELECT * FROM {EXECUTION_LOG_TABLE}
-        WHERE table_fqn = '{table_fqn}'
-          AND status    = 'RUNNING'
-        ORDER BY started_at DESC
+        SELECT r.* FROM {EXECUTION_LOG_TABLE} r
+        WHERE r.table_fqn = '{table_fqn}'
+          AND r.status    = 'RUNNING'
+          AND NOT EXISTS (
+              SELECT 1 FROM {EXECUTION_LOG_TABLE} t
+              WHERE t.table_fqn = r.table_fqn
+                AND t.run_id    = r.run_id
+                AND t.operation = r.operation
+                AND t.status   != 'RUNNING'
+          )
+        ORDER BY r.started_at DESC
         LIMIT 1
     """
     df = read_sql(sql, workgroup="app")
     if df.empty:
         return None
-    return df.iloc[0].to_dict()
+    row = df.iloc[0].to_dict()
+
+    started_dt = _coerce_datetime(row.get("started_at"))
+    if started_dt and datetime.now(UTC) - started_dt > timedelta(minutes=LOCK_TTL_MINUTES):
+        log.warning(
+            "execution_log.get_running.stale_running_row_ignored",
+            table_fqn=table_fqn,
+            started_at=str(row.get("started_at")),
+            run_id=row.get("run_id"),
+        )
+        return None
+    return row
+
+
+def _coerce_datetime(value) -> datetime | None:
+    """Parse a started_at value that may come back as a str, pandas
+    Timestamp, or native datetime depending on backend (Athena vs. SQLite
+    control-plane)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        dt = datetime.fromisoformat(str(value))
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def get_domain_summary(domain: str, days: int = 7) -> dict:

@@ -56,14 +56,25 @@ def test_take_backup_vacuums_a_real_sqlite_file_and_uploads(tmp_path, monkeypatc
 def test_prune_backups_keeps_newest_per_hour_and_per_day(monkeypatch):
     now = datetime.now(UTC)
 
+    # Anchored to a fixed minute/hour-of-day rather than raw offsets from
+    # `now` -- two keys a few minutes/hours apart from `now` can straddle
+    # an hour/day boundary depending on what minute/hour `now` happens to
+    # be at test-run time (found as a real, reproducible flake while
+    # verifying an unrelated fix -- e.g. hours=2,minutes=40 vs
+    # hours=2,minutes=10 land in different hour buckets whenever `now`'s
+    # own minute is in [10, 40)). Anchoring guarantees the same-hour/
+    # same-day pairing by construction instead of by luck.
+
     # Within the 24h hourly window: two backups in the same hour -- only
     # the newest should survive.
-    hour_old_key = _key(now - timedelta(hours=2, minutes=40))
-    hour_new_key = _key(now - timedelta(hours=2, minutes=10))
+    hour_anchor = (now - timedelta(hours=2)).replace(minute=30, second=0, microsecond=0)
+    hour_old_key = _key(hour_anchor - timedelta(minutes=10))
+    hour_new_key = _key(hour_anchor + timedelta(minutes=10))
     # Within the 30d daily window (past 24h): two backups on the same day
     # -- only the newest should survive.
-    day_old_key = _key(now - timedelta(days=5, hours=1))
-    day_new_key = _key(now - timedelta(days=5, hours=0, minutes=5))
+    day_anchor = (now - timedelta(days=5)).replace(hour=12, minute=0, second=0, microsecond=0)
+    day_old_key = _key(day_anchor - timedelta(hours=1))
+    day_new_key = _key(day_anchor + timedelta(hours=1))
     # Older than the 30d window entirely -- always deleted.
     ancient_key = _key(now - timedelta(days=45))
 

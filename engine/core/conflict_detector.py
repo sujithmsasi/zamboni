@@ -115,6 +115,13 @@ def scan_fleet(fqns: list[str] | None = None, batch: int = 25) -> dict:
     Force a live Glue optimizer check + cache write-back for every table in
     fqns (defaults to the full enabled fleet). Ignores the existing cache --
     always calls check_table() live. Returns {"scanned": N, "conflicts": N}.
+
+    The Glue GetTableOptimizer call is inherently one-per-table (a live AWS
+    API check, not SQL), but the cache write-back used to be too -- one
+    Athena UPDATE per table, real fleet-scale row-by-row writes (found in
+    the 2026-07-09 audit; this is the "Rescan conflicts" button on the
+    Health Dashboard). Now batched into one UPDATE per `batch` chunk instead
+    of one per table.
     """
     if fqns is None:
         from engine.core import registry
@@ -123,12 +130,11 @@ def scan_fleet(fqns: list[str] | None = None, batch: int = 25) -> dict:
     scanned   = 0
     conflicts = 0
     for i in range(0, len(fqns), batch):
-        for fqn in fqns[i:i + batch]:
-            live = check_table(fqn)
-            _write_back(fqn, live)
-            scanned += 1
-            if any(live.values()):
-                conflicts += 1
+        chunk   = fqns[i:i + batch]
+        results = {fqn: check_table(fqn) for fqn in chunk}
+        _write_back_batch(results)
+        scanned += len(chunk)
+        conflicts += sum(1 for live in results.values() if any(live.values()))
 
     log.info("conflict_detector.scan_fleet_complete", scanned=scanned, conflicts=conflicts)
     return {"scanned": scanned, "conflicts": conflicts}
@@ -137,22 +143,45 @@ def scan_fleet(fqns: list[str] | None = None, batch: int = 25) -> dict:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _write_back(fqn: str, live: dict, dry_run: bool = False) -> None:
+    _write_back_batch({fqn: live}, dry_run=dry_run)
+
+
+def _write_back_batch(results: dict[str, dict], dry_run: bool = False) -> None:
+    """Single UPDATE for however many tables are in `results`, keyed by
+    table_fqn via CASE -- stays Athena-direct on purpose (aws_opt_* are
+    engine-owned columns deliberately excluded from the SQLite control
+    plane, per config/control_plane_schema.py's docstring)."""
+    if not results:
+        return
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _case(col: str) -> str:
+        whens = " ".join(
+            f"WHEN '{_esc(fqn)}' THEN {str(bool(live.get(col))).lower()}"
+            for fqn, live in results.items()
+        )
+        return f"CASE table_fqn {whens} END"
+
+    in_list = ", ".join(f"'{_esc(fqn)}'" for fqn in results)
     sql = f"""
         UPDATE {STREAM_REGISTRY_TABLE}
-        SET aws_opt_compaction = {str(bool(live.get("aws_opt_compaction"))).lower()},
-            aws_opt_retention  = {str(bool(live.get("aws_opt_retention"))).lower()},
-            aws_opt_orphan     = {str(bool(live.get("aws_opt_orphan"))).lower()},
+        SET aws_opt_compaction = {_case("aws_opt_compaction")},
+            aws_opt_retention  = {_case("aws_opt_retention")},
+            aws_opt_orphan     = {_case("aws_opt_orphan")},
             aws_opt_checked_at = TIMESTAMP '{now}'
-        WHERE table_fqn = '{fqn}'
+        WHERE table_fqn IN ({in_list})
     """
     try:
         run_query(sql, workgroup="app", dry_run=dry_run)
     except Exception as e:
         if "column" in str(e).lower():
-            log.info("conflict_detector.write_back_column_missing", table_fqn=fqn)
+            log.info("conflict_detector.write_back_column_missing", count=len(results))
             return
-        log.warning("conflict_detector.write_back_failed", table_fqn=fqn, error=str(e))
+        log.warning("conflict_detector.write_back_batch_failed", count=len(results), error=str(e))
+
+
+def _esc(value: str) -> str:
+    return str(value).replace("'", "''")
 
 
 def _parse_ts(value) -> datetime | None:

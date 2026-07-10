@@ -1316,17 +1316,24 @@ with tab_bulk_ctrlm:
                     if _bulk_ci.strip():
                         _sets.append(f"ci_number = '{_bulk_ci.strip()}'")
 
-                    _applied = 0
-                    for _tfqn in _to_apply:
-                        # Restore full FQN for the UPDATE
-                        _full_fqn = f"glue_catalog.{_tfqn}" if not _tfqn.startswith("glue_catalog") else _tfqn
-                        execute_write(
-                            f"UPDATE {STREAM_REGISTRY_TABLE} "
-                            f"SET {', '.join(_sets)} "
-                            f"WHERE table_fqn = '{_full_fqn}'",
-                            dry_run=is_dry_run(),
-                        )
-                        _applied += 1
+                    # SET values are identical for every selected table (all
+                    # come from the bulk form, not per-row) -- one batched
+                    # UPDATE instead of one per table, which is exactly the
+                    # row-by-row Athena write pattern reported as slow.
+                    _full_fqns = [
+                        f"glue_catalog.{_tfqn}" if not _tfqn.startswith("glue_catalog") else _tfqn
+                        for _tfqn in _to_apply
+                    ]
+                    _in_fqns = ", ".join(
+                        "'" + f.replace(chr(39), chr(39) * 2) + "'" for f in _full_fqns
+                    )
+                    execute_write(
+                        f"UPDATE {STREAM_REGISTRY_TABLE} "
+                        f"SET {', '.join(_sets)} "
+                        f"WHERE table_fqn IN ({_in_fqns})",
+                        dry_run=is_dry_run(),
+                    )
+                    _applied = len(_full_fqns)
 
                     cached_read_registry.clear()
                     # Clear preview after apply
@@ -1771,28 +1778,51 @@ with tab_bulk_ctrlm:
                         ):
                             from datetime import UTC as _JUTC2
                             from datetime import datetime as _jdt2
+
+                            from engine.core import control_plane as _cp_jobs
                             _jnow2 = _jdt2.now(_JUTC2).strftime("%Y-%m-%d %H:%M:%S")
-                            _j_ok = _j_fail = 0
-                            for _, _jr in _jdf.iterrows():
-                                try:
-                                    execute_write(
-                                        f"INSERT OR REPLACE INTO {_CTRLM_JOBS_TABLE} "
-                                        f"(job_name, job_type, domain, description, "
-                                        f"expected_start_time, expected_duration_min, "
-                                        f"active, registered_by, created_at, updated_at) "
-                                        f"VALUES ('{str(_jr['job_name'])}', "
-                                        f"'{str(_jr.get('job_type','controlm'))}', "
-                                        f"'{str(_jr.get('domain',''))}', "
-                                        f"'{str(_jr.get('description',''))}', "
-                                        f"'{str(_jr.get('expected_start_time',''))}', "
-                                        f"{int(_jr.get('expected_duration_min',0))}, "
-                                        f"1, '{current_user()}', '{_jnow2}', '{_jnow2}')",
-                                        dry_run=False,
-                                    )
-                                    _j_ok += 1
-                                except Exception as _jbe:
-                                    _j_fail += 1
-                                    st.error(f"`{_jr['job_name']}` failed: {_jbe}")
+                            _j_esc = lambda s: str(s).replace(chr(39), chr(39) * 2)  # noqa: E731
+
+                            # controlm_jobs is one of the 5 SQLite-primary
+                            # control-plane tables -- writing it via
+                            # execute_write() (real Athena) was two bugs at
+                            # once: INSERT OR REPLACE is SQLite-only syntax
+                            # that Athena rejects outright, AND a direct
+                            # Athena write here would get silently clobbered
+                            # by the next scripts/control_plane_sync.py
+                            # cycle's full-table overwrite from SQLite (the
+                            # sync is one-way SQLite -> Athena, so it has no
+                            # idea this row ever changed). Routed through
+                            # control_plane.run_query() instead -- correct
+                            # target AND fast -- and batched into one
+                            # multi-row INSERT OR REPLACE (SQLite supports
+                            # multi-row VALUES) instead of one round trip
+                            # per CSV row.
+                            _job_rows = list(_jdf.iterrows())
+                            _values_sql = ", ".join(
+                                "('" + _j_esc(_jr['job_name']) + "', "
+                                "'" + _j_esc(_jr.get('job_type', 'controlm')) + "', "
+                                "'" + _j_esc(_jr.get('domain', '')) + "', "
+                                "'" + _j_esc(_jr.get('description', '')) + "', "
+                                "'" + _j_esc(_jr.get('expected_start_time', '')) + "', "
+                                + str(int(_jr.get('expected_duration_min', 0))) + ", "
+                                "1, '" + _j_esc(current_user()) + "', "
+                                "'" + _jnow2 + "', '" + _jnow2 + "')"
+                                for _, _jr in _job_rows
+                            )
+                            try:
+                                _cp_jobs.run_query(
+                                    f"INSERT OR REPLACE INTO {_CTRLM_JOBS_TABLE} "
+                                    f"(job_name, job_type, domain, description, "
+                                    f"expected_start_time, expected_duration_min, "
+                                    f"active, registered_by, created_at, updated_at) "
+                                    f"VALUES {_values_sql}",
+                                    dry_run=False,
+                                )
+                                _j_ok, _j_fail = len(_job_rows), 0
+                            except Exception as _jbe:
+                                _j_ok, _j_fail = 0, len(_job_rows)
+                                st.error(f"Job import failed: {_jbe}")
                             _load_ctrlm_jobs.clear()
                             st.success(
                                 f"✅ Imported {_j_ok} job(s)"

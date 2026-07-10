@@ -210,6 +210,12 @@ S3_STANDARD_USD_PER_GB_MONTH = float(os.getenv("S3_STANDARD_USD_PER_GB_MONTH", "
 # Set to 0 to disable. Recommended: 1800 (30 min) for prod.
 ATHENA_QUERY_TIMEOUT_SECONDS: int = int(os.getenv("ATHENA_QUERY_TIMEOUT_SECONDS", "1800"))
 
+# Glue compaction job timeout -- engine/operations/compaction.py's polling
+# loop was unbounded (a stuck Glue job hung the worker thread forever, no
+# way to time out or auto-cancel). Same convention as the Athena timeout
+# above: set to 0 to disable, recommended 3600 (1h) for prod.
+GLUE_JOB_TIMEOUT_SECONDS: int = int(os.getenv("GLUE_JOB_TIMEOUT_SECONDS", "3600"))
+
 EXECUTION_LOG_MODE = os.getenv("EXECUTION_LOG_MODE", "auto").lower()
 
 

@@ -12,7 +12,7 @@ import time
 
 import boto3
 
-from config.settings import AWS_REGION
+from config.settings import AWS_REGION, GLUE_JOB_TIMEOUT_SECONDS
 from engine.core.health_checker import HealthResult
 from engine.operations.dynamic_router import RoutingDecision, route
 from engine.strategies import binpack, sort, zorder
@@ -227,9 +227,37 @@ def _run_glue_compaction(
     return result
 
 
-def _wait_for_glue_job(glue, run_id: str, poll_interval: int = 15) -> None:
-    """Poll Glue job until terminal state."""
+def _wait_for_glue_job(
+    glue, run_id: str, poll_interval: int = 15, timeout_s: int | None = None,
+) -> None:
+    """
+    Poll Glue job until terminal state.
+
+    Real bug fixed here (2026-07-09 audit): this loop was a bare `while
+    True` with no timeout at all -- a stuck Glue job (e.g. a hung Spark
+    executor) would block the calling worker thread forever, with no way
+    to time out, auto-cancel, or free the slot for other tables. Now bounded
+    by GLUE_JOB_TIMEOUT_SECONDS (config/settings.py), same pattern as
+    athena_client.py's _poll(): stop the job and raise on expiry rather
+    than hang indefinitely.
+    """
+    tmo = timeout_s if timeout_s is not None else GLUE_JOB_TIMEOUT_SECONDS
+    started_at = time.monotonic()
+
     while True:
+        elapsed = time.monotonic() - started_at
+        if tmo is not None and elapsed >= tmo:
+            log.error("compaction.glue_timeout", run_id=run_id,
+                      elapsed_s=round(elapsed, 1), timeout_s=tmo)
+            try:
+                glue.batch_stop_job_run(JobName=COMPACTION_GLUE_JOB, JobRunIds=[run_id])
+                log.info("compaction.glue_auto_stopped_on_timeout", run_id=run_id)
+            except Exception as ce:
+                log.warning("compaction.glue_auto_stop_failed", run_id=run_id, error=str(ce))
+            raise RuntimeError(
+                f"Glue job {run_id} timed out after {elapsed:.0f}s (limit={tmo}s)"
+            )
+
         resp  = glue.get_job_run(JobName=COMPACTION_GLUE_JOB, RunId=run_id)
         state = resp["JobRun"]["JobRunState"]
         if state == "SUCCEEDED":
@@ -237,5 +265,6 @@ def _wait_for_glue_job(glue, run_id: str, poll_interval: int = 15) -> None:
         if state in ("FAILED", "ERROR", "TIMEOUT", "STOPPED"):
             error = resp["JobRun"].get("ErrorMessage", "unknown")
             raise RuntimeError(f"Glue job {run_id} {state}: {error}")
-        log.debug("compaction.glue_polling", run_id=run_id, state=state)
+        log.debug("compaction.glue_polling", run_id=run_id, state=state,
+                  elapsed_s=round(elapsed, 1))
         time.sleep(poll_interval)

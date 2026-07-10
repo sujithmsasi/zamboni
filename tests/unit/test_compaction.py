@@ -2,6 +2,10 @@
 Unit tests for compaction strategy SQL/param builders and dynamic router.
 No AWS required.
 """
+from unittest.mock import MagicMock
+
+import pytest
+
 from engine.operations.dynamic_router import route
 from engine.strategies.binpack import build_optimize_sql, estimate_output_files
 from engine.strategies.sort import build_glue_params as sort_params
@@ -155,3 +159,43 @@ def test_route_reason_populated():
     decision = route(tier="critical", total_size_gb=15.0, total_files=1500)
     assert len(decision.reason) > 0
     assert "STANDARD" in decision.reason
+
+
+# ── Glue job polling timeout (2026-07-09 audit) ───────────────────────────────
+# _wait_for_glue_job() used to be a bare `while True` with no timeout at
+# all -- a stuck Glue job would hang the calling worker thread forever.
+
+def test_wait_for_glue_job_times_out_on_stuck_job():
+    from engine.operations.compaction import _wait_for_glue_job
+
+    glue = MagicMock()
+    glue.get_job_run.return_value = {"JobRun": {"JobRunState": "RUNNING"}}
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        _wait_for_glue_job(glue, "run-stuck", poll_interval=0, timeout_s=0)
+
+    glue.batch_stop_job_run.assert_called_once_with(
+        JobName="zamboni-compaction", JobRunIds=["run-stuck"]
+    )
+
+
+def test_wait_for_glue_job_succeeds_before_timeout():
+    from engine.operations.compaction import _wait_for_glue_job
+
+    glue = MagicMock()
+    glue.get_job_run.return_value = {"JobRun": {"JobRunState": "SUCCEEDED"}}
+
+    _wait_for_glue_job(glue, "run-ok", poll_interval=0, timeout_s=300)  # must not raise
+    glue.batch_stop_job_run.assert_not_called()
+
+
+def test_wait_for_glue_job_still_raises_on_failed_state():
+    from engine.operations.compaction import _wait_for_glue_job
+
+    glue = MagicMock()
+    glue.get_job_run.return_value = {
+        "JobRun": {"JobRunState": "FAILED", "ErrorMessage": "OOM"}
+    }
+
+    with pytest.raises(RuntimeError, match="FAILED"):
+        _wait_for_glue_job(glue, "run-failed", poll_interval=0, timeout_s=300)
