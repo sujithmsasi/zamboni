@@ -127,9 +127,9 @@ tests/api/           100 tests — run as its own `pytest tests/api`
 table + `app/components/ctrlm_helper.py` + CSV job-mapping import/export UI.
 Gate1 in `hk_engine.py` reads these fields for the Control-M dependency check.
 
-## Test Baseline (2026-07-06, updated through 2026-07-10 control-plane write-path/sync fixes)
+## Test Baseline (2026-07-06, updated through 2026-07-11 structured-hardening-plan fixes)
 ```
-python -m pytest tests/unit -q   → 634 passed
+python -m pytest tests/unit -q   → 719 passed
 python -m pytest tests/api -q    → 100 passed   (separate invocation — see Phase 2 entry)
 ruff check .                     → All checks passed!
 cd ui && npx tsc --noEmit        → clean
@@ -2977,3 +2977,516 @@ passing, ruff clean, cfn-lint clean.
   tables.
 - No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, or the lock
   service this session.
+
+2026-07-10 UI-wide validation/tooltip audit + fixes. Sujith asked for a
+pass across every page checking required-field enforcement, general
+validation, and tooltips. Investigated first (all 13 pages' forms) before
+changing anything — key finding: `api/models.py` has zero field-level
+validation anywhere (no `EmailStr`, no regex, no validators), so the React
+forms are the only line of defense in the whole system, and roughly half
+the app's forms use real AntD `Form` rules while the other half are raw
+`useState` + toast-on-submit with no inline errors. 15 gaps found; fixed
+in priority order. `tsc --noEmit`/`npm run build`/`npm run lint` all
+clean; live-verified the highest-risk flows (DomainFormModal's cross-field
+check, EscalationMatrixTab's lookup-key/email validation, BulkApplyTab's
+preview gate, EditTableTab's Control-M field) against the seeded local DB
+via Playwright — zero real console errors (two `pageerror` events during
+testing turned out to be Playwright's own internal `PlaywrightError`
+class, not application errors — confirmed by checking real browser
+console output separately, which showed zero errors for the identical
+interaction sequence).
+- **Real bug, not just a gap**: `ui/src/components/ControlMFields.tsx`'s
+  `jobNameRequired` prop was wired backwards — Register (`BrowseRegisterTab.tsx`)
+  passed nothing (not required) while Edit (`TableRegistration/EditTableTab.tsx`)
+  passed `jobNameRequired` (required) — the opposite of the component's own
+  docstring, and backend-confirmed wrong either way (`controlm_pipeline_job`
+  is `str | None` with no required constraint anywhere, and the Register
+  page's own visible label already says "Control-M Integration (optional)").
+  Removed the prop entirely (now unused at both call sites) rather than
+  swap which side got `true`, since neither call site actually wants it
+  required.
+- **`EscalationMatrixTab.tsx`**: added a lookup-key validator mirroring
+  `engine/core/escalation.py::lookup()`'s exact 6-shape priority chain
+  (verified from the actual backend code, not guessed) — a key in any
+  other shape/order, including the plausible-looking `domain:X|tier:Y`
+  with no `env`, can never match a lookup and silently blackholes
+  escalation routing. Added `{ type: 'email' }` to all three
+  previously-unvalidated email fields and a format check on the SNS ARN
+  override.
+- **`DomainFormModal.tsx`**: added `max` bounds to all four retention/
+  threshold fields and ported their tooltips from `1_Domain_Management.py`'s
+  already-authoritative `help` text (Streamlit legacy) rather than
+  guessing new wording. Investigated whether the audit's assumed
+  "hot < archive < stale < auto-delete" single ordering chain was real —
+  it isn't: `hot_retention_days`/`archive_duration_days` govern prod
+  archival, `stale_threshold_days`/`auto_delete_after_days` govern
+  non-prod lifecycle cleanup, two unrelated pipelines. Added only the one
+  cross-field check actually grounded in the code (`auto_delete_after_days`
+  must exceed `stale_threshold_days`, since they're sequential stages of
+  the same Lifecycle Engine state machine), not an invented 4-field chain.
+- **`BulkApplyTab.tsx`** (Policy Config) and **`EngineFlagsTab.tsx`**'s
+  `BulkApplyFlags`: both applied fleet-wide with only a disabled-button
+  guard and no affected-count preview. Added a Preview step reusing the
+  existing apply mutation with `dry_run: true` (both `apply_template_bulk()`
+  and `bulk_controlm()` already count matched rows regardless of dry_run)
+  — no new endpoint needed. Preview invalidates on any scope/flag change
+  so a stale count can't be confirmed against a different selection.
+- **`AddTemplate.tsx`/`EditTemplate.tsx`**: ported `EditTableTab.tsx`'s
+  compaction strategy/engine cross-check (sort/zorder requires Glue) and,
+  for `EditTemplate.tsx`, the window/blackout start-time format + conflict
+  check that was completely absent — both matter more here than on the
+  single-table version since templates apply fleet-wide. Also fixed
+  `AddTemplate.tsx`'s name normalization (`.toUpperCase()` alone didn't
+  convert spaces to underscores despite the tooltip's promised convention;
+  now does, with a heads-up toast if the name was adjusted).
+- **`BrowseRegisterTab.tsx`/`TableRegistration/EditTableTab.tsx`**: added
+  `{ type: 'email' }` to `owner_email`, matching `DomainFormModal`'s
+  existing pattern for the same concept.
+- **`NonProdLifecycle`**: unified `BulkActionTab.tsx` (previously accepted
+  any non-empty reason) and `SingleActionTab.tsx` (previously required 10+
+  chars) onto the same `MIN_REASON_LENGTH = 10` for the identical
+  "Business Reason" field — same action, same audit trail, was silently
+  inconsistent depending on which tab was used.
+- **`ControlMIntegration/JobRegistry.tsx`**: `AddSingleJob` now checks the
+  already-fetched job list for a case-insensitive name collision before
+  submitting — `upsert_job` is `INSERT OR REPLACE` keyed on `job_name`, so
+  adding a name that already exists silently overwrote it (and every
+  table pointed at it) with zero warning. Added HH:MM format validation
+  to both `AddSingleJob` and `EditJobModal`'s start-time field (submit-time
+  error, not `ManualApply.tsx`'s silent-reset-with-no-message pattern,
+  which the audit itself flagged as its own UX gap not worth copying).
+- **`WindowBlackoutEditor.tsx`**: added live inline validation on the
+  scheduled-window start-time field (format + blackout-hour-conflict,
+  `status="error"` + message) — previously a plain `<Input>` with zero
+  widget-level feedback, relying entirely on each parent form's
+  submit-time toast. Added tooltips to delay/duration explaining what
+  each actually gates.
+- **Not changed, deliberately**: `Settings/GeneralTab.tsx` was already the
+  best-bounded numeric-field file in the app (real min/max on every
+  field, explanatory captions) — held up as the reference pattern rather
+  than rewritten. Cost Explorer tag key/value format validation and
+  per-line backup-pattern format checks were noted in the audit as low
+  priority and left alone.
+- Frontend-only — no engine/api/schema changes.
+
+2026-07-10 Max-effort local review (org-drop prep, second pass) + all 6
+findings fixed. Sujith asked for a second review before org drop; the
+findings below were each independently verified against the actual code
+(not taken on faith) before fixing — one (the CI masking bug) was
+confirmed real but low-severity, the other five were confirmed severe.
+663 unit (634 + 29 new) + 100 api tests passing, ruff clean, cfn-lint
+clean (deploy/zamboni-cfn.yaml itself untouched this pass).
+
+- **`engine/core/integrity_checker.py` — real false-positive bug, not
+  just "fails open"**: `capture_state()` swallowed Glue/Athena exceptions
+  and left `metadata_location=None`; `verify_advanced()`'s
+  `before.metadata_location != after.metadata_location` then read a
+  capture failure on exactly one side as "the pointer changed" (`None !=
+  "s3://real/path"` is `True`), reporting a false `VERIFIED` for a run
+  whose before/after state was never actually confirmed — the exact
+  incident class this module exists to catch, hiding behind a transient
+  Glue API blip. Fixed with a new `TableState.capture_ok` flag (`False`
+  when the Glue lookup raises or the table isn't found, not when it's
+  fetched and genuinely empty); `verify_advanced()` now returns `FAILED`
+  immediately if either side's capture failed, before ever reaching the
+  None-vs-value comparison. `tests/unit/test_integrity.py` gained
+  `capture_ok` coverage plus the two regression tests that prove the
+  fix (`test_verify_before/after_capture_failed_fails_closed_not_false_verified`).
+- **Lock heartbeat was genuinely dead code**: `LOCK_HEARTBEAT_SECONDS`
+  and `LockService.heartbeat()` (contracts.md §3.1) both existed but
+  nothing anywhere called `heartbeat()` (confirmed via repo-wide grep) —
+  a long-running OPTIMIZE/VACUUM (a bloated table's Glue job can run up
+  to `GLUE_JOB_TIMEOUT_SECONDS`=3600s, close to `LOCK_TTL_MINUTES`=120min)
+  could outlive its lock's TTL and let a second trigger acquire the
+  "expired" lock while the first run was still in flight — the exact
+  race locking exists to prevent. Fixed with `engine/core/lock_service.py::
+  LockHeartbeat` (new) — a background daemon thread that calls
+  `lock_service.heartbeat(lock)` on a fixed interval for as long as it's
+  held, `start()`ed right after `acquire()` and `stop()`ped in the same
+  `finally` block as `release()` — covers the whole run regardless of
+  which internal call is slow, so no callback needed threading through
+  `compaction.py`/`vacuum.py`/`athena_client.py`'s individual polling
+  loops. Wired into all three lock-holding call sites:
+  `orchestrator.py::run_table_maintenance()`,
+  `archival_engine.py::_process_table()`,
+  `lifecycle_engine.py::run_cleanup()`. New
+  `tests/unit/test_lock_heartbeat.py` (3 tests: ticks periodically,
+  `stop()` doesn't block for the full interval, a tick exception doesn't
+  kill the thread); existing orchestrator/archival/lifecycle lock tests
+  (`MagicMock`/real-`LockService` fixtures) verified unaffected — the
+  heartbeat thread's `stop()` fires before the interval ever elapses in a
+  fast-running test, so it never actually calls `.heartbeat()` in any of
+  them.
+- **`engine/engines/lifecycle_engine.py` — notification could fail
+  silently while the deletion countdown still started**: `_evaluate_table()`
+  wrote `greenzone_expires_at`/`pending_drop_expires_at` (via `_transition()`)
+  *before* attempting the SNS send, and `notifier.send()` swallows
+  failures, returning `None` with no retry — a transient SNS failure
+  meant an owner's GREENZONE warning or PENDING_DROP final notice could
+  silently never arrive while the countdown to a real Glue `DROP` still
+  ran. Fixed by notifying first: on success, transition as before; on
+  failure (`msg_id is None`), leave the table in its current state, fire
+  an `notifier.send_alert()` (ops-channel visibility), write a
+  `NOTIFY_FAILED` log entry, and return a new `"notify_failed"` outcome
+  so the next scheduled Lifecycle scan retries both the notification and
+  the countdown from scratch instead of advancing on a best-effort basis.
+  `run()`'s tally gained a `notify_failed` counter (surfaced in
+  `summary_dict()`, distinct from `skipped`/`succeeded`/`failed`). New
+  `tests/unit/test_lifecycle_notify_ordering.py` (6 tests): both
+  transitions' failure-defers-and-alerts + success-transitions paths,
+  dry-run still never calls the real notifier, and `run()`'s tally.
+- **`engine/core/control_plane.py` — writes could report success when
+  nothing was persisted**: `local_db.py::run_query_local()` catches any
+  SQLite exception and returns `None` (by design, shared with
+  `athena_client.py`'s much wider blast radius, not changed here), but
+  every `api/services/*.py` write path built on `control_plane.run_query()`/
+  `update_row()` (tables, domains, policies, gates, lifecycle, controlm)
+  either ignored the return value entirely or hardcoded `return True`
+  after calling it — a genuine write failure (disk full, a locked file,
+  corruption) would report a 200/success to the UI while nothing was
+  actually saved. Fixed with a new `ControlPlaneWriteError` raised from
+  `control_plane.run_query()` when the underlying write returns `None` —
+  a single-point fix, since every caller already propagates exceptions
+  uncaught (confirmed via grep: no `api/services/*.py` write path wraps
+  these calls in a `try/except`) straight to `api/main.py`'s existing
+  generic `Exception` handler, which already converts to a real 500 in
+  the locked envelope shape. No caller-side code changes needed —
+  `controlm_svc.py`'s `upsert_job()`/`register_job_if_missing()`/
+  `delete_job()`'s `return True` lines simply never execute on failure
+  now, the exception propagates instead. 2 new regression tests in
+  `tests/unit/test_control_plane.py`
+  (`test_run_query_write_failure_raises_instead_of_silent_none`,
+  `test_update_row_write_failure_raises`).
+- **Control-plane recovery was genuinely incomplete** (the highest-value
+  fix this pass, and the closest to already having happened for real):
+  `deploy/zamboni-cfn.yaml`'s EC2 root EBS volume is
+  `DeleteOnTermination: true`, and `scripts/control_plane_backup.py` had
+  `take_backup()`/`prune_backups()` but no restore function at all — an
+  EC2 instance replacement (already confirmed to have happened once, see
+  the earlier 2026-07-10 UserData-hardening entry above) would silently
+  start `/data/zamboni/zamboni_control.db` empty, with `after_install.sh`
+  only running `init_control_plane_db.py`'s `CREATE TABLE IF NOT EXISTS`
+  (no data restore) — every registered domain/table/policy/gate/
+  Control-M mapping gone, no automated way back. Fixed in four parts:
+  1. `engine/utils/s3_client.py` gained `download_file()` (mirrors the
+     existing `upload_file()`).
+  2. `scripts/control_plane_backup.py` gained `list_backups()` (newest
+     first) and `restore_latest(dest_path)` (downloads the newest backup,
+     returns `None` if none exist yet — a genuinely first-ever deployment,
+     correct to stay empty).
+  3. `scripts/init_control_plane_db.py` gained `_is_genuinely_empty()`
+     (True only if ALL 5 control-plane tables have zero rows) and
+     `_attempt_restore_on_empty()`, called from `main()` whenever
+     `not ZAMBONI_LOCAL_MODE and _is_genuinely_empty(...)` — this is what
+     makes the auto-heal safe: a normal CodeDeploy redeploy on the SAME
+     instance never wipes `/data/zamboni` (only a real instance
+     replacement does), so an existing instance's tables already have
+     rows and this branch is never reached; it can only fill in a
+     genuinely blank slate, never clobber live data with a stale backup.
+     Closes the cached SQLite connection and drops it from
+     `local_db._conns` before overwriting the file out from under it (a
+     live connection doesn't notice its backing file being replaced), so
+     the next `get_connection()` call reopens fresh against the restored
+     file.
+  4. `scripts/control_plane_restore.py` (new): the manual, human-operated
+     CLI counterpart (same pattern as `scripts/recover_metadata.py`) —
+     lists/selects a specific backup, previews the restore plan, requires
+     typing `RESTORE` to confirm, preserves the existing file as
+     `<name>.pre-restore-<timestamp>` before overwriting (never blind-
+     clobbers), for the case where auto-restore didn't fire or picked up
+     the wrong backup.
+  5. **Compounding risk also closed**: `control_plane_sync.py`'s
+     full-table overwrite deliberately never skipped an empty SQLite
+     table (needed to reflect real one-row-at-a-time deletes) — but
+     combined with the gap above, a sync cycle running against a
+     just-wiped, not-yet-restored instance would have pushed an empty
+     overwrite to Athena too, destroying the secondary durability copy
+     `control_plane_backup.py`'s own docstring relies on. Added a new
+     `SuspiciousEmptyOverwrite` guard in `sync_table()`: if the SQLite
+     side is empty AND the real Athena table still has rows, abort that
+     table's sync (no `to_iceberg` call), log + `notifier.send_alert()`,
+     rather than push the overwrite — new
+     `CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE` setting (default `false`,
+     `config/settings.py`) is the documented escape hatch for a genuine,
+     operator-confirmed full clear-out.
+  New tests: `tests/unit/test_control_plane_backup.py` gained 4
+  (`list_backups` newest-first/empty, `restore_latest` downloads-newest/
+  returns-None-when-empty); `tests/unit/test_init_control_plane_db.py`
+  (new, 7 tests: empty-detection true/false, restore-calls-with-right-
+  path-and-drops-connection, no-backup-leaves-empty, restore-failure-
+  recreates-tables, `main()`'s local-mode-skip and
+  outside-local-mode-attempts wiring); `tests/unit/test_control_plane_sync.py`
+  gained 4 (blocks-when-athena-has-rows-and-alerts, override-env-allows-it,
+  athena-count-unavailable-doesn't-block, plus the pre-existing
+  emptied-table test updated to mock a genuinely-empty Athena side so it
+  doesn't attempt a real, un-mocked Athena call under the new guard).
+- **`deploy/buildspec.yml`'s integration-test gate** — confirmed real but
+  low-severity: `|| echo "...skipping"` masked ANY non-zero pytest exit
+  code uniformly, not just exit 5 ("no tests collected", the only case
+  meant to be tolerated) — currently harmless (zero integration tests
+  exist yet) but a live footgun for the day a real integration test
+  starts failing, since CodeBuild would print the same generic message
+  and pass the build regardless. Fixed to branch on the actual exit
+  code: 5 → non-fatal skip message, anything else non-zero → re-exit
+  with that code, failing the build for real. Verified the rewritten
+  multi-line command both parses as valid YAML (`yaml.safe_load`) and is
+  valid POSIX shell (`bash -n`).
+- No changes to `deploy/zamboni-cfn.yaml` itself this pass (the EBS
+  `DeleteOnTermination: true` root-volume decision and the "no dedicated
+  data volume" call were both already deliberate, documented tradeoffs
+  from earlier sessions — this pass closes the *software-side* recovery
+  gap around that decision, not the infra decision itself) — `cfn-lint`
+  reconfirmed clean regardless. The demo-auth-is-not-real-security finding
+  from this same review round was left as-is: it's already documented
+  everywhere in this file as an intentional, OIDC-seam-pending stub, and
+  the only real "fix" is a genuine SSO integration, which is a scope
+  decision for Sujith, not a drive-by code change.
+
+2026-07-11 Structured hardening plan (4 of 7 items) — Safe VACUUM,
+lock-lease ownership, control-plane recovery, and strict control-plane
+errors. Sujith supplied a detailed, execution-ordered remediation table
+(development approach / proposed solution / acceptance criteria per
+row) building on the 2026-07-10 review fixes above. Worked the first 4
+items in the given order; Authentication (item 5) is a checkpoint —
+it needs an OIDC-provider/TLS-topology decision only Sujith can make,
+so it's deliberately not started. 719 unit (663 + 56 new) + 100 api
+tests passing, ruff clean, cfn-lint clean.
+
+- **Safe VACUUM fails open → fails closed, fully** (extends the
+  2026-07-10 integrity_checker fix into `maintenance_ops.py` and adds the
+  Athena-side half of the capture-status split):
+  - `engine/core/integrity_checker.py`'s `TableState.capture_ok` split
+    into two independent flags -- `metadata_capture_ok` (Glue) and
+    `snapshot_capture_ok` (Athena `"$snapshots"`). Real gap this closes:
+    a Glue success alongside an Athena snapshot-query failure used to
+    leave `snapshot_count=None` on that side, which the count/age checks
+    in `verify_advanced()` silently skip via `is not None` guards --
+    meaning a real snapshot-count regression could go completely
+    unverified any time the Athena side alone failed, even though the
+    metadata-pointer check looked fine. `verify_advanced()` now checks
+    both flags explicitly and fails the whole verification (not just the
+    parts that happen to depend on the missing value) if either side's
+    snapshot capture failed. Also tightened `capture_state()`: an empty
+    `COUNT(*)` result (which should never legitimately happen -- COUNT
+    always returns exactly one row) now also marks `snapshot_capture_ok
+    = False` rather than silently leaving `snapshot_count=None`
+    unflagged.
+  - `engine/core/maintenance_ops.py` — every Safe-VACUUM prerequisite now
+    either succeeds or raises the new `SafetyCheckError`, with zero
+    "log a warning and proceed anyway" paths left:
+    - `_clamp_vacuum_properties()`'s `ALTER TABLE ... SET TBLPROPERTIES`
+      failure is now fatal (raises `SafetyCheckError`) instead of a
+      logged warning that let VACUUM run against whatever properties
+      happened to already be set. A new `_verify_effective_vacuum_properties()`
+      reads the properties back from Glue afterward and raises if they
+      don't match what was just clamped -- a "successful" ALTER call
+      doesn't by itself guarantee Athena applied the exact values
+      requested. Skipped for `dry_run` (nothing was written to verify)
+      and `ZAMBONI_LOCAL_MODE` (no Glue/TBLPROPERTIES equivalent in
+      SQLite, same documented approximation `_preflight_sanity` already
+      used).
+    - `_preflight_sanity()`'s `"$snapshots"` query failure or incomplete
+      result (empty/null `total_snapshots`) now raises `SafetyCheckError`
+      outside local mode, instead of silently defaulting
+      `would_expire_pct` to 0.0 -- that default reads as "nothing will
+      expire," exactly the falsely-reassuring value that let the
+      abort-above-threshold check pass straight through a real AWS outage
+      or permissions issue. `_files_metrics()` gained a `required: bool`
+      param (`True` for the pre-flight "before" call, `False` for the
+      post-audit "after" call -- a post-audit metrics failure shouldn't
+      retroactively fail a VACUUM that already ran) with the same
+      raise-on-failure-or-incomplete-result behavior.
+    - `run_safe_vacuum()` catches `SafetyCheckError` from either step and
+      converts it into the EXISTING `SafeVacuumResult.aborted` path (same
+      one the pre-existing sanity-threshold abort already used) --
+      reuses tested machinery in `orchestrator.py`'s
+      `_run_safe_vacuum_step()` (audit row via `write_vacuum_audit()`,
+      `FAILURE` status, `_trip_and_alert()` circuit-breaker trip + SNS
+      alert) with zero changes needed to `orchestrator.py` for this part.
+    - Fault-injection tests in `tests/unit/test_maintenance_ops.py` prove
+      VACUUM is never called when the property write, property
+      verification, snapshot query, or files query fails or returns an
+      incomplete result -- matching the acceptance criteria verbatim.
+- **Lock heartbeat: background logging → real lease with ownership
+  loss detection**:
+  - `engine/core/lock_service.py::LockHeartbeat` gained `lost` (property)
+    and `assert_held()` (raises the new `LockLostError`), usable as a
+    context manager (`with LockHeartbeat(...) as hb:`). The lease is
+    marked lost -- permanently, never resets -- either immediately on a
+    REJECTED heartbeat (`lock_service.heartbeat()` returns `False`,
+    meaning someone else's `lock_owner` is now on record: the lease
+    genuinely expired and was stolen) or after
+    `MAX_CONSECUTIVE_FAILURES` (3) heartbeat *errors* in a row (can no
+    longer trust the lease is still being renewed, even without an
+    explicit theft signal). A single transient error does NOT mark it
+    lost.
+  - Cancellation threaded into the actual polling loops so a lost lease
+    stops in-flight work, not just future work: `engine/utils/
+    athena_client.py`'s `_poll()`/`run_query()`/`read_sql()` gained a
+    `cancel_check` param (checked every poll interval, ahead of the
+    timeout check -- a lost lease is a more urgent signal than "still
+    waiting"), raising the new `AthenaQueryCancelledLeaseLost` and
+    actively cancelling the query via `stop_query_execution`.
+    `engine/operations/compaction.py::_wait_for_glue_job()` got the same
+    treatment (`GlueJobCancelledLeaseLost`, `batch_stop_job_run`).
+    `engine/operations/vacuum.py::run_expire_snapshots()`/
+    `run_orphan_cleanup()` check `cancel_check` between iterations/before
+    submitting (`VacuumCancelledLeaseLost`).
+  - Explicit `assert_held()` calls immediately before every irreversible
+    step, not just passive cancel_check threading:
+    `orchestrator.py::_run_optimize_step()`/`_run_safe_vacuum_step()`
+    (LockLostError is caught by the existing generic `except Exception`,
+    getting the same FAILURE/trip-breaker/alert handling as any other
+    step failure -- zero new exception-handling code needed there);
+    `maintenance_ops.run_safe_vacuum()` also checks `cancel_check`
+    explicitly right before the VACUUM call itself, converting a lost
+    lease into the same `SafeVacuumResult.aborted` path as the Safe-VACUUM
+    prerequisite failures above (`aborted_reason="LEASE_LOST"`).
+    `engine/operations/archival.py::archive_partition()` gained
+    `cancel_check`, checked immediately before the one irreversible
+    step (`_delete_partition()` -- the export already landed in S3
+    either way, so refusing only the delete is safe and retryable).
+    `engine/operations/catalog_cleanup.py::cleanup_table()` gained the
+    same, checked before the Glue `DROP`.
+  - Wired into ALL FOUR lock-holding call sites, not just
+    `orchestrator.py`: `archival_engine.py::_process_table()` (the SAME
+    lock/lease covers every partition in that table's `ThreadPoolExecutor`
+    batch, so a lease lost mid-run correctly blocks every remaining
+    partition's delete step, not just the one that triggered it),
+    `lifecycle_engine.py::run_cleanup()`, and -- per the phase brief's
+    explicit "add heartbeat to the legacy HK path" instruction --
+    `hk_engine.py`'s pre-orchestrator per-op flow (`ORCHESTRATED_MAINTENANCE
+    =false` rollback lever), which also gained a startup warning log
+    making clear that path still lacks Safe-VACUUM's property-clamp/
+    readback/pre-flight checks even with the heartbeat now wired in.
+  - Tests simulate every scenario the acceptance criteria named:
+    expiry/permanent-failure (`MAX_CONSECUTIVE_FAILURES` reached),
+    rejected heartbeat (theft, immediate), transient failure (does NOT
+    mark lost), and lease-lost-preventing-a-subsequent-operation at both
+    the lease-class level (`test_lock_heartbeat.py`) and the orchestrator/
+    polling-loop level (`test_orchestrator.py`'s two
+    `test_lease_*_prevents_*` tests, `test_hardening_sprint7.py`'s
+    `TestAthenaTimeout` additions, `test_compaction.py`, `test_vacuum.py`).
+- **Control-plane recovery: partially fail-closed → fully fail-closed**:
+  - `deploy/zamboni-cfn.yaml` gained a dedicated, retained EBS volume
+    (`ZamboniControlPlaneVolume` + `ZamboniControlPlaneVolumeAttachment`,
+    `DeletionPolicy`/`UpdateReplacePolicy: Retain`, AZ resolved from
+    `!GetAtt ZamboniInstance.AvailabilityZone` -- the standard non-
+    circular EC2-plus-EBS-in-one-template pattern) mounted at
+    `/data/zamboni` by new UserData logic (`mount_control_plane_volume`
+    -- formats only a genuinely fresh/unformatted volume, checked via
+    `blkid`, NEVER reformats one carrying real data; tries
+    `/dev/sdf`/`/dev/xvdf`/`/dev/nvme1n1` in order for AL2023's Nitro
+    device-naming quirk). This directly protects against the common case
+    (a CFN-driven instance replacement, e.g. AmiId drift) since CFN
+    detaches/reattaches the SAME volume to the new instance rather than
+    losing it -- unlike the root volume's `DeleteOnTermination: true`.
+    Does NOT cover an instance replaced entirely outside CloudFormation's
+    awareness (manual termination) -- the S3 backup/restore mechanism
+    remains the fallback for that, documented explicitly on the new
+    `ControlPlaneVolumeSizeGiB` parameter. `deploy/scripts/after_install.sh`'s
+    step 7 changed from an unconditional `mkdir -p /data/zamboni` to a
+    hard `mountpoint -q` check that exits non-zero if it's not a real
+    mount -- the previous unconditional mkdir would have silently
+    succeeded creating a plain directory on ephemeral root storage if the
+    dedicated-volume mount had failed, masking the failure until the next
+    replacement wiped it, having never actually been on retained storage.
+  - `scripts/control_plane_backup.py::restore_latest()` no longer
+    downloads a backup straight onto the live DB path. New `_restore_key()`
+    downloads to a temp file in the SAME directory (guarantees
+    `os.replace()` is same-filesystem, hence atomic), runs
+    `_validate_backup_file()` (`PRAGMA integrity_check` + confirms all 5
+    `CONTROL_PLANE_TABLES` are present -- catches both a corrupted/
+    truncated download and a backup taken by an incompatible schema
+    version), and only then atomically replaces the destination -- a
+    failed validation raises `BackupValidationError` with the live file
+    completely untouched. `scripts/control_plane_restore.py` (the manual
+    CLI) now routes through the same `_restore_key()` instead of its own
+    raw `download_file()` call, so the operator-driven path gets the
+    identical guarantee.
+  - `scripts/init_control_plane_db.py::main()` now genuinely fails
+    closed: if the control-plane DB is still empty after
+    `_attempt_restore_on_empty()` (no usable backup existed), it raises
+    the new `ControlPlaneEmptyAndNoBackupError` -- failing this script
+    and, via `after_install.sh`'s `set -e`, the whole CodeDeploy
+    AfterInstall hook -- UNLESS the new `ZAMBONI_CONTROL_PLANE_FIRST_INSTALL`
+    setting (`config/settings.py`, default `false`) explicitly
+    acknowledges a genuine first-ever deployment. Documented in both
+    `.env.example` and `.env.aws_local.example` as a one-time
+    acknowledgment, not a standing setting.
+  - `scripts/control_plane_sync.py::_athena_row_count()` tightened to
+    match the existing `_fetch_engine_owned_columns()` convention: only a
+    confirmed table-not-found-shaped Athena error is treated as "nothing
+    to protect" (returns `None`); any OTHER failure (a permissions issue,
+    throttling, a network blip) now raises `SuspiciousEmptyOverwrite`
+    instead of being silently treated the same as "confirmed safe" --
+    the previous version defeated its own guard for any transient Athena
+    error, not just a genuinely fresh table.
+  - Acceptance-criteria note: RPO/RTO were not separately measured this
+    pass (no real AWS environment available here to time an actual
+    replacement-instance drill against) -- the validated restore path
+    (temp file + integrity check + atomic replace) and the fail-closed
+    startup gate are the mechanisms that make an RPO/RTO measurement
+    meaningful once run against a real environment; `docs/deployment/
+    ec2_api_deploy.md`'s post-deploy validation section is the natural
+    place for Sujith to record real numbers from an actual drill.
+- **Control-plane errors: lenient-everywhere → strict for production,
+  lenient only for local/demo UI simulation**:
+  - `engine/utils/local_db.py` gained `read_sql_strict()`/
+    `run_query_strict()` as NEW, separate functions (not a behavior
+    change to `read_sql_local()`/`run_query_local()`, which stay exactly
+    as lenient as before -- still used directly by `athena_client.py`'s
+    `ZAMBONI_LOCAL_MODE` branch and local/demo UI simulation, where a
+    broken query should render "no rows" rather than crash the page).
+    `read_sql_strict()` raises the new `LocalDbReadError` on a genuine
+    read failure (never on a query that runs fine and matches zero rows
+    -- that distinction is the whole point). `run_query_strict()` raises
+    the new `LocalDbWriteError` on a write failure, and (when
+    `expect_rowcount=True`) also on an UPDATE/DELETE that matched zero
+    rows.
+  - `engine/core/control_plane.py::read_sql()` now raises the new
+    `ControlPlaneReadError` (wrapping `LocalDbReadError`) instead of
+    returning a silently-empty DataFrame indistinguishable from "zero
+    rows matched" -- every `api/services/*.py` GET path built on this
+    (tables, domains, policies, gates, lifecycle, controlm) now gets a
+    real 500 (via `api/main.py`'s existing generic exception handler) for
+    a genuine read failure instead of a false-200-empty-list.
+    `run_query()` gained an `expect_rowcount` param (default `False`,
+    zero behavior change for the many legitimate bulk/idempotent-delete
+    call sites that can validly match zero rows);
+    `update_row()` -- always a single-row UPDATE keyed by a primary key
+    the caller already resolved via a prior read -- now passes
+    `expect_rowcount=True`, so a stale/wrong key or a row deleted
+    concurrently raises `ControlPlaneWriteError` instead of silently
+    "succeeding" having changed nothing. Verified this doesn't break any
+    of the 100 existing API tests (every PUT-to-a-known-fqn test
+    genuinely matches ≥1 row).
+  - `scripts/init_control_plane_db.py`'s migration loop replaced: the old
+    `except Exception: pass` (assuming any ALTER TABLE failure meant
+    "column already exists") could just as easily swallow a genuine
+    failure (a locked file, a disk-full write, a real syntax error) with
+    zero visibility. New `_apply_migrations()` checks `PRAGMA
+    table_info(table)` first to determine whether a column genuinely
+    already exists (the ONLY case silently skipped) and lets any other
+    failure raise for real, wrapped in a single `BEGIN`/`COMMIT`/
+    `ROLLBACK` transaction (SQLite DDL is fully transactional --
+    empirically verified in this session, not assumed) so a failure
+    partway through rolls back every migration in that run rather than
+    leaving a half-migrated schema. New `_verify_schema()` confirms every
+    one of the 5 control-plane tables exists with every
+    `CONTROL_PLANE_MIGRATIONS` column present, called at the end of
+    `main()` -- raises `ControlPlaneSchemaVerificationError` (failing the
+    deploy) if verification fails, rather than letting the app run
+    against a schema silently missing something the rest of the codebase
+    assumes exists.
+- No changes to `vacuum.py`'s Iceberg-syntax/gap logic, `hk_engine.py`'s
+  gate ordering, or the lock-acquire/release contract itself -- every
+  change this session adds a check on top of, or a lease-tracking layer
+  around, existing tested machinery rather than restructuring it.
+- **Deliberately not started: Authentication and authorization (item 5
+  of 7)** -- needs a decision only Sujith can make (which OIDC provider,
+  TLS-termination topology via ALB vs. reverse proxy, the viewer/
+  operator/admin role model) before any code should be written; flagged
+  as a checkpoint rather than guessed at. Items 6 (integration/frontend
+  tests) and 7 (documentation consolidation) also not started, per the
+  agreed execution order.
