@@ -246,7 +246,7 @@ def test_cleanup_refuses_to_drop_when_domain_becomes_inactive_after_the_scan(mon
     cleanup_calls = []
     monkeypatch.setattr(
         lifecycle_engine_mod, "cleanup_table",
-        lambda fqn, dry_run: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
+        lambda fqn, dry_run, cancel_check=None: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
     )
 
     engine = LifecycleEngine(dry_run=False)
@@ -271,7 +271,7 @@ def test_cleanup_refuses_to_drop_when_domain_was_never_registered(monkeypatch, c
     cleanup_calls = []
     monkeypatch.setattr(
         lifecycle_engine_mod, "cleanup_table",
-        lambda fqn, dry_run: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
+        lambda fqn, dry_run, cancel_check=None: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
     )
 
     engine = LifecycleEngine(dry_run=False)
@@ -298,7 +298,7 @@ def test_cleanup_still_drops_when_domain_remains_active(monkeypatch, cleanup_env
     cleanup_calls = []
     monkeypatch.setattr(
         lifecycle_engine_mod, "cleanup_table",
-        lambda fqn, dry_run: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True, "bytes_reclaimed": 0},
+        lambda fqn, dry_run, cancel_check=None: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True, "bytes_reclaimed": 0},
     )
     monkeypatch.setattr(LifecycleEngine, "_mark_dropped", lambda self, *a, **k: None)
     monkeypatch.setattr(LifecycleEngine, "_write_log", lambda self, *a, **k: None)

@@ -34,11 +34,26 @@ DEFAULT_MAX_NULL_PCT   = 5.0
 PARTITION_COL_CANDIDATES = ["partition_date", "business_date", "load_date"]
 
 
+class ArchivalCancelledLeaseLost(RuntimeError):
+    """Raised when the DELETE step is refused because the caller's
+    maintenance lock lease was lost (2026-07-11 audit fix) -- the export
+    already completed and stays in S3 either way; only the destructive
+    staging DELETE is blocked, so a retry (once the table is re-locked)
+    can safely re-run the whole partition from scratch."""
+    def __init__(self, table_fqn: str, partition_date: date):
+        self.table_fqn = table_fqn
+        self.partition_date = partition_date
+        super().__init__(
+            f"DELETE refused for {table_fqn} partition {partition_date} -- maintenance lock lease was lost"
+        )
+
+
 def archive_partition(
     table_row: dict,
     partition_date: date,
     workgroup: str = "archival",
     dry_run: bool = False,
+    cancel_check=None,
 ) -> dict:
     """
     Archive a single partition from staging to S3.
@@ -48,6 +63,12 @@ def archive_partition(
         partition_date:  Date of the partition to archive
         workgroup:       Athena workgroup for queries
         dry_run:         If True, validate only — do not export or delete
+        cancel_check:    Optional zero-arg callable returning True once the
+                         caller's maintenance lock lease is lost
+                         (2026-07-11 audit fix) -- checked immediately
+                         before the DELETE step (the one irreversible
+                         action in this 4-step gate), refusing to delete
+                         if ownership may have moved to another process.
 
     Returns:
         dict with status, rows_archived, bytes_archived, validation outcomes
@@ -188,6 +209,15 @@ def archive_partition(
         return result
 
     # ── Step 4 — Delete from staging ─────────────────────────────────────────
+    if cancel_check is not None and cancel_check():
+        log.error(
+            "archival.delete_refused_lease_lost",
+            table_fqn=table_fqn, partition_date=str(partition_date),
+        )
+        result["status"] = "FAILURE"
+        result["error"]  = str(ArchivalCancelledLeaseLost(table_fqn, partition_date))
+        return result
+
     try:
         _delete_partition(
             table_fqn=table_fqn,

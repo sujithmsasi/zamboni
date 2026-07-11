@@ -25,7 +25,7 @@ from config.settings import NONPROD_REGISTRY_TABLE
 from engine.core import execution_log, notifier, registry
 from engine.core.control_plane import read_sql, run_query
 from engine.core.execution_log import LogEntry
-from engine.core.lock_service import LockService
+from engine.core.lock_service import LockHeartbeat, LockService
 from engine.engines.base import BaseEngine
 from engine.monitoring.activity_scanner import get_activity_signals
 from engine.operations.catalog_cleanup import cleanup_table, is_backup_pattern
@@ -127,10 +127,11 @@ class LifecycleEngine(BaseEngine):
         """
         self._log_start(scope="lifecycle", environment=environment)
 
-        transitioned = 0
-        notified     = 0
-        skipped      = 0
-        errors       = 0
+        transitioned  = 0
+        notified      = 0
+        skipped       = 0
+        errors        = 0
+        notify_failed = 0
 
         tables = self._get_active_registry_tables(environment)
         log.info("lifecycle_engine.lifecycle.tables", count=len(tables))
@@ -145,6 +146,8 @@ class LifecycleEngine(BaseEngine):
                     notified += 1
                 elif outcome == "skipped":
                     skipped += 1
+                elif outcome == "notify_failed":
+                    notify_failed += 1
             except Exception as e:
                 errors += 1
                 log.error("lifecycle_engine.lifecycle.error", table_fqn=fqn, error=str(e))
@@ -156,6 +159,7 @@ class LifecycleEngine(BaseEngine):
             skipped=skipped,
             transitioned=transitioned,
             notified=notified,
+            notify_failed=notify_failed,
         )
         self._log_complete(result)
         return result
@@ -200,6 +204,8 @@ class LifecycleEngine(BaseEngine):
                     log.warning("lifecycle_engine.cleanup.lock_held", table_fqn=fqn)
                     continue
 
+                heartbeat = LockHeartbeat(lock_service, lock)
+                heartbeat.start()
                 try:
                     # Re-check state immediately before the hard delete, not
                     # just at the top-of-run snapshot fetched into `tables`
@@ -239,7 +245,11 @@ class LifecycleEngine(BaseEngine):
                         )
                         continue
 
-                    result = cleanup_table(fqn, dry_run=self.dry_run)
+                    # 2026-07-11 audit fix: cancel_check refuses the Glue
+                    # DROP if this table's lock lease was lost between
+                    # acquire() above and here (e.g. a slow domain-active
+                    # re-check) or during the drop/sweep itself.
+                    result = cleanup_table(fqn, dry_run=self.dry_run, cancel_check=lambda: heartbeat.lost)
 
                     if result.get("catalog_dropped") and result.get("s3_cleaned"):
                         succeeded += 1
@@ -251,6 +261,7 @@ class LifecycleEngine(BaseEngine):
                         self._write_log(table_row, "catalog_cleanup", "FAILURE",
                                         error_message=result.get("error"))
                 finally:
+                    heartbeat.stop()
                     lock_service.release(lock)
 
             except Exception as e:
@@ -289,17 +300,40 @@ class LifecycleEngine(BaseEngine):
         # ── STALE_CANDIDATE → GREENZONE ───────────────────────────────────────
         if current_state == STALE_CANDIDATE:
             expires_at = datetime.now(UTC) + timedelta(days=DEFAULT_GREENZONE_DAYS)
-            self._transition(table_row, STALE_CANDIDATE, GREENZONE,
-                             greenzone_expires_at=expires_at)
-            # Send notification
+            # 2026-07-10 audit fix: notify BEFORE transitioning, not after.
+            # The old order wrote greenzone_expires_at unconditionally, then
+            # attempted the SNS send -- notifier.send() swallows failures
+            # and returns None with no retry, so a transient SNS failure
+            # meant the deletion countdown started silently with the owner
+            # never actually warned. Only start the countdown once the
+            # owner has genuinely been notified; on failure, leave the
+            # table in STALE_CANDIDATE so the next scheduled scan retries
+            # both the notification and the countdown from scratch instead
+            # of advancing on a best-effort basis.
             if not self.dry_run:
-                notifier.send_greenzone_notification(
+                msg_id = notifier.send_greenzone_notification(
                     table_fqn=fqn,
                     owner_email=table_row.get("owner_email", ""),
                     expires_at=expires_at.date(),
                     environment=table_row.get("environment", ""),
                     days_inactive=days_inactive,
                 )
+                if msg_id is None:
+                    log.error("lifecycle_engine.greenzone_notify_failed_deferring_transition", table_fqn=fqn)
+                    notifier.send_alert(
+                        subject="GREENZONE notification failed — transition deferred",
+                        message=(
+                            f"Table: {fqn}\n"
+                            f"Failed to notify owner ({table_row.get('owner_email', '')}) before "
+                            "starting the GREENZONE countdown. State was NOT advanced -- will "
+                            "retry on the next scheduled Lifecycle scan."
+                        ),
+                        table_fqn=fqn,
+                    )
+                    self._write_log(table_row, "lifecycle_transition", "NOTIFY_FAILED")
+                    return "notify_failed"
+            self._transition(table_row, STALE_CANDIDATE, GREENZONE,
+                             greenzone_expires_at=expires_at)
             self._write_log(table_row, "lifecycle_transition", "SUCCESS" if not self.dry_run else "DRY_RUN")
             return "notified"
 
@@ -312,15 +346,33 @@ class LifecycleEngine(BaseEngine):
             expires_at = table_row.get("greenzone_expires_at")
             if expires_at and _parse_ts(expires_at) <= datetime.now(UTC):
                 drop_at = datetime.now(UTC) + timedelta(days=DEFAULT_PENDING_DROP_DAYS)
-                self._transition(table_row, GREENZONE, PENDING_DROP,
-                                 pending_drop_expires_at=drop_at)
+                # Same notify-before-transition fix as GREENZONE above --
+                # matters even more here, since this is the FINAL notice
+                # before a real Glue DROP.
                 if not self.dry_run:
-                    notifier.send_pending_drop_notification(
+                    msg_id = notifier.send_pending_drop_notification(
                         table_fqn=fqn,
                         owner_email=table_row.get("owner_email", ""),
                         drop_at=drop_at.date(),
                         environment=table_row.get("environment", ""),
                     )
+                    if msg_id is None:
+                        log.error("lifecycle_engine.pending_drop_notify_failed_deferring_transition", table_fqn=fqn)
+                        notifier.send_alert(
+                            subject="PENDING DROP final-notice failed — transition deferred",
+                            message=(
+                                f"Table: {fqn}\n"
+                                f"Failed to send the final-notice notification to "
+                                f"{table_row.get('owner_email', '')} before starting the "
+                                "PENDING_DROP countdown to a real DROP. State was NOT "
+                                "advanced -- will retry on the next scheduled Lifecycle scan."
+                            ),
+                            table_fqn=fqn,
+                        )
+                        self._write_log(table_row, "lifecycle_transition", "NOTIFY_FAILED")
+                        return "notify_failed"
+                self._transition(table_row, GREENZONE, PENDING_DROP,
+                                 pending_drop_expires_at=drop_at)
                 self._write_log(table_row, "lifecycle_transition", "SUCCESS" if not self.dry_run else "DRY_RUN")
                 return "notified"
             return "skipped"

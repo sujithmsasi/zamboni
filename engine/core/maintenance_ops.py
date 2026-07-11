@@ -32,6 +32,7 @@ from config.settings import (
     ORPHAN_MIN_AGE_HOURS_FLOOR,
     SNAPSHOT_MIN_AGE_HOURS,
     VACUUM_AUDIT_TABLE,
+    ZAMBONI_LOCAL_MODE,
 )
 from engine.core.health_checker import HealthResult
 from engine.operations import compaction, vacuum
@@ -40,6 +41,26 @@ from engine.utils.logger import get_logger
 from engine.utils.partition_utils import parse_table_fqn
 
 log = get_logger(__name__)
+
+
+class SafetyCheckError(RuntimeError):
+    """
+    Raised when a Safe-VACUUM safety prerequisite -- property clamp,
+    property clamp verification (readback), or pre-flight sanity
+    (snapshots/files query) -- could not be confirmed.
+
+    2026-07-11 audit fix: every one of these previously caught its own
+    exception, logged a warning, and either continued regardless (property
+    clamp) or fell back to a falsely-reassuring default (pre-flight sanity
+    defaulted to would_expire_pct=0.0 on a real query failure, which is
+    exactly the "nothing will expire" reading that lets the abort-above-
+    threshold check pass right through an AWS outage or permissions
+    issue). run_safe_vacuum() now catches this specific exception and
+    converts it into the existing SafeVacuumResult.aborted path (same
+    audit/alert/circuit-breaker handling the pre-existing sanity-threshold
+    abort already has in orchestrator.py) -- VACUUM is never called when
+    any prerequisite is unconfirmed, not just when it's known-bad.
+    """
 
 
 # ── OPTIMIZE ──────────────────────────────────────────────────────────────────
@@ -51,12 +72,19 @@ def run_optimize(
     tier:      str,
     dry_run:   bool = False,
     table_row: dict | None = None,
+    cancel_check=None,
 ) -> dict:
     """Thin wrapper over engine.operations.compaction — single import surface
-    for the orchestrator alongside run_safe_vacuum()."""
+    for the orchestrator alongside run_safe_vacuum().
+
+    cancel_check (2026-07-11 audit fix): zero-arg callable returning True
+    once the caller's maintenance lock lease is lost -- threaded through
+    to compaction.py's Athena/Glue polling loops so a lease lost mid-wait
+    actively cancels the in-flight query/job.
+    """
     return compaction.run_compaction(
         table_fqn=table_fqn, hk_config=hk_config, health=health,
-        tier=tier, dry_run=dry_run, table_row=table_row,
+        tier=tier, dry_run=dry_run, table_row=table_row, cancel_check=cancel_check,
     )
 
 
@@ -82,6 +110,7 @@ def run_safe_vacuum(
     tier:      str,
     workgroup: str,
     dry_run:   bool = False,
+    cancel_check=None,
 ) -> SafeVacuumResult:
     """
     contracts.md §5-A SAFE-VACUUM sequence:
@@ -95,14 +124,35 @@ def run_safe_vacuum(
     vacuum_audit persistence are the orchestrator's job — it already
     captures state around OPTIMIZE too, so that's the single place both
     steps' before/after snapshots live.
+
+    cancel_check (2026-07-11 audit fix): zero-arg callable returning True
+    once the caller's maintenance lock lease is lost. Checked explicitly
+    immediately before the VACUUM call itself (the one genuinely
+    destructive step here) and threaded through to
+    engine.operations.vacuum's iteration loop so a lease lost mid-wait
+    stops further iterations rather than completing them unprotected.
     """
     result = SafeVacuumResult(dry_run=dry_run)
 
-    clamp = _clamp_vacuum_properties(table_fqn, hk_config, workgroup, dry_run)
+    try:
+        clamp = _clamp_vacuum_properties(table_fqn, hk_config, workgroup, dry_run)
+    except SafetyCheckError as e:
+        result.aborted = True
+        result.aborted_reason = f"PROPERTY_CLAMP_FAILED: {e}"
+        log.error("maintenance_ops.safety_check_aborted", table_fqn=table_fqn, reason=result.aborted_reason)
+        return result
+
     floor_hours = clamp["floor_hours"]
     result.older_than_hours_used = int(floor_hours)
 
-    sanity = _preflight_sanity(table_fqn, floor_hours)
+    try:
+        sanity = _preflight_sanity(table_fqn, floor_hours)
+    except SafetyCheckError as e:
+        result.aborted = True
+        result.aborted_reason = f"PREFLIGHT_SANITY_FAILED: {e}"
+        log.error("maintenance_ops.safety_check_aborted", table_fqn=table_fqn, reason=result.aborted_reason)
+        return result
+
     result.sanity_pct      = sanity["would_expire_pct"]
     result.files_estimated = sanity["total_files"]
 
@@ -116,9 +166,15 @@ def run_safe_vacuum(
         )
         return result
 
+    if cancel_check is not None and cancel_check():
+        result.aborted        = True
+        result.aborted_reason = "LEASE_LOST"
+        log.error("maintenance_ops.lease_lost_aborted", table_fqn=table_fqn)
+        return result
+
     result.vacuum_result = vacuum.run_expire_snapshots(
         table_fqn=table_fqn, hk_config=hk_config, health=health,
-        tier=tier, dry_run=dry_run,
+        tier=tier, dry_run=dry_run, cancel_check=cancel_check,
     )
 
     if not dry_run:
@@ -142,6 +198,19 @@ def _clamp_vacuum_properties(
     vacuum_max_snapshot_age_seconds >= max(policy, ORPHAN_MIN_AGE_HOURS_FLOOR,
     SNAPSHOT_MIN_AGE_HOURS) and vacuum_min_snapshots_to_keep >= max(policy, 1).
     Clamped values PERSIST on the table — they ARE the safety floors.
+
+    2026-07-11 audit fix: a failed ALTER TABLE used to be logged as a
+    non-fatal warning and VACUUM would proceed against whatever properties
+    happened to already be set -- meaning a floor that was never actually
+    applied could silently be weaker than intended. Now raises
+    SafetyCheckError on write failure (caught by run_safe_vacuum(), which
+    aborts without calling VACUUM), and -- since a "successful" ALTER call
+    doesn't guarantee Athena actually applied the exact values requested --
+    reads the properties back from Glue afterward and raises if they don't
+    match what was just clamped. Skipped for dry_run (nothing was written
+    to verify) and ZAMBONI_LOCAL_MODE (SQLite has no TBLPROPERTIES/Glue
+    equivalent to read back, same documented approximation
+    _preflight_sanity's "$snapshots"/"$files" already uses).
     """
     policy_days    = int(hk_config.get("snapshot_retention_days") or 7)
     policy_seconds = policy_days * 86400
@@ -166,10 +235,11 @@ def _clamp_vacuum_properties(
     try:
         run_query(sql, workgroup=workgroup, dry_run=dry_run)
     except Exception as e:
-        # Non-fatal — VACUUM still runs against whatever properties are
-        # already set (matches vacuum.py's existing tighten-retention
-        # failure handling convention).
-        log.warning("maintenance_ops.property_clamp_failed", table_fqn=table_fqn, error=str(e))
+        log.error("maintenance_ops.property_clamp_failed", table_fqn=table_fqn, error=str(e))
+        raise SafetyCheckError(f"property clamp write failed for {table_fqn}: {e}") from e
+
+    if not dry_run and not ZAMBONI_LOCAL_MODE:
+        _verify_effective_vacuum_properties(table_fqn, floor_seconds, min_keep)
 
     return {
         "floor_seconds": floor_seconds,
@@ -178,39 +248,90 @@ def _clamp_vacuum_properties(
     }
 
 
+def _verify_effective_vacuum_properties(table_fqn: str, expected_floor_seconds: int, expected_min_keep: int) -> None:
+    """
+    Read back the table's actual TBLPROPERTIES from Glue (the ALTER TABLE
+    SET TBLPROPERTIES call surfaces there) and confirm the clamp really
+    took effect -- a "successful" ALTER call doesn't by itself guarantee
+    Athena applied the exact values requested. Raises SafetyCheckError on
+    any mismatch, missing table, or read failure.
+    """
+    from engine.utils.glue_client import get_table
+
+    _, database, table = parse_table_fqn(table_fqn)
+    try:
+        glue_table = get_table(database, table)
+    except Exception as e:
+        raise SafetyCheckError(f"could not read back table properties for {table_fqn}: {e}") from e
+
+    if not glue_table:
+        raise SafetyCheckError(f"could not read back table properties for {table_fqn}: table not found in Glue")
+
+    params = glue_table.get("Parameters", {}) or {}
+    try:
+        effective_age    = int(params.get("vacuum_max_snapshot_age_seconds", -1))
+        effective_keep   = int(params.get("vacuum_min_snapshots_to_keep", -1))
+    except (TypeError, ValueError) as e:
+        raise SafetyCheckError(
+            f"could not parse effective table properties for {table_fqn}: {params} ({e})"
+        ) from e
+
+    if effective_age != expected_floor_seconds or effective_keep != expected_min_keep:
+        raise SafetyCheckError(
+            f"property clamp did not take effect for {table_fqn}: expected "
+            f"age={expected_floor_seconds}s min_keep={expected_min_keep}, "
+            f"read back age={effective_age}s min_keep={effective_keep}"
+        )
+
+
 def _preflight_sanity(table_fqn: str, floor_hours: float) -> dict:
     """
     contracts.md §5-A step b: would_expire_pct = snapshots older than the
     clamped floor / total snapshots, plus files_count + total_bytes before.
 
-    Local-mode approximation: "$snapshots"/"$files" are Iceberg metadata
-    tables with no SQLite equivalent (engine/utils/local_db.py translates
-    Athena SQL but has no metadata-table concept). read_sql_local() returns
-    an empty DataFrame for these queries, so would_expire_pct is reported
-    as 0.0 (nothing to abort on) rather than raising — the same "empty
-    result = no signal" behavior health_checker.py already relies on for
-    "$snapshots"/"$files" in local mode. Documented in .claude/decisions.md.
+    Local-mode approximation (unchanged, still explicit and documented):
+    "$snapshots"/"$files" are Iceberg metadata tables with no SQLite
+    equivalent (engine/utils/local_db.py translates Athena SQL but has no
+    metadata-table concept), so would_expire_pct is reported as 0.0
+    (nothing to abort on) -- the same "empty result = no signal" behavior
+    health_checker.py already relies on for "$snapshots"/"$files" in local
+    mode.
+
+    2026-07-11 audit fix, outside local mode: a genuine query failure or
+    an incomplete result (no rows, or a null total_snapshots) now raises
+    SafetyCheckError instead of silently defaulting would_expire_pct to
+    0.0 -- that default reads as "nothing will expire," which is exactly
+    the falsely-reassuring value that let this abort-above-threshold check
+    pass right through a real AWS outage or permissions issue. Caught by
+    run_safe_vacuum(), which aborts without calling VACUUM.
     """
     _, database, table = parse_table_fqn(table_fqn)
 
-    would_expire_pct = 0.0
-    try:
-        sql = f"""
-            SELECT
-                COUNT(*) AS total_snapshots,
-                SUM(CASE WHEN committed_at < NOW() - INTERVAL '{int(floor_hours)}' HOUR
-                         THEN 1 ELSE 0 END) AS would_expire
-            FROM "glue_catalog"."{database}"."{table}$snapshots"
-        """
-        df = read_sql(sql, workgroup="app", database=database)
-        if not df.empty and df.iloc[0]["total_snapshots"]:
-            total    = int(df.iloc[0]["total_snapshots"])
-            expiring = int(df.iloc[0]["would_expire"] or 0)
-            would_expire_pct = round(expiring / total * 100, 2) if total else 0.0
-    except Exception as e:
-        log.warning("maintenance_ops.preflight_snapshots_failed", table_fqn=table_fqn, error=str(e))
+    if ZAMBONI_LOCAL_MODE:
+        files = _files_metrics(table_fqn)
+        return {"would_expire_pct": 0.0, "total_files": files["total_files"], "total_bytes": files["total_bytes"]}
 
-    files = _files_metrics(table_fqn)
+    sql = f"""
+        SELECT
+            COUNT(*) AS total_snapshots,
+            SUM(CASE WHEN committed_at < NOW() - INTERVAL '{int(floor_hours)}' HOUR
+                     THEN 1 ELSE 0 END) AS would_expire
+        FROM "glue_catalog"."{database}"."{table}$snapshots"
+    """
+    try:
+        df = read_sql(sql, workgroup="app", database=database)
+    except Exception as e:
+        log.error("maintenance_ops.preflight_snapshots_failed", table_fqn=table_fqn, error=str(e))
+        raise SafetyCheckError(f"pre-flight snapshot sanity check failed for {table_fqn}: {e}") from e
+
+    if df.empty or df.iloc[0]["total_snapshots"] is None:
+        raise SafetyCheckError(f"pre-flight snapshot sanity check returned an incomplete result for {table_fqn}")
+
+    total    = int(df.iloc[0]["total_snapshots"])
+    expiring = int(df.iloc[0]["would_expire"] or 0)
+    would_expire_pct = round(expiring / total * 100, 2) if total else 0.0
+
+    files = _files_metrics(table_fqn, required=True)
     return {
         "would_expire_pct": would_expire_pct,
         "total_files":      files["total_files"],
@@ -218,8 +339,14 @@ def _preflight_sanity(table_fqn: str, floor_hours: float) -> dict:
     }
 
 
-def _files_metrics(table_fqn: str) -> dict:
-    """Shared by pre-flight sanity (before) and post-audit (after)."""
+def _files_metrics(table_fqn: str, required: bool = False) -> dict:
+    """
+    Shared by pre-flight sanity (before, required=True outside local mode
+    -- a failed/incomplete files query must block VACUUM the same as a
+    failed snapshots query) and post-audit (after, required=False -- a
+    post-audit metrics failure shouldn't retroactively fail a VACUUM that
+    already ran).
+    """
     _, database, table = parse_table_fqn(table_fqn)
     total_files = None
     total_bytes = None
@@ -232,8 +359,14 @@ def _files_metrics(table_fqn: str) -> dict:
         if not df.empty and df.iloc[0]["total_files"] is not None:
             total_files = int(df.iloc[0]["total_files"])
             total_bytes = int(df.iloc[0]["total_bytes"] or 0)
+        elif required:
+            raise SafetyCheckError(f"files pre-flight check returned an incomplete result for {table_fqn}")
+    except SafetyCheckError:
+        raise
     except Exception as e:
         log.warning("maintenance_ops.files_metrics_failed", table_fqn=table_fqn, error=str(e))
+        if required:
+            raise SafetyCheckError(f"files pre-flight check failed for {table_fqn}: {e}") from e
     return {"total_files": total_files, "total_bytes": total_bytes}
 
 

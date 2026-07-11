@@ -319,7 +319,7 @@ def test_gate0_override_active_logs_and_proceeds(monkeypatch, lock_db):
     monkeypatch.setattr(hk_engine_mod.execution_log, "get_running", lambda fqn: None)
     monkeypatch.setattr(
         HKEngine, "_run_gates_and_operations",
-        lambda self, table_row, hk_config, table_dry_run: "succeeded",
+        lambda self, table_row, hk_config, table_dry_run, heartbeat: "succeeded",
     )
 
     eng = _make_engine()
@@ -369,7 +369,7 @@ def test_gate0_clean_acquires_and_releases_lock(monkeypatch, lock_db):
     monkeypatch.setattr(hk_engine_mod.execution_log, "get_running", lambda fqn: None)
     monkeypatch.setattr(
         HKEngine, "_run_gates_and_operations",
-        lambda self, table_row, hk_config, table_dry_run: "succeeded",
+        lambda self, table_row, hk_config, table_dry_run, heartbeat: "succeeded",
     )
 
     eng = _make_engine()

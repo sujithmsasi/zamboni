@@ -37,12 +37,26 @@ from engine.utils.partition_utils import parse_table_fqn
 log = get_logger(__name__)
 
 
+class VacuumCancelledLeaseLost(RuntimeError):
+    """Raised when a VACUUM iteration loop stops early because the
+    caller's maintenance lock lease was lost (2026-07-11 audit fix) --
+    raised between iterations/before submitting the next VACUUM call,
+    never mid-query (a submitted Athena VACUUM statement itself isn't
+    cancelled by this -- see maintenance_ops.run_safe_vacuum()'s own
+    assert_held() call immediately before this function for the
+    single-iteration case)."""
+    def __init__(self, table_fqn: str):
+        self.table_fqn = table_fqn
+        super().__init__(f"VACUUM iterations for {table_fqn} stopped -- maintenance lock lease was lost")
+
+
 def run_expire_snapshots(
     table_fqn: str,
     hk_config:  dict,
     health:     HealthResult,
     tier:       str,
     dry_run:    bool = False,
+    cancel_check=None,
 ) -> dict:
     """
     Expire old snapshots and remove orphan files using Athena VACUUM.
@@ -147,6 +161,10 @@ def run_expire_snapshots(
     total_scanned = 0
 
     for iteration in range(1, max_iters + 1):
+        if cancel_check is not None and cancel_check():
+            log.error("vacuum.cancelled_lease_lost", table_fqn=table_fqn, iteration=iteration)
+            raise VacuumCancelledLeaseLost(table_fqn)
+
         log.info(
             "vacuum.iteration",
             table_fqn=table_fqn,
@@ -154,7 +172,7 @@ def run_expire_snapshots(
             of=max_iters,
         )
 
-        query_id = run_query(vacuum_sql, workgroup=wg, dry_run=dry_run)
+        query_id = run_query(vacuum_sql, workgroup=wg, dry_run=dry_run, cancel_check=cancel_check)
         if query_id:
             query_ids.append(query_id)
 
@@ -198,6 +216,7 @@ def run_orphan_cleanup(
     hk_config:  dict,
     tier:       str,
     dry_run:    bool = False,
+    cancel_check=None,
 ) -> dict:
     """
     Gap 2: Orphan file cleanup is handled by VACUUM in Athena engine v3.
@@ -209,7 +228,16 @@ def run_orphan_cleanup(
       - Expires snapshots older than vacuum_max_snapshot_age_seconds
       - Removes orphan files older than the retention threshold
     Both happen in one call. There is no separate orphan-only VACUUM syntax.
+
+    cancel_check (2026-07-11 audit fix): zero-arg callable returning True
+    once the caller's maintenance lock lease is lost -- checked before
+    submitting and threaded into the Athena poll so a lease lost mid-wait
+    actively cancels the query.
     """
+    if cancel_check is not None and cancel_check():
+        log.error("vacuum.orphan_cleanup_cancelled_lease_lost", table_fqn=table_fqn)
+        raise VacuumCancelledLeaseLost(table_fqn)
+
     _, database, table = parse_table_fqn(table_fqn)
     wg = "critical" if tier == "critical" else "standard"
 
@@ -223,7 +251,7 @@ def run_orphan_cleanup(
         dry_run=dry_run,
     )
 
-    query_id = run_query(vacuum_sql, workgroup=wg, dry_run=dry_run)
+    query_id = run_query(vacuum_sql, workgroup=wg, dry_run=dry_run, cancel_check=cancel_check)
 
     result = {
         "operation":       "orphan_cleanup",

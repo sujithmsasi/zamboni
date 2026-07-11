@@ -42,7 +42,7 @@ from engine.core.idempotency import (
     get_window_id,
     mark_executed,
 )
-from engine.core.lock_service import LockService
+from engine.core.lock_service import LockHeartbeat, LockService
 from engine.core.property_sync import (
     apply_vacuum_properties,
     mark_properties_synced,
@@ -226,6 +226,23 @@ class HKEngine(BaseEngine):
             environment=environment,
             domain=domain, layer=layer, tier=tier,
         )
+
+        if not ORCHESTRATED_MAINTENANCE:
+            # 2026-07-11 audit fix: this rollback lever bypasses every
+            # Safe-VACUUM hardening in engine/core/maintenance_ops.py
+            # (fatal property clamp, readback verification, fail-closed
+            # pre-flight sanity) -- it calls compaction/vacuum directly.
+            # Heartbeat/lease tracking is still wired in below so a lock
+            # at least gets renewed, but this path is strictly less safe
+            # than ORCHESTRATED_MAINTENANCE=true and should only be active
+            # deliberately (e.g. an active incident rollback), never as a
+            # forgotten default in a real environment.
+            log.warning(
+                "hk_engine.legacy_path_active",
+                reason="ORCHESTRATED_MAINTENANCE=false -- running the pre-Phase-1b per-op "
+                       "flow, which lacks Safe-VACUUM's property-clamp/readback/pre-flight "
+                       "safety checks. Confirm this is intentional.",
+            )
 
         # ── Fetch tables ──────────────────────────────────────────────────────
         if table_fqn:
@@ -411,13 +428,20 @@ class HKEngine(BaseEngine):
             self._write_log(table_row, "hk_run", "SKIPPED", skip_reason="SKIP_LOCK_HELD")
             return "skipped"
 
+        # 2026-07-11 audit fix: this legacy path previously acquired the
+        # lock but never renewed it -- same gap orchestrator.py/
+        # archival_engine.py/lifecycle_engine.py had before their own fix.
+        heartbeat = LockHeartbeat(self._lock_service, lock)
+        heartbeat.start()
         try:
-            return self._run_gates_and_operations(table_row, hk_config, table_dry_run)
+            return self._run_gates_and_operations(table_row, hk_config, table_dry_run, heartbeat)
         finally:
+            heartbeat.stop()
             self._lock_service.release(lock)
 
     def _run_gates_and_operations(
         self, table_row: dict, hk_config: dict, table_dry_run: bool,
+        heartbeat: LockHeartbeat,
     ) -> str:
         """
         Gates 1-4 + compaction/vacuum/orphan operations for one table.
@@ -574,10 +598,12 @@ class HKEngine(BaseEngine):
                 )
             else:
                 try:
+                    heartbeat.assert_held()
                     compaction_result = compaction.run_compaction(
                         table_fqn=fqn, hk_config=hk_config,
                         health=health, tier=tier,
                         dry_run=table_dry_run, table_row=table_row,
+                        cancel_check=lambda: heartbeat.lost,
                     )
                     op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
                 except AthenaQueryTimeout as te:
@@ -643,9 +669,11 @@ class HKEngine(BaseEngine):
                 )
             else:
                 try:
+                    heartbeat.assert_held()
                     vacuum_result = vacuum.run_expire_snapshots(
                         table_fqn=fqn, hk_config=hk_config,
                         health=health, tier=tier, dry_run=table_dry_run,
+                        cancel_check=lambda: heartbeat.lost,
                     )
                     op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
                 except AthenaQueryTimeout as te:
@@ -687,9 +715,11 @@ class HKEngine(BaseEngine):
                 )
             else:
                 try:
+                    heartbeat.assert_held()
                     orphan_result = vacuum.run_orphan_cleanup(
                         table_fqn=fqn, hk_config=hk_config,
                         tier=tier, dry_run=table_dry_run,
+                        cancel_check=lambda: heartbeat.lost,
                     )
                     op_status = "DRY_RUN" if table_dry_run else "SUCCESS"
                 except Exception as e:

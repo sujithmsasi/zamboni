@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config.settings import MAX_CONCURRENT_PARTITIONS
 from engine.core import execution_log, notifier, registry
 from engine.core.execution_log import LogEntry
-from engine.core.lock_service import LockService
+from engine.core.lock_service import LockHeartbeat, LockService
 from engine.engines.base import BaseEngine
 from engine.operations.archival import (
     _resolve_partition_column,
@@ -126,13 +126,17 @@ class ArchivalEngine(BaseEngine):
             log.warning("archival_engine.lock_held", table_fqn=fqn)
             return {"partitions_found": 0, "succeeded": 0, "failed": 0, "skipped": 1}
 
+        heartbeat = LockHeartbeat(lock_service, lock)
+        heartbeat.start()
         try:
-            return self._process_table_locked(table_row, fqn, retention_days, workgroup)
+            return self._process_table_locked(table_row, fqn, retention_days, workgroup, heartbeat)
         finally:
+            heartbeat.stop()
             lock_service.release(lock)
 
     def _process_table_locked(
         self, table_row: dict, fqn: str, retention_days: int, workgroup: str,
+        heartbeat: LockHeartbeat,
     ) -> dict:
         """The original _process_table body, run while the per-table lock
         is held -- split out so the lock's finally-release isn't tangled
@@ -176,6 +180,7 @@ class ArchivalEngine(BaseEngine):
                     table_row,
                     partition_date,
                     workgroup,
+                    heartbeat,
                 ): partition_date
                 for partition_date in cold_partitions
             }
@@ -221,13 +226,25 @@ class ArchivalEngine(BaseEngine):
         table_row: dict,
         partition_date,
         workgroup: str,
+        heartbeat: LockHeartbeat,
     ) -> dict:
-        """Archive a single partition — called in thread pool."""
+        """Archive a single partition — called in thread pool.
+
+        2026-07-11 audit fix: passes cancel_check=lambda: heartbeat.lost
+        so archive_partition() refuses its DELETE step (the one
+        irreversible action in the 4-step gate) if the table's
+        maintenance lock lease was lost while this partition's export was
+        in flight -- multiple partitions share the SAME lock/lease
+        (acquired once per table in _process_table(), not per partition),
+        so a lease lost mid-run correctly blocks every partition's delete
+        step, not just the one that happened to trigger it.
+        """
         return archive_partition(
             table_row=table_row,
             partition_date=partition_date,
             workgroup=workgroup,
             dry_run=self.dry_run,
+            cancel_check=lambda: heartbeat.lost,
         )
 
     # ── Execution log ─────────────────────────────────────────────────────────

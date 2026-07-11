@@ -202,6 +202,108 @@ def test_backpressure_routes_through_tier_to_workgroup_mapping(monkeypatch):
 #  Gate 0 (standalone callability -- contracts.md §4)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Lease lost -- no subsequent operation starts (2026-07-11 audit fix)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _FakeLostHeartbeat:
+    """A LockHeartbeat stand-in whose lease is already lost -- used to
+    verify the orchestrator genuinely refuses to start OPTIMIZE once
+    ownership may have moved to another process, without needing to wait
+    on a real background thread's timing."""
+    lost = True
+
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def assert_held(self):
+        from engine.core.lock_service import LockLostError
+        raise LockLostError("lease lost (test)")
+
+
+def test_lease_already_lost_before_optimize_prevents_optimize_and_vacuum(monkeypatch):
+    """No subsequent operation starts after ownership is lost: OPTIMIZE
+    must never be called, and since OPTIMIZE fails the run halts before
+    SAFE-VACUUM is even attempted."""
+    health = HealthResult(table_fqn=TABLE_ROW["table_fqn"], needs_compaction=True, needs_vacuum=True, snapshot_count=100)
+    _base_patches(monkeypatch, health)
+    monkeypatch.setattr(orch, "LockHeartbeat", _FakeLostHeartbeat)
+
+    optimize_calls = []
+    vacuum_calls = []
+    monkeypatch.setattr(orch.maintenance_ops, "run_optimize", lambda *a, **k: optimize_calls.append(1) or {})
+    monkeypatch.setattr(orch.maintenance_ops, "run_safe_vacuum", lambda *a, **k: vacuum_calls.append(1) or SafeVacuumResult())
+
+    tripped = []
+    monkeypatch.setattr(orch.circuit_breaker, "trip", lambda fqn, count, dry_run=False: tripped.append((fqn, count)))
+    alerts = []
+    monkeypatch.setattr(orch.notifier, "send_alert", lambda **k: alerts.append(k))
+
+    result = orch.run_table_maintenance(TABLE_ROW["table_fqn"], dry_run=False, run_id="run-lease-lost")
+
+    assert optimize_calls == [], "OPTIMIZE must never be called once the lease is already lost"
+    assert vacuum_calls == [], "SAFE-VACUUM must never start either -- the run halts on OPTIMIZE's failure"
+    assert result.status == "FAILURE"
+    assert len(tripped) == 1
+    assert len(alerts) == 1
+
+
+def test_lease_lost_between_optimize_and_vacuum_prevents_vacuum(monkeypatch):
+    """A lease still held for OPTIMIZE but lost by the time SAFE-VACUUM
+    would start must let OPTIMIZE finish (already in flight) but refuse
+    to start VACUUM."""
+    health = HealthResult(table_fqn=TABLE_ROW["table_fqn"], needs_compaction=True, needs_vacuum=True, snapshot_count=100)
+    _base_patches(monkeypatch, health)
+
+    class _FlippingHeartbeat:
+        lost = False
+
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def assert_held(self):
+            if self.lost:
+                from engine.core.lock_service import LockLostError
+                raise LockLostError("lease lost mid-run (test)")
+
+    fake_heartbeat = _FlippingHeartbeat()
+    monkeypatch.setattr(orch, "LockHeartbeat", lambda *a, **k: fake_heartbeat)
+
+    def fake_optimize(*a, **k):
+        fake_heartbeat.lost = True  # simulate the lease being lost right after OPTIMIZE completes
+        return {"files_compacted": 1}
+
+    monkeypatch.setattr(orch.maintenance_ops, "run_optimize", fake_optimize)
+    vacuum_calls = []
+    monkeypatch.setattr(orch.maintenance_ops, "run_safe_vacuum", lambda *a, **k: vacuum_calls.append(1) or SafeVacuumResult())
+
+    # optimize's before + after, then vacuum's "before" capture (which
+    # happens ahead of the try/assert_held() block regardless of whether
+    # the step goes on to actually run).
+    states = iter([_state("s3://v1", 100), _state("s3://v2", 101), _state("s3://v2", 101)])
+    monkeypatch.setattr(orch, "capture_state", lambda fqn: next(states))
+
+    monkeypatch.setattr(orch.circuit_breaker, "trip", lambda fqn, count, dry_run=False: None)
+    monkeypatch.setattr(orch.notifier, "send_alert", lambda **k: None)
+
+    result = orch.run_table_maintenance(TABLE_ROW["table_fqn"], dry_run=False, run_id="run-lease-lost-mid")
+
+    assert vacuum_calls == [], "SAFE-VACUUM must never start once the lease was lost after OPTIMIZE"
+    assert result.status == "FAILURE"
+
+
 def test_gate0_lock_held_skips_without_touching_operations(monkeypatch):
     health = _health(needs_compaction=True, needs_vacuum=True, snapshot_count=100)
     monkeypatch.setattr(orch.registry, "get_table", lambda fqn: dict(TABLE_ROW))

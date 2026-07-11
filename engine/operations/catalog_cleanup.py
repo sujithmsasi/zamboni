@@ -13,9 +13,18 @@ from engine.utils.s3_client import delete_prefix, get_prefix_size_bytes, parse_s
 log = get_logger(__name__)
 
 
+class CleanupCancelledLeaseLost(RuntimeError):
+    """Raised when the Glue DROP is refused because the caller's
+    maintenance lock lease was lost (2026-07-11 audit fix)."""
+    def __init__(self, table_fqn: str):
+        self.table_fqn = table_fqn
+        super().__init__(f"DROP refused for {table_fqn} -- maintenance lock lease was lost")
+
+
 def cleanup_table(
     table_fqn: str,
     dry_run: bool = False,
+    cancel_check=None,
 ) -> dict:
     """
     Permanently delete a non-prod table.
@@ -24,6 +33,10 @@ def cleanup_table(
     Args:
         table_fqn: Fully qualified table name
         dry_run:   If True, calculate bytes to reclaim but do not delete
+        cancel_check: Optional zero-arg callable returning True once the
+                   caller's maintenance lock lease is lost (2026-07-11
+                   audit fix) -- checked immediately before the Glue DROP,
+                   the one irreversible action here.
 
     Returns:
         dict with catalog_dropped, s3_cleaned, bytes_reclaimed, error
@@ -71,6 +84,11 @@ def cleanup_table(
         return result
 
     # ── Step 2 — Drop from Glue catalog ──────────────────────────────────────
+    if cancel_check is not None and cancel_check():
+        result["error"] = str(CleanupCancelledLeaseLost(table_fqn))
+        log.error("catalog_cleanup.drop_refused_lease_lost", table_fqn=table_fqn)
+        return result
+
     try:
         dropped = drop_table(database, table_name, dry_run=False)
         result["catalog_dropped"] = dropped

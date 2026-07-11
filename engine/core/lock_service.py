@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import socket
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,7 @@ from datetime import UTC, datetime, timedelta
 from config.settings import (
     AWS_REGION,
     DDB_LOCK_TABLE,
+    LOCK_HEARTBEAT_SECONDS,
     LOCK_TTL_MINUTES,
     get_boto3_session,
     get_mode,
@@ -53,6 +55,127 @@ class Lock:
 
 def _make_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+
+class LockLostError(RuntimeError):
+    """
+    Raised by LockHeartbeat.assert_held() once the lease has been
+    confirmed lost -- either heartbeat() was explicitly rejected (someone
+    else's lock_owner is now on record, meaning the lease genuinely
+    expired and was stolen) or it failed too many consecutive times to
+    still trust that this process is the real owner. Callers doing
+    destructive work (a VACUUM call, a Glue DROP, an S3 sweep) must call
+    assert_held() immediately before the irreversible step so a lease lost
+    mid-run stops the operation instead of completing it unprotected.
+    """
+
+
+class LockHeartbeat:
+    """
+    Background ticker + lease-ownership tracker for a held Lock, usable
+    as a context manager (`with LockHeartbeat(lock_service, lock) as hb:`)
+    for the duration of a long-running per-table operation (orchestrated
+    HK maintenance, archival, lifecycle cleanup).
+
+    2026-07-10 audit fix: LOCK_HEARTBEAT_SECONDS and LockService.heartbeat()
+    both existed (contracts.md §3.1) but nothing ever called heartbeat() --
+    a genuinely long operation (a bloated table's compaction Glue job can
+    run up to GLUE_JOB_TIMEOUT_SECONDS, close to LOCK_TTL_MINUTES) could
+    outlive its lock's expiry and let a second trigger acquire the
+    "released" lock while the first run is still in flight -- exactly the
+    concurrent-maintenance race locking exists to prevent. A background
+    thread renews on a fixed wall-clock cadence for as long as the caller
+    holds it, covering the whole run regardless of which internal call
+    (Glue poll, Athena poll, S3 sweep, or anything added later) happens to
+    be slow.
+
+    2026-07-11 audit fix: the first version only logged a heartbeat
+    failure and kept going -- ownership is a LEASE, not a fire-and-forget
+    background log line, and nothing ever observed a lost one. Now:
+      - a REJECTED heartbeat (lock_service.heartbeat() returns False --
+        someone else's lock_owner is on record) marks the lease lost
+        immediately, since that means it was genuinely stolen;
+      - MAX_CONSECUTIVE_FAILURES heartbeat *errors* in a row (DynamoDB/
+        SQLite unreachable, not a rejection) also marks it lost -- past
+        that point we can no longer trust the lease is still being
+        renewed, even without an explicit theft signal.
+    Once lost, `lost` is permanently True and assert_held() raises
+    LockLostError on every subsequent call. Callers pass a
+    `cancel_check=lambda: heartbeat.lost` into long-running polling loops
+    (engine.utils.athena_client._poll, engine.operations.compaction.
+    _wait_for_glue_job) so a lease lost mid-wait actively cancels the
+    in-flight query/job instead of completing it unprotected, and call
+    assert_held() immediately before every irreversible step (a VACUUM
+    call, a Glue DROP, a partition DELETE, an S3 sweep) so no new
+    destructive operation ever starts once the lease is gone.
+    """
+
+    MAX_CONSECUTIVE_FAILURES = 3
+
+    def __init__(self, lock_service: LockService, lock: Lock, interval_s: int = LOCK_HEARTBEAT_SECONDS):
+        self._lock_service = lock_service
+        self._lock         = lock
+        self._interval_s   = interval_s
+        self._stop_event   = threading.Event()
+        self._lost_event   = threading.Event()
+        self._consecutive_failures = 0
+        self._thread       = threading.Thread(target=self._run, daemon=True)
+
+    @property
+    def lost(self) -> bool:
+        """True once the lease has been confirmed lost (rejected heartbeat
+        or too many consecutive failures). Permanent -- never resets."""
+        return self._lost_event.is_set()
+
+    def assert_held(self) -> None:
+        """Raise LockLostError if the lease has been lost. Call this
+        immediately before every irreversible/destructive step."""
+        if self._lost_event.is_set():
+            raise LockLostError(
+                f"lease for {self._lock.table_fqn} (owner={self._lock.lock_owner}) was lost"
+            )
+
+    def start(self) -> LockHeartbeat:
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=self._interval_s + 5)
+
+    def __enter__(self) -> LockHeartbeat:
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop()
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval_s):
+            try:
+                ok = self._lock_service.heartbeat(self._lock)
+            except Exception as e:
+                log.warning(
+                    "lock_heartbeat.tick_failed",
+                    table_fqn=self._lock.table_fqn, error=str(e),
+                )
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                    self._mark_lost(
+                        f"heartbeat failed {self._consecutive_failures} consecutive times: {e}"
+                    )
+                continue
+
+            if not ok:
+                self._mark_lost("heartbeat rejected -- lease no longer owned by this process")
+                continue
+
+            self._consecutive_failures = 0
+
+    def _mark_lost(self, reason: str) -> None:
+        if not self._lost_event.is_set():
+            log.error("lock_heartbeat.lease_lost", table_fqn=self._lock.table_fqn, reason=reason)
+        self._lost_event.set()
 
 
 class LockService:
