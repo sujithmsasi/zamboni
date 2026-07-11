@@ -10,6 +10,25 @@
   transition: color 0.15s ease;
 }
 
+/* 2026-07-11: on any viewport taller than the smallest supported size
+   (1280x720), the nav content (fixed ~580px tall) is noticeably shorter
+   than the available sidebar height, leaving a dead gap below the last
+   item before the user-menu footer -- fixed itemHeight/itemMarginBlock
+   values alone can't fix this without either overflowing the shortest
+   viewport or staying cramped everywhere else. Instead, spread the 5
+   category groups across whatever height is actually available:
+   flush to the top and bottom, with the slack distributed as breathing
+   room BETWEEN groups rather than left unused at the bottom. Falls back
+   to normal block stacking (no visible difference) when content already
+   fills the container, so the 1280x720 fit from theme.ts's itemHeight/
+   itemMarginBlock tuning is untouched.  */
+.zamboni-sider .ant-menu-root.ant-menu-inline {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 100%;
+}
+
 /* Only the menu region scrolls if the nav list overflows the viewport —
    the outer Sider clips (overflow:hidden in App.tsx) so it never shows its
    own scrollbar and squeezes the sidebar width. Thin + dark to stay
@@ -43,7 +62,10 @@
   font-weight: 700 !important;
   text-transform: uppercase;
   letter-spacing: 0.09em;
-  padding: 9px 16px 3px !important;
+  /* Tightened 2026-07-11 alongside theme.ts's itemHeight/itemMarginBlock
+     -- see that comment for why (14th route pushed a 1366x768 viewport
+     into needing a sidebar scrollbar). */
+  padding: 6px 16px 2px !important;
 }
 
 .zamboni-sider .ant-menu-item {

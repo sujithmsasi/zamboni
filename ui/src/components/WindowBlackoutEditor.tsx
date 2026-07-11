@@ -22,6 +22,8 @@ interface WindowBlackoutEditorProps {
   onChange: (next: WindowConfig) => void;
 }
 
+const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
 /**
  * Window type/timing + 24-hour blackout grid, shared by Policy Configuration's
  * Edit Table tab and Templates editor (3_Policy_Configuration.py's window
@@ -61,19 +63,33 @@ export function WindowBlackoutEditor({ value, onChange }: WindowBlackoutEditorPr
             ]}
           />
         </div>
-        {value.type === 'scheduled' && (
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Start time (HH:MM)</div>
-            <Input
-              value={value.start_time}
-              placeholder="02:00"
-              onChange={(e) => onChange({ ...value, start_time: e.target.value })}
-            />
-          </div>
-        )}
+        {value.type === 'scheduled' && (() => {
+          const st = value.start_time.trim();
+          const formatInvalid = st.length > 0 && !HHMM_RE.test(st);
+          const blackoutConflict = !formatInvalid && st.length > 0 && value.blackout_hours.includes(Number(st.split(':')[0]));
+          const errorText = formatInvalid
+            ? `'${st}' is not valid HH:MM (24h format).`
+            : blackoutConflict
+              ? `${st} falls in a checked blackout hour below.`
+              : null;
+          return (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Start time (HH:MM)</div>
+              <Input
+                value={value.start_time}
+                placeholder="02:00"
+                status={errorText ? 'error' : undefined}
+                onChange={(e) => onChange({ ...value, start_time: e.target.value })}
+              />
+              {errorText && <div style={{ fontSize: 12, color: '#D92D20', marginTop: 4 }}>{errorText}</div>}
+            </div>
+          );
+        })()}
         <Row gutter={12}>
           <Col span={12}>
-            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Delay after job (min)</div>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>
+              Delay after job (min) — post_batch only: how long to wait after Gate 1 clears before HK can start
+            </div>
             <InputNumber
               min={0} max={240} style={{ width: '100%' }}
               disabled={value.type === 'scheduled'}
@@ -82,7 +98,9 @@ export function WindowBlackoutEditor({ value, onChange }: WindowBlackoutEditorPr
             />
           </Col>
           <Col span={12}>
-            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Duration (hours)</div>
+            <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>
+              Duration (hours) — how long the safe window stays open once it starts
+            </div>
             <InputNumber
               min={1} max={12} style={{ width: '100%' }}
               value={value.duration_hours}

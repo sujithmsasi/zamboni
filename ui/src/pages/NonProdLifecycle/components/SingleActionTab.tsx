@@ -3,6 +3,10 @@ import { useState } from 'react';
 import { useClaimTables, useExemptTables, useNonprodList } from '../../../api/hooks/useLifecycle';
 import { StateBadge } from '../../../components/StateBadge';
 
+// Kept in sync with BulkActionTab.tsx's identical constant -- see the
+// comment there.
+const MIN_REASON_LENGTH = 10;
+
 /**
  * Single Table Action tab (9_NonProd_Lifecycle.py tab3). The twin only
  * offered Claim here -- the phase brief explicitly asks for both
@@ -28,8 +32,8 @@ export function SingleActionTab({ env }: { env: string }) {
       message.error('Select a table first.');
       return;
     }
-    if (!reason.trim() || reason.trim().length < 10) {
-      message.error('Reason must be at least 10 characters.');
+    if (!reason.trim() || reason.trim().length < MIN_REASON_LENGTH) {
+      message.error(`Reason must be at least ${MIN_REASON_LENGTH} characters.`);
       return;
     }
     const mutation = kind === 'exempt' ? exempt : claim;
@@ -78,12 +82,14 @@ export function SingleActionTab({ env }: { env: string }) {
       )}
 
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Reason *</div>
+        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Reason * (min {MIN_REASON_LENGTH} characters)</div>
         <Input.TextArea
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="Why are you exempting or claiming ownership of this table?"
           rows={2}
+          maxLength={500}
+          showCount
         />
       </div>
 

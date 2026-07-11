@@ -1,4 +1,4 @@
-import { Button, Card, Col, Form, Input, InputNumber, message, Row, Select } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Row, Select } from 'antd';
 import { useEffect, useState } from 'react';
 import { useTemplates, useUpdateTemplate } from '../../../../api/hooks/usePolicies';
 import type { WindowConfig } from '../../../../api/types';
@@ -10,6 +10,8 @@ const DEFAULT_WINDOW: WindowConfig = {
   start_time: '02:00', duration_hours: 4, blackout_hours: [6, 7, 8, 9, 18, 19, 20, 21],
 };
 
+const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
 /** Edit Template sub-tab (3_Policy_Configuration.py tmpl_tab_edit). */
 export function EditTemplate() {
   const [name, setName] = useState<string | null>(null);
@@ -20,6 +22,9 @@ export function EditTemplate() {
   const templates = useTemplates();
   const update = useUpdateTemplate();
   const tpl = name ? templates.data?.[name] : undefined;
+  const strategy = Form.useWatch('compaction_strategy', form);
+  const engineChoice = Form.useWatch('compaction_engine', form);
+  const strategyEngineConflict = ['sort', 'zorder'].includes(strategy) && engineChoice === 'athena';
 
   useEffect(() => {
     if (!tpl) return;
@@ -34,6 +39,30 @@ export function EditTemplate() {
   const handleSave = async () => {
     if (!name) return;
     const values = await form.validateFields();
+
+    // Real gap closed (2026-07-10): this form applies fleet-wide (to every
+    // table the template is bulk-applied to), yet had zero cross-field
+    // validation at all -- the single-table Edit Table tab
+    // (PolicyConfig/EditTableTab.tsx) already checks both of these. A bad
+    // template here has more blast radius than a single bad table edit,
+    // not less, so it needs at least the same checks.
+    const errors: string[] = [];
+    if (['sort', 'zorder'].includes(values.compaction_strategy) && values.compaction_engine === 'athena') {
+      errors.push(`Strategy '${values.compaction_strategy}' requires Glue engine. Athena only supports 'binpack'.`);
+    }
+    if (windowCfg.type === 'scheduled') {
+      const st = windowCfg.start_time.trim();
+      if (!st) errors.push('Start time is required for scheduled windows.');
+      else if (!HHMM_RE.test(st)) errors.push(`Start time '${st}' is not valid HH:MM (24h format).`);
+      else if (windowCfg.blackout_hours.includes(Number(st.split(':')[0]))) {
+        errors.push(`Start time ${st} falls in a blackout hour. Change start time or uncheck that blackout hour.`);
+      }
+    }
+    if (errors.length > 0) {
+      errors.forEach((e) => message.error(e));
+      return;
+    }
+
     update.mutate(
       {
         name,
@@ -75,25 +104,31 @@ export function EditTemplate() {
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="description" label="Description"><Input /></Form.Item>
-                  <Form.Item name="compaction_strategy" label="Compaction Strategy">
+                  <Form.Item name="compaction_strategy" label="Compaction Strategy" tooltip="sort/zorder require the Glue engine -- Athena only supports binpack.">
                     <Select options={['binpack', 'sort', 'zorder'].map((s) => ({ value: s, label: s }))} />
                   </Form.Item>
                   <Form.Item name="compaction_engine" label="Compaction Engine">
                     <Select options={['athena', 'glue'].map((e) => ({ value: e, label: e }))} />
                   </Form.Item>
-                  <Form.Item name="compaction_target_file_size_mb" label="Target File Size (MB)">
-                    <InputNumber min={64} style={{ width: '100%' }} />
+                  {strategyEngineConflict && (
+                    <Alert
+                      type="error" showIcon style={{ marginBottom: 16 }}
+                      message={`Strategy '${strategy}' requires the Glue engine -- Athena only supports 'binpack'. Change one before saving.`}
+                    />
+                  )}
+                  <Form.Item name="compaction_target_file_size_mb" label="Target File Size (MB)" tooltip="Target output file size after compaction.">
+                    <InputNumber min={64} max={10240} style={{ width: '100%' }} />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="snapshot_retention_days" label="Snapshot Retention (days)">
-                    <InputNumber min={1} style={{ width: '100%' }} />
+                  <Form.Item name="snapshot_retention_days" label="Snapshot Retention (days)" tooltip="How long Iceberg snapshots are kept before vacuum expires them.">
+                    <InputNumber min={1} max={3650} style={{ width: '100%' }} />
                   </Form.Item>
-                  <Form.Item name="snapshot_min_to_keep" label="Min Snapshots to Keep">
-                    <InputNumber min={2} style={{ width: '100%' }} />
+                  <Form.Item name="snapshot_min_to_keep" label="Min Snapshots to Keep" tooltip="Floor on snapshot count vacuum will never go below, regardless of age.">
+                    <InputNumber min={2} max={1000} style={{ width: '100%' }} />
                   </Form.Item>
-                  <Form.Item name="orphan_file_retention_days" label="Orphan Retention (days)">
-                    <InputNumber min={2} style={{ width: '100%' }} />
+                  <Form.Item name="orphan_file_retention_days" label="Orphan Retention (days)" tooltip="Orphan files younger than this are never deleted by vacuum.">
+                    <InputNumber min={2} max={3650} style={{ width: '100%' }} />
                   </Form.Item>
                   <Form.Item name="run_frequency" label="Run Frequency">
                     <Select options={['every_trigger', 'daily', 'weekly', 'monthly'].map((f) => ({ value: f, label: f }))} />

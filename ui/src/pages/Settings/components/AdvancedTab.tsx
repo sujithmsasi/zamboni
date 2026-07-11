@@ -193,21 +193,25 @@ export function AdvancedTab() {
       <Row gutter={16} style={{ marginBottom: 12 }}>
         <Col span={12}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Athena sync interval (seconds)</div>
-          <InputNumber min={15} value={cpSyncInterval} onChange={(v) => setCpSyncInterval(v ?? 300)} style={{ width: '100%' }} />
+          <InputNumber min={15} max={86400} value={cpSyncInterval} onChange={(v) => setCpSyncInterval(v ?? 300)} style={{ width: '100%' }} />
         </Col>
         <Col span={12}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>S3 backup interval (seconds)</div>
-          <InputNumber min={15} value={cpBackupInterval} onChange={(v) => setCpBackupInterval(v ?? 300)} style={{ width: '100%' }} />
+          <InputNumber min={15} max={86400} value={cpBackupInterval} onChange={(v) => setCpBackupInterval(v ?? 300)} style={{ width: '100%' }} />
         </Col>
       </Row>
       <Row gutter={16} style={{ marginBottom: 12 }}>
         <Col span={12}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Hourly backup retention (hours)</div>
-          <InputNumber min={1} value={cpHourlyRetention} onChange={(v) => setCpHourlyRetention(v ?? 24)} style={{ width: '100%' }} />
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>
+            Hourly backup retention (hours) — newest backup per hour is kept this long
+          </div>
+          <InputNumber min={1} max={8760} value={cpHourlyRetention} onChange={(v) => setCpHourlyRetention(v ?? 24)} style={{ width: '100%' }} />
         </Col>
         <Col span={12}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Daily backup retention (days)</div>
-          <InputNumber min={1} value={cpDailyRetention} onChange={(v) => setCpDailyRetention(v ?? 30)} style={{ width: '100%' }} />
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>
+            Daily backup retention (days) — newest backup per day is kept this long
+          </div>
+          <InputNumber min={1} max={3650} value={cpDailyRetention} onChange={(v) => setCpDailyRetention(v ?? 30)} style={{ width: '100%' }} />
         </Col>
       </Row>
       <Button onClick={saveControlPlane} loading={updateSettings.isPending} style={{ marginBottom: 24 }}>💾 Save Control Plane Settings</Button>

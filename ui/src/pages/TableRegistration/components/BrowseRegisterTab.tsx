@@ -234,7 +234,13 @@ export function BrowseRegisterTab() {
                 </Row>
                 <Row gutter={16}>
                   <Col span={12}>
-                    <Form.Item name="owner_email" label="Owner Email"><Input /></Form.Item>
+                    <Form.Item
+                      name="owner_email" label="Owner Email"
+                      rules={[{ type: 'email', message: 'Enter a valid email address' }]}
+                      tooltip="This table's own contact, independent of the domain's Owner Email."
+                    >
+                      <Input placeholder="da-finance@company.com" />
+                    </Form.Item>
                   </Col>
                   <Col span={12}>
                     <Form.Item name="ci_number" label="CI Number"><Input /></Form.Item>
