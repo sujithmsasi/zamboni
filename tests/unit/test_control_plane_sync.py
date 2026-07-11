@@ -7,10 +7,12 @@ leak deleted rows, since a full-table overwrite is the whole point.
 """
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 import config.settings as settings
 import engine.core.control_plane as control_plane
+import engine.utils.athena_client as athena_client
 import engine.utils.local_db as local_db
 import scripts.control_plane_sync as sync_mod
 
@@ -69,7 +71,14 @@ def test_sync_table_reflects_a_deleted_row(cp_db, fake_to_iceberg):
     assert list(call["df"]["domain_name"]) == ["finance"]
 
 
-def test_sync_table_pushes_zero_rows_when_table_emptied(cp_db, fake_to_iceberg):
+def test_sync_table_pushes_zero_rows_when_table_emptied_and_athena_already_empty_too(
+    cp_db, fake_to_iceberg, monkeypatch
+):
+    """A table emptied one row at a time down to zero must still overwrite
+    Athena to zero -- as long as Athena isn't the one holding real data
+    the SQLite side no longer has (see the suspicious-empty tests below)."""
+    monkeypatch.setattr(athena_client, "read_sql", lambda *a, **k: pd.DataFrame([{"cnt": 0}]))
+
     cp_db.execute("DELETE FROM domain_registry")
     cp_db.commit()
 
@@ -77,6 +86,90 @@ def test_sync_table_pushes_zero_rows_when_table_emptied(cp_db, fake_to_iceberg):
 
     call = fake_to_iceberg[0]
     assert len(call["df"]) == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Suspicious-empty-overwrite guard (2026-07-10 audit fix)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_sync_table_blocks_empty_overwrite_when_athena_still_has_rows(cp_db, fake_to_iceberg, monkeypatch):
+    """
+    Real gap closed: the SQLite control-plane copy going empty while the
+    real Athena table still has rows almost always means the control-plane
+    DB was recently wiped (e.g. an EC2 instance replacement) and hasn't
+    been restored yet -- not a genuine one-row-at-a-time clear-out. Must
+    refuse the overwrite (no to_iceberg call) rather than destroy the last
+    real copy of this data.
+    """
+    monkeypatch.setattr(athena_client, "read_sql", lambda *a, **k: pd.DataFrame([{"cnt": 2}]))
+    alerts = []
+    monkeypatch.setattr(sync_mod.notifier, "send_alert", lambda **k: alerts.append(k))
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    with pytest.raises(sync_mod.SuspiciousEmptyOverwrite):
+        sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert fake_to_iceberg == [], "no overwrite must be pushed when blocked"
+    assert len(alerts) == 1
+    assert "domain_registry" in alerts[0]["subject"]
+
+
+def test_sync_table_empty_overwrite_override_env_allows_it(cp_db, fake_to_iceberg, monkeypatch):
+    """CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE=true is the documented,
+    operator-confirmed escape hatch for a genuine full clear-out."""
+    monkeypatch.setattr(settings, "CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE", True)
+    monkeypatch.setattr(sync_mod, "CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE", True)
+    called = []
+    monkeypatch.setattr(athena_client, "read_sql", lambda *a, **k: called.append(1) or pd.DataFrame([{"cnt": 2}]))
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert called == [], "the override must skip the Athena row-count check entirely"
+    assert len(fake_to_iceberg[0]["df"]) == 0
+
+
+def test_sync_table_athena_count_table_not_found_does_not_block(cp_db, fake_to_iceberg, monkeypatch):
+    """A confirmed table-not-found Athena count (a genuinely fresh
+    environment's first sync) must not block the sync -- nothing to
+    protect against."""
+    def _raise(*_a, **_k):
+        raise RuntimeError("TABLE_NOT_FOUND")
+
+    monkeypatch.setattr(athena_client, "read_sql", _raise)
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert len(fake_to_iceberg[0]["df"]) == 0
+
+
+def test_sync_table_athena_count_unexpected_error_blocks_sync(cp_db, fake_to_iceberg, monkeypatch):
+    """
+    2026-07-11 audit fix: a non-table-not-found Athena failure (a
+    permissions issue, throttling, a network blip) must now BLOCK the
+    sync rather than being treated the same as 'nothing to protect' --
+    the whole point of the suspicious-empty-overwrite guard is defeated
+    if any transient Athena error can bypass it.
+    """
+    def _raise(*_a, **_k):
+        raise RuntimeError("Access Denied: not authorized to perform athena:GetQueryResults")
+
+    monkeypatch.setattr(athena_client, "read_sql", _raise)
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    with pytest.raises(sync_mod.SuspiciousEmptyOverwrite):
+        sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert fake_to_iceberg == [], "no overwrite must be pushed when the row-count check itself fails"
 
 
 def test_run_once_continues_past_a_failing_table(monkeypatch):
@@ -97,3 +190,141 @@ def test_run_forever_returns_immediately_in_local_mode(monkeypatch):
     monkeypatch.setattr(settings, "ZAMBONI_LOCAL_MODE", True)
     # If this doesn't return, the test hangs -- that's the assertion.
     sync_mod._run_forever()
+
+
+@pytest.fixture
+def stream_registry_db(tmp_path, monkeypatch):
+    """stream_registry's SQLite mirror deliberately has no aws_opt_*/
+    last_execution_id/metadata_location/properties_synced columns -- this
+    fixture matches that (see config/control_plane_schema.py)."""
+    db_path = tmp_path / "test_sync_source_sr.db"
+    monkeypatch.setattr(settings, "ZAMBONI_LOCAL_MODE", False)
+    monkeypatch.setattr(settings, "ZAMBONI_CONTROL_PLANE_DB", str(db_path))
+    monkeypatch.setattr(local_db, "_conns", {})
+
+    conn = local_db.get_connection(str(db_path))
+    conn.execute(
+        "CREATE TABLE stream_registry (table_fqn TEXT PRIMARY KEY, domain TEXT, hk_enabled INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO stream_registry (table_fqn, domain, hk_enabled) VALUES (?, ?, ?)",
+        ("glue_catalog.finance_db.fin_table", "finance", 1),
+    )
+    conn.commit()
+    yield conn
+    conn.close()
+    monkeypatch.setattr(local_db, "_conns", {})
+
+
+def test_sync_table_stream_registry_preserves_engine_owned_columns_from_athena(
+    stream_registry_db, fake_to_iceberg, monkeypatch
+):
+    """
+    Real bug fix (2026-07-10): sync_table()'s SELECT * against the SQLite
+    mirror omits engine-owned columns the real Athena table still has --
+    without this merge, the full-table overwrite would either fail on the
+    schema mismatch or silently drop Gate 0's conflict cache / idempotency
+    / recovery state from the real table. Asserting outside the
+    monkeypatched fetch function (not inside it) so an assertion failure
+    surfaces as a test failure instead of being swallowed by
+    _fetch_engine_owned_columns' own except Exception.
+    """
+    captured_sql: list[str] = []
+
+    def _fake_athena_read_sql(sql, workgroup="app", **kwargs):
+        captured_sql.append(sql)
+        return pd.DataFrame([{
+            "table_fqn": "glue_catalog.finance_db.fin_table",
+            "aws_opt_compaction": 1,
+            "aws_opt_retention": 0,
+            "aws_opt_orphan": 0,
+            "aws_opt_checked_at": "2026-07-09 10:00:00",
+            "last_execution_id": "abc123",
+            "metadata_location": "s3://bucket/metadata/001.json",
+            "properties_synced": 1,
+        }])
+
+    monkeypatch.setattr(athena_client, "read_sql", _fake_athena_read_sql)
+
+    sync_mod.sync_table("stream_registry", "stream_registry")
+
+    assert len(captured_sql) == 1
+    assert "aws_opt_compaction" in captured_sql[0]
+
+    df = fake_to_iceberg[0]["df"]
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["aws_opt_compaction"] == 1
+    assert row["last_execution_id"] == "abc123"
+    assert row["metadata_location"] == "s3://bucket/metadata/001.json"
+    # SQLite-sourced columns must still be present, not replaced.
+    assert row["domain"] == "finance"
+    assert row["hk_enabled"] == 1
+
+
+def test_sync_table_stream_registry_defaults_engine_owned_columns_to_null_when_table_not_found(
+    stream_registry_db, fake_to_iceberg, monkeypatch
+):
+    """A fresh environment's very first sync -- the real Athena
+    stream_registry table doesn't exist yet -- must not crash the sync
+    cycle or silently omit the engine-owned columns -- they come through
+    as null so the table still gets created/overwritten with the right
+    column set. Only a table-not-found-shaped error takes this path (see
+    the next test for any other kind of failure)."""
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("TABLE_NOT_FOUND: line 1:15: Table does not exist")
+
+    monkeypatch.setattr(athena_client, "read_sql", _raise)
+
+    sync_mod.sync_table("stream_registry", "stream_registry")
+
+    df = fake_to_iceberg[0]["df"]
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["aws_opt_compaction"] is None
+    assert row["last_execution_id"] is None
+    assert row["metadata_location"] is None
+    assert row["domain"] == "finance"
+
+
+def test_sync_table_stream_registry_aborts_on_unexpected_fetch_error(
+    stream_registry_db, fake_to_iceberg, monkeypatch
+):
+    """
+    Real gap closed (2026-07-10): the first version of this fix treated
+    ANY engine-owned-columns fetch failure the same as "table not found"
+    and pushed the overwrite anyway with those columns nulled -- correct
+    for a genuinely fresh table, but wrong for a transient failure (an
+    IAM/workgroup quirk, throttling) where the real Athena data is fine
+    and nulling it would be actively destructive. A non-table-not-found
+    error must now abort the whole sync for this table -- no overwrite
+    pushed at all -- rather than silently nulling real data.
+    """
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("Access Denied: not authorized to perform athena:GetQueryResults")
+
+    monkeypatch.setattr(athena_client, "read_sql", _raise)
+
+    with pytest.raises(sync_mod.EngineOwnedColumnsUnavailable):
+        sync_mod.sync_table("stream_registry", "stream_registry")
+
+    # No overwrite must have been pushed -- aborting before to_iceberg is
+    # the whole point, not nulling-then-pushing.
+    assert fake_to_iceberg == []
+
+
+def test_sync_table_non_stream_registry_table_never_calls_athena(cp_db, fake_to_iceberg, monkeypatch):
+    """domain_registry has no engine-owned columns -- the merge path must
+    be a complete no-op for it, including never calling out to Athena."""
+    called = []
+
+    def _fake_athena_read_sql(*_args, **_kwargs):
+        called.append(1)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(athena_client, "read_sql", _fake_athena_read_sql)
+
+    sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert called == []
+    assert len(fake_to_iceberg[0]["df"]) == 2

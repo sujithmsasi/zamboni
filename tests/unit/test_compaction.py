@@ -199,3 +199,30 @@ def test_wait_for_glue_job_still_raises_on_failed_state():
 
     with pytest.raises(RuntimeError, match="FAILED"):
         _wait_for_glue_job(glue, "run-failed", poll_interval=0, timeout_s=300)
+
+
+def test_wait_for_glue_job_cancel_check_stops_job_and_raises():
+    """2026-07-11 audit fix: a lost maintenance lock lease must actively
+    stop a still-running Glue job, not let it complete unprotected."""
+    from engine.operations.compaction import GlueJobCancelledLeaseLost, _wait_for_glue_job
+
+    glue = MagicMock()
+    glue.get_job_run.return_value = {"JobRun": {"JobRunState": "RUNNING"}}
+
+    with pytest.raises(GlueJobCancelledLeaseLost) as exc_info:
+        _wait_for_glue_job(glue, "run-lease-lost", poll_interval=0, timeout_s=300, cancel_check=lambda: True)
+
+    assert exc_info.value.run_id == "run-lease-lost"
+    glue.batch_stop_job_run.assert_called_once_with(
+        JobName="zamboni-compaction", JobRunIds=["run-lease-lost"]
+    )
+
+
+def test_wait_for_glue_job_cancel_check_false_proceeds_normally():
+    from engine.operations.compaction import _wait_for_glue_job
+
+    glue = MagicMock()
+    glue.get_job_run.return_value = {"JobRun": {"JobRunState": "SUCCEEDED"}}
+
+    _wait_for_glue_job(glue, "run-ok2", poll_interval=0, timeout_s=300, cancel_check=lambda: False)
+    glue.batch_stop_job_run.assert_not_called()

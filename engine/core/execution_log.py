@@ -327,7 +327,22 @@ def get_running(table_fqn: str) -> dict | None:
     row = df.iloc[0].to_dict()
 
     started_dt = _coerce_datetime(row.get("started_at"))
-    if started_dt and datetime.now(UTC) - started_dt > timedelta(minutes=LOCK_TTL_MINUTES):
+    if started_dt is None:
+        # Fail closed, not open: an unparseable started_at (e.g. NaT) must
+        # not be treated as "genuinely running" -- that would lock the
+        # table out of Gate 0's in-flight check forever, the same
+        # permanent-lockout bug this function was written to fix for the
+        # missing-correlation case. LockService's own acquire/TTL is the
+        # real mutual-exclusion guarantee downstream of this check, so
+        # treating an unparseable timestamp as "not running" here is safe.
+        log.warning(
+            "execution_log.get_running.unparseable_started_at_treated_as_stale",
+            table_fqn=table_fqn,
+            started_at=str(row.get("started_at")),
+            run_id=row.get("run_id"),
+        )
+        return None
+    if datetime.now(UTC) - started_dt > timedelta(minutes=LOCK_TTL_MINUTES):
         log.warning(
             "execution_log.get_running.stale_running_row_ignored",
             table_fqn=table_fqn,

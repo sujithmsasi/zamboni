@@ -56,7 +56,7 @@ from engine.core.execution_log_parquet import ParquetLogBuffer
 from engine.core.health_checker import HealthResult, is_healthy
 from engine.core.idempotency import build_execution_id, check_already_executed, get_window_id, mark_executed
 from engine.core.integrity_checker import IntegrityResult, capture_state, verify_advanced
-from engine.core.lock_service import LockService
+from engine.core.lock_service import LockHeartbeat, LockService
 from engine.core.property_sync import apply_vacuum_properties, mark_properties_synced, needs_property_sync
 from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.engines.hk_engine import _TIER_TO_WORKGROUP, _parse_gate0_override, is_due
@@ -152,6 +152,9 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
     lock_id = f"{lock.table_fqn}:{lock.lock_owner}"
     result  = RunResult(table_fqn=fqn, dry_run=dry_run, status="SUCCESS", lock_id=lock_id)
 
+    heartbeat = LockHeartbeat(lock_service, lock)
+    heartbeat.start()
+
     try:
         # Mark RUNNING via an immediate (unbuffered) write so Gate 0's
         # in-flight check is visible to any concurrent trigger for the
@@ -239,7 +242,7 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
         # ── OPTIMIZE → verify_advanced ──────────────────────────────────────────
         if health.needs_compaction:
             step, log_status, log_kwargs = _run_optimize_step(
-                fqn, hk_config, health, tier, workgroup, dry_run, lock_id, table_row,
+                fqn, hk_config, health, tier, workgroup, dry_run, lock_id, table_row, heartbeat,
             )
             _write("compaction", log_status, **log_kwargs)
             result.steps.append(step)
@@ -251,7 +254,7 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
         # ── SAFE-VACUUM → verify_advanced (contracts.md §5-A) ────────────────────
         if health.needs_vacuum or health.needs_orphan_cleanup:
             step, log_status, log_kwargs = _run_safe_vacuum_step(
-                fqn, hk_config, health, tier, workgroup, dry_run, lock_id, run_id,
+                fqn, hk_config, health, tier, workgroup, dry_run, lock_id, run_id, heartbeat,
             )
             _write("vacuum", log_status, **log_kwargs)
             result.steps.append(step)
@@ -266,6 +269,7 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
         _write("hk_run", "DRY_RUN" if dry_run else "SUCCESS")
         return result
     finally:
+        heartbeat.stop()
         lock_service.release(lock)
         log_buffer.flush(dry_run=dry_run)
 
@@ -289,6 +293,7 @@ def _trip_and_alert(fqn: str, step_name: str, detail: str | None, dry_run: bool)
 def _run_optimize_step(
     fqn: str, hk_config: dict, health: HealthResult, tier: str,
     workgroup: str, dry_run: bool, lock_id: str, table_row: dict,
+    heartbeat: LockHeartbeat,
 ) -> tuple[StepResult, str, dict]:
     """Returns (StepResult, execution_log status, execution_log kwargs)."""
     started = datetime.now(UTC)
@@ -302,7 +307,16 @@ def _run_optimize_step(
 
     before = capture_state(fqn)
     try:
-        op_result = maintenance_ops.run_optimize(fqn, hk_config, health, tier, dry_run, table_row=table_row)
+        # 2026-07-11 audit fix: check ownership immediately before starting
+        # this destructive step -- a lease lost between acquire() and here
+        # (e.g. during a slow health check) must not let OPTIMIZE start.
+        # LockLostError is caught by the except Exception below, same
+        # FAILURE/trip-breaker/alert handling as any other step failure.
+        heartbeat.assert_held()
+        op_result = maintenance_ops.run_optimize(
+            fqn, hk_config, health, tier, dry_run, table_row=table_row,
+            cancel_check=lambda: heartbeat.lost,
+        )
     except AthenaQueryTimeout as te:
         detail = f"compaction: {te}"
         return (
@@ -348,6 +362,7 @@ def _run_optimize_step(
 def _run_safe_vacuum_step(
     fqn: str, hk_config: dict, health: HealthResult, tier: str,
     workgroup: str, dry_run: bool, lock_id: str, run_id: str,
+    heartbeat: LockHeartbeat,
 ) -> tuple[StepResult, str, dict]:
     """Returns (StepResult, execution_log status, execution_log kwargs)."""
     started = datetime.now(UTC)
@@ -361,7 +376,12 @@ def _run_safe_vacuum_step(
 
     before = capture_state(fqn)
     try:
-        vac_result = maintenance_ops.run_safe_vacuum(fqn, hk_config, health, tier, workgroup, dry_run)
+        # Same ownership re-check as _run_optimize_step -- see its comment.
+        heartbeat.assert_held()
+        vac_result = maintenance_ops.run_safe_vacuum(
+            fqn, hk_config, health, tier, workgroup, dry_run,
+            cancel_check=lambda: heartbeat.lost,
+        )
     except Exception as e:
         detail   = f"vacuum: {e}"
         completed = datetime.now(UTC)

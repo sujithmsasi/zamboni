@@ -111,3 +111,16 @@ def test_recent_running_row_within_lock_ttl_still_blocks(log_db):
     _insert(log_db, run_id="run-1", operation="hk_run", status="RUNNING", started_at=recent_started)
 
     assert execution_log.get_running("glue_catalog.db.t1") is not None
+
+
+def test_unparseable_started_at_fails_closed_not_open(log_db):
+    """Real bug fix (2026-07-10): _coerce_datetime() returns None for an
+    unparseable started_at (e.g. pandas' NaT sentinel, which stringifies
+    to the literal text 'NaT'), and the old `if started_dt and ...` check
+    silently fell through to `return row` in that case -- treating a
+    crashed/malformed row as genuinely in-flight forever, with no TTL
+    bound at all. Must now return None (not blocking) instead, the same
+    direction the TTL-based staleness check already fails."""
+    _insert(log_db, run_id="run-1", operation="hk_run", status="RUNNING", started_at="NaT")
+
+    assert execution_log.get_running("glue_catalog.db.t1") is None

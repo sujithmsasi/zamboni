@@ -644,8 +644,8 @@ with tab_edit:
                                         updated_at                     = '{now}'
                                     WHERE table_fqn = '{table_fqn}'
                                 """
-                                from engine.utils.athena_client import run_query as _rq2
-                                _rq2(upd_sql, workgroup="app", dry_run=is_dry_run())
+                                from engine.core import control_plane as _cp2
+                                _cp2.run_query(upd_sql, workgroup="app", dry_run=is_dry_run())
 
                                 audit(AuditEvent(
                                     actor=current_user(),

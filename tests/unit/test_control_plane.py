@@ -95,6 +95,22 @@ def test_read_sql_routes_through_local_mode_db(local_mode_db):
     assert df.iloc[0]["table_fqn"] == "t1"
 
 
+def test_read_sql_empty_result_is_not_an_error(cp_db):
+    """A query that runs fine and matches zero rows must return an empty
+    DataFrame, not raise -- distinguishing this from a real read failure
+    is the whole point of ControlPlaneReadError."""
+    df = control_plane.read_sql("SELECT * FROM stream_registry WHERE table_fqn = 'does.not.exist'")
+    assert df.empty
+
+
+def test_read_sql_raises_control_plane_read_error_on_failure(cp_db):
+    """2026-07-11 audit fix: a genuine read failure (missing table here)
+    must raise, not silently return an empty DataFrame that looks
+    identical to 'zero rows matched' to every caller built on top of it."""
+    with pytest.raises(control_plane.ControlPlaneReadError):
+        control_plane.read_sql("SELECT * FROM no_such_table_at_all")
+
+
 def test_run_query_dry_run_is_noop(cp_db):
     result = control_plane.run_query(
         "UPDATE stream_registry SET hk_enabled = 1 WHERE table_fqn = 'glue_catalog.db.t1'",
@@ -113,6 +129,44 @@ def test_run_query_real_write_applies(cp_db):
     assert result is not None
     row = cp_db.execute("SELECT hk_enabled FROM stream_registry WHERE table_fqn = 'glue_catalog.db.t1'").fetchone()
     assert row[0] == 1
+
+
+def test_run_query_write_failure_raises_instead_of_silent_none(cp_db):
+    """
+    2026-07-10 audit fix: local_db.run_query_local() catches the exception
+    and returns None on a genuine SQL failure -- control_plane.run_query()
+    must not let that silently look like success. Every api/services/*.py
+    write path either ignores the return value or hardcodes `return True`
+    after calling this, so a caller checking nothing would previously have
+    reported success to the user for a write that never happened.
+    """
+    with pytest.raises(control_plane.ControlPlaneWriteError):
+        control_plane.run_query(
+            "UPDATE no_such_table SET x = 1 WHERE table_fqn = 'glue_catalog.db.t1'",
+            dry_run=False,
+        )
+    # Sanity: the real table is genuinely untouched.
+    row = cp_db.execute("SELECT hk_enabled FROM stream_registry WHERE table_fqn = 'glue_catalog.db.t1'").fetchone()
+    assert row[0] == 0
+
+
+def test_update_row_write_failure_raises(cp_db):
+    """update_row() delegates to run_query() -- a write failure must
+    propagate the same way, not be swallowed at this layer either."""
+    with pytest.raises(control_plane.ControlPlaneWriteError):
+        control_plane.update_row("no_such_table", "table_fqn", "glue_catalog.db.t1", {"domain": "x"}, dry_run=False)
+
+
+def test_update_row_zero_rows_matched_raises(cp_db):
+    """2026-07-11 audit fix: update_row() always targets exactly one row
+    by a key the caller already resolved -- a key that matches nothing
+    (deleted concurrently, or simply wrong) must raise, not silently
+    report success having changed nothing."""
+    with pytest.raises(control_plane.ControlPlaneWriteError, match="0 rows"):
+        control_plane.update_row(
+            "stream_registry", "table_fqn", "glue_catalog.db.does_not_exist",
+            {"domain": "ers"}, dry_run=False,
+        )
 
 
 # ── _sql_literal / _esc ──────────────────────────────────────────────────────

@@ -314,6 +314,54 @@ class TestAthenaTimeout:
         assert issubclass(AthenaQueryTimeout, RuntimeError)
         assert issubclass(AthenaQueryFailed, RuntimeError)
 
+    def test_cancel_check_true_cancels_query_and_raises(self):
+        """2026-07-11 audit fix: a lost maintenance lock lease
+        (cancel_check returning True, typically `lambda: heartbeat.lost`)
+        must actively cancel an in-flight query, not just let the wait
+        continue -- no subsequent operation should be able to trust a
+        query result computed after ownership may have moved elsewhere."""
+        from engine.utils.athena_client import AthenaQueryCancelledLeaseLost, _poll
+
+        mock_client = MagicMock()
+        mock_client.get_query_execution.return_value = {
+            "QueryExecution": {"Status": {"State": "RUNNING"}, "Statistics": {}},
+        }
+
+        with pytest.raises(AthenaQueryCancelledLeaseLost) as exc_info:
+            _poll(mock_client, "q-lease-lost", "zamboni-standard",
+                  interval=0, timeout_s=300, cancel_check=lambda: True)
+
+        assert exc_info.value.query_id == "q-lease-lost"
+        mock_client.stop_query_execution.assert_called_once_with(QueryExecutionId="q-lease-lost")
+
+    def test_cancel_check_false_does_not_cancel(self):
+        from engine.utils.athena_client import _poll
+
+        mock_client = MagicMock()
+        mock_client.get_query_execution.return_value = {
+            "QueryExecution": {"Status": {"State": "SUCCEEDED"}, "Statistics": {}},
+        }
+
+        result = _poll(mock_client, "q-ok", "zamboni-standard",
+                       interval=0, timeout_s=300, cancel_check=lambda: False)
+
+        assert result == "q-ok"
+        mock_client.stop_query_execution.assert_not_called()
+
+    def test_cancel_check_none_is_a_complete_noop(self):
+        """Default cancel_check=None must behave exactly as before this
+        feature existed -- no behavior change for any caller that doesn't
+        pass one."""
+        from engine.utils.athena_client import _poll
+
+        mock_client = MagicMock()
+        mock_client.get_query_execution.return_value = {
+            "QueryExecution": {"Status": {"State": "SUCCEEDED"}, "Statistics": {}},
+        }
+
+        result = _poll(mock_client, "q-default", "zamboni-standard", interval=0, timeout_s=300)
+        assert result == "q-default"
+
     def test_athena_query_timeout_seconds_in_settings(self):
         from config.settings import ATHENA_QUERY_TIMEOUT_SECONDS
         assert isinstance(ATHENA_QUERY_TIMEOUT_SECONDS, int)

@@ -36,12 +36,30 @@ def cached_read_snapshot(sql: str, workgroup: str = "app") -> pd.DataFrame:
     return read_sql(sql=sql, workgroup=workgroup)
 
 
-def execute_write(sql: str, workgroup: str = "app", dry_run: bool = False) -> None:
+def execute_write(
+    sql: str,
+    workgroup: str = "app",
+    dry_run: bool = False,
+    control_plane: bool = False,
+) -> None:
     """
     Execute an INSERT / UPDATE / DELETE.
     Clears all caches so next read returns fresh data.
+
+    control_plane=True routes the write through
+    engine.core.control_plane.run_query() (the SQLite-primary store for
+    stream_registry/hk_config/domain_registry/nonprod_registry/
+    controlm_jobs) instead of real Athena. Required for any write against
+    one of those 5 tables -- the engine now reads them from SQLite
+    directly, and scripts/control_plane_sync.py's sync is one-way
+    (SQLite -> Athena), so a write against real Athena here would be
+    invisible to the engine, not just delayed.
     """
-    run_query(sql=sql, workgroup=workgroup, dry_run=dry_run)
+    if control_plane:
+        from engine.core import control_plane as _control_plane_mod
+        _control_plane_mod.run_query(sql=sql, workgroup=workgroup, dry_run=dry_run)
+    else:
+        run_query(sql=sql, workgroup=workgroup, dry_run=dry_run)
     if not dry_run:
         clear_caches()
 

@@ -46,6 +46,44 @@ from engine.utils.logger import get_logger
 log = get_logger(__name__)
 
 
+class ControlPlaneWriteError(RuntimeError):
+    """
+    Raised when a write against the control-plane DB fails, or (for
+    update_row(), see expect_rowcount below) matches zero rows.
+
+    2026-07-10 audit fix: the lenient local_db.run_query_local() catches
+    every exception and returns None on failure (by design -- it's shared
+    with athena_client.py's much wider blast radius, which isn't being
+    changed here). Every api/services/*.py write path built on top of
+    this module (tables_svc, domains_svc, policies_svc, gates_svc,
+    lifecycle_svc, controlm_svc) either ignored run_query()'s return
+    value entirely or returned a hardcoded True regardless of it -- a
+    genuine SQLite write failure (disk full, corruption, a locked file)
+    would report success to the caller and, in the API layer, a 200 to
+    the user, while nothing was actually persisted.
+
+    2026-07-11 audit fix: now backed by local_db.run_query_strict() (a
+    dedicated strict variant, not a behavior change to run_query_local()
+    itself -- that stays lenient for local/demo UI simulation, which
+    still calls it directly, e.g. via athena_client.py in
+    ZAMBONI_LOCAL_MODE) rather than checking "was the return value None."
+    """
+
+
+class ControlPlaneReadError(RuntimeError):
+    """
+    Raised when a read against the control-plane DB fails.
+
+    2026-07-11 audit fix: local_db.read_sql_local() (kept as-is for
+    local/demo UI simulation) returns an empty DataFrame on any read
+    failure -- indistinguishable from a query that legitimately matched
+    zero rows. A GET endpoint built on that would return 200 with an
+    empty list for a disk-full/locked-file/malformed-query failure
+    instead of a 500. Backed by local_db.read_sql_strict(), which only
+    raises on a genuine exception, never on a real empty result.
+    """
+
+
 def _db_path() -> str:
     from config.settings import (
         ZAMBONI_CONTROL_PLANE_DB,
@@ -61,11 +99,19 @@ def read_sql(
     database: str | None = None,
     timeout_s: int | None = None,
 ) -> pd.DataFrame:
-    """Drop-in replacement for athena_client.read_sql() against the
+    """
+    Drop-in replacement for athena_client.read_sql() against the
     control-plane DB. workgroup/database/timeout_s accepted for signature
     compatibility with callers that pass them positionally or by keyword;
-    unused against SQLite."""
-    return local_db.read_sql_local(sql, db_path=_db_path())
+    unused against SQLite.
+
+    Raises ControlPlaneReadError if the underlying SQLite read fails --
+    see that class's docstring.
+    """
+    try:
+        return local_db.read_sql_strict(sql, db_path=_db_path())
+    except local_db.LocalDbReadError as e:
+        raise ControlPlaneReadError(str(e)) from e
 
 
 def run_query(
@@ -74,13 +120,23 @@ def run_query(
     database: str | None = None,
     dry_run: bool = False,
     timeout_s: int | None = None,
+    expect_rowcount: bool = False,
 ) -> str | None:
-    """Drop-in replacement for athena_client.run_query() against the
-    control-plane DB."""
+    """
+    Drop-in replacement for athena_client.run_query() against the
+    control-plane DB.
+
+    Raises ControlPlaneWriteError if the underlying SQLite write fails,
+    or (when expect_rowcount=True) if it succeeds but matches zero rows
+    -- see that class's docstring.
+    """
     if dry_run:
         log.info("control_plane.dry_run", sql=sql[:150])
         return None
-    return local_db.run_query_local(sql, db_path=_db_path())
+    try:
+        return local_db.run_query_strict(sql, db_path=_db_path(), expect_rowcount=expect_rowcount)
+    except local_db.LocalDbWriteError as e:
+        raise ControlPlaneWriteError(str(e)) from e
 
 
 def _esc(value) -> str:
@@ -115,6 +171,16 @@ def update_row(
     SQLite being the primary write target is exactly what makes freshness
     a non-issue for the engine's next read. No-ops if column_values is
     empty.
+
+    2026-07-11 audit fix: passes expect_rowcount=True -- this helper is
+    always a single-row UPDATE keyed by a primary key the caller already
+    resolved (e.g. via a prior GET), so matching zero rows has no
+    legitimate meaning here (the row was deleted concurrently, or the key
+    is stale/wrong) and must raise rather than silently "succeed" having
+    changed nothing. Not applied to run_query() generically -- bulk
+    updates and idempotent deletes elsewhere in this codebase (e.g.
+    controlm_svc.delete_job(), tables_svc.bulk_controlm()) can
+    legitimately match zero rows.
     """
     if not column_values:
         return
@@ -125,4 +191,4 @@ def update_row(
         }
     sets = ", ".join(f"{col} = {_sql_literal(val)}" for col, val in column_values.items())
     sql = f"UPDATE {table} SET {sets} WHERE {key_col} = '{_esc(key_val)}'"
-    run_query(sql, dry_run=dry_run)
+    run_query(sql, dry_run=dry_run, expect_rowcount=True)

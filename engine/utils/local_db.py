@@ -109,6 +109,75 @@ def run_query_local(sql: str, db_path: str | None = None) -> str | None:
         return None
 
 
+class LocalDbReadError(RuntimeError):
+    """Raised by read_sql_strict() when the underlying SQL read fails.
+    2026-07-11 audit fix -- unlike read_sql_local() (which returns an
+    empty DataFrame on any error, a deliberate convenience for local/demo
+    UI simulation where a broken query should just render 'no rows'
+    rather than crash the page), production control-plane reads must not
+    be able to silently look identical to 'zero rows matched' when the
+    real cause is a disk-full/locked-file/malformed-query failure."""
+
+
+class LocalDbWriteError(RuntimeError):
+    """Raised by run_query_strict() on a write failure, or (when
+    expect_rowcount=True) on an UPDATE/DELETE that matched zero rows.
+    2026-07-11 audit fix -- companion to LocalDbReadError for the write
+    side; used by the production control-plane path
+    (engine/core/control_plane.py), not the local/demo simulation path."""
+
+
+def read_sql_strict(sql: str, db_path: str | None = None) -> pd.DataFrame:
+    """
+    Strict counterpart to read_sql_local(): raises LocalDbReadError on any
+    read failure instead of returning an empty DataFrame. A query that
+    runs successfully and genuinely matches zero rows is NOT an error --
+    only a real exception (bad SQL, missing table, disk/IO failure)
+    raises here, so "no results" and "couldn't read" can never be
+    confused by a caller.
+    """
+    translated = _translate(sql)
+    try:
+        conn = get_connection(db_path)
+        df = pd.read_sql_query(translated, conn)
+        log.debug("local_db.read_sql_strict", rows=len(df), sql=translated[:120])
+        return df
+    except Exception as e:
+        log.error("local_db.read_sql_strict_failed", error=str(e), sql=translated[:200])
+        raise LocalDbReadError(f"strict SQLite read failed: {e}") from e
+
+
+def run_query_strict(sql: str, db_path: str | None = None, expect_rowcount: bool = False) -> str:
+    """
+    Strict counterpart to run_query_local(): raises LocalDbWriteError on
+    any write failure instead of returning None. When expect_rowcount is
+    True (used by control_plane.py::update_row(), which always targets
+    exactly one row by a primary key the caller already resolved), an
+    UPDATE/DELETE that matched zero rows also raises -- that shape of
+    call has no legitimate "nothing matched" outcome, so silently
+    reporting success would hide a stale key or a row deleted out from
+    under the caller.
+    """
+    translated = _translate(sql)
+    try:
+        conn = get_connection(db_path)
+        cur = conn.execute(translated)
+        conn.commit()
+    except Exception as e:
+        log.error("local_db.run_query_strict_failed", error=str(e), sql=translated[:200])
+        raise LocalDbWriteError(f"strict SQLite write failed: {e}") from e
+
+    if expect_rowcount and cur.rowcount == 0:
+        raise LocalDbWriteError(
+            f"write affected 0 rows (expected at least 1 -- the target row may not "
+            f"exist or was already changed): {translated[:200]}"
+        )
+
+    qid = "local-" + _fake_id()
+    log.debug("local_db.run_query_strict", query_id=qid, sql=translated[:120])
+    return qid
+
+
 def translate_athena_sql(sql: str) -> str:
     """Public wrapper around _translate() for callers outside this module
     (e.g. engine.core.athena_cache) that need the same Athena-to-SQLite

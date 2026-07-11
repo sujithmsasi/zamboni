@@ -33,6 +33,7 @@ def run_compaction(
     tier:       str,
     dry_run:    bool       = False,
     table_row:  dict | None = None,
+    cancel_check=None,
 ) -> dict:
     """
     Run compaction for a table using the strategy defined in hk_config.
@@ -95,19 +96,19 @@ def run_compaction(
 
     if strategy == "binpack":
         return _run_athena_binpack(
-            table_fqn, target_mb, partition_filter, routing, dry_run
+            table_fqn, target_mb, partition_filter, routing, dry_run, cancel_check=cancel_check,
         )
     elif strategy == "sort":
         sort_cols = hk_config.get("sort_columns") or []
         return _run_glue_compaction(
             table_fqn, "sort", sort_cols, target_mb,
-            partition_filter, routing, dry_run
+            partition_filter, routing, dry_run, cancel_check=cancel_check,
         )
     elif strategy == "zorder":
         zorder_cols = hk_config.get("sort_columns") or []
         return _run_glue_compaction(
             table_fqn, "zorder", zorder_cols, target_mb,
-            partition_filter, routing, dry_run
+            partition_filter, routing, dry_run, cancel_check=cancel_check,
         )
     else:
         raise ValueError(f"Unknown compaction strategy '{strategy}' for {table_fqn}")
@@ -121,6 +122,7 @@ def _run_athena_binpack(
     partition_filter: str | None,
     routing: RoutingDecision,
     dry_run: bool,
+    cancel_check=None,
 ) -> dict:
     sql = binpack.build_optimize_sql(
         table_fqn=table_fqn,
@@ -131,7 +133,7 @@ def _run_athena_binpack(
     # Athena workgroup — use critical workgroup for STANDARD tier
     wg = "critical" if routing.execution_class == "STANDARD" else "standard"
 
-    query_id = run_query(sql, workgroup=wg, dry_run=dry_run)
+    query_id = run_query(sql, workgroup=wg, dry_run=dry_run, cancel_check=cancel_check)
 
     result = {
         "strategy":       "binpack",
@@ -159,6 +161,7 @@ def _run_glue_compaction(
     partition_filter: str | None,
     routing: RoutingDecision,
     dry_run: bool,
+    cancel_check=None,
 ) -> dict:
     if strategy == "sort":
         sort.recommend_num_workers(0, routing.worker_type)
@@ -222,13 +225,21 @@ def _run_glue_compaction(
     )
 
     # Poll until complete
-    _wait_for_glue_job(glue, run_id)
+    _wait_for_glue_job(glue, run_id, cancel_check=cancel_check)
     result["status"] = "SUCCEEDED"
     return result
 
 
+class GlueJobCancelledLeaseLost(RuntimeError):
+    """Raised when a Glue job is actively stopped mid-poll because the
+    caller's maintenance lock lease was lost (2026-07-11 audit fix)."""
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+        super().__init__(f"Glue job {run_id} stopped -- maintenance lock lease was lost")
+
+
 def _wait_for_glue_job(
-    glue, run_id: str, poll_interval: int = 15, timeout_s: int | None = None,
+    glue, run_id: str, poll_interval: int = 15, timeout_s: int | None = None, cancel_check=None,
 ) -> None:
     """
     Poll Glue job until terminal state.
@@ -240,12 +251,28 @@ def _wait_for_glue_job(
     by GLUE_JOB_TIMEOUT_SECONDS (config/settings.py), same pattern as
     athena_client.py's _poll(): stop the job and raise on expiry rather
     than hang indefinitely.
+
+    2026-07-11 audit fix: cancel_check (a zero-arg callable, typically
+    `lambda: heartbeat.lost`) is checked every poll interval, ahead of the
+    timeout check -- a lost maintenance lock lease means this process may
+    no longer be the sole owner of the table, so a still-running Glue job
+    is actively stopped rather than let complete unprotected.
     """
     tmo = timeout_s if timeout_s is not None else GLUE_JOB_TIMEOUT_SECONDS
     started_at = time.monotonic()
 
     while True:
         elapsed = time.monotonic() - started_at
+
+        if cancel_check is not None and cancel_check():
+            log.error("compaction.glue_cancelled_lease_lost", run_id=run_id)
+            try:
+                glue.batch_stop_job_run(JobName=COMPACTION_GLUE_JOB, JobRunIds=[run_id])
+                log.info("compaction.glue_auto_stopped_on_lease_lost", run_id=run_id)
+            except Exception as ce:
+                log.warning("compaction.glue_auto_stop_failed", run_id=run_id, error=str(ce))
+            raise GlueJobCancelledLeaseLost(run_id)
+
         if tmo is not None and elapsed >= tmo:
             log.error("compaction.glue_timeout", run_id=run_id,
                       elapsed_s=round(elapsed, 1), timeout_s=tmo)

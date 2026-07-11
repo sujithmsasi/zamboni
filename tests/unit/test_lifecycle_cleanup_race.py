@@ -82,7 +82,7 @@ def test_cleanup_skips_table_exempted_after_scan_but_before_delete(monkeypatch, 
     cleanup_calls = []
     monkeypatch.setattr(
         lifecycle_engine_mod, "cleanup_table",
-        lambda fqn, dry_run: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
+        lambda fqn, dry_run, cancel_check=None: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
     )
 
     result = engine.run_cleanup(environment="preprod")
@@ -102,6 +102,8 @@ def test_cleanup_proceeds_when_state_is_still_pending_drop(monkeypatch, lock_db)
             "lifecycle_state": "PENDING_DROP",
             "owner_exempted": 0,
             "pending_drop_expires_at": "2020-01-01 00:00:00",
+            "domain": "finance",
+            "domain_active": 1,
         }]),
     )
     monkeypatch.setattr(engine, "_get_pending_drop_tables", lambda env: [_pending_drop_row(fqn)])
@@ -109,7 +111,7 @@ def test_cleanup_proceeds_when_state_is_still_pending_drop(monkeypatch, lock_db)
     cleanup_calls = []
     monkeypatch.setattr(
         lifecycle_engine_mod, "cleanup_table",
-        lambda fqn, dry_run: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True, "bytes_reclaimed": 0},
+        lambda fqn, dry_run, cancel_check=None: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True, "bytes_reclaimed": 0},
     )
     monkeypatch.setattr(engine, "_mark_dropped", lambda *a, **k: None)
     monkeypatch.setattr(engine, "_write_log", lambda *a, **k: None)
@@ -136,7 +138,7 @@ def test_cleanup_skips_table_whose_lock_is_held_by_another_engine(monkeypatch, l
     cleanup_calls = []
     monkeypatch.setattr(
         lifecycle_engine_mod, "cleanup_table",
-        lambda fqn, dry_run: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
+        lambda fqn, dry_run, cancel_check=None: cleanup_calls.append(fqn) or {"catalog_dropped": True, "s3_cleaned": True},
     )
 
     result = engine.run_cleanup(environment="preprod")

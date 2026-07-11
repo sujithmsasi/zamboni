@@ -263,6 +263,7 @@ with tab2:
                         + (f", owner_email = '{_esc_b(_cu_bulk())}' " if _do_claim else "")
                         + f"WHERE table_fqn IN ({_in_sql})",
                         workgroup="app", dry_run=is_dry_run(),
+                        control_plane=True,
                     )
                     _ok_b = len(_resolved_b)
                 except Exception as _be2:
@@ -358,7 +359,10 @@ with tab3:
                     WHERE table_fqn = '{claim_fqn}'
                 """
                 from app.components.athena_runner import execute_write
-                execute_write(claim_sql, workgroup="app", dry_run=is_dry_run())
+                execute_write(
+                    claim_sql, workgroup="app", dry_run=is_dry_run(),
+                    control_plane=True,
+                )
                 audit(AuditEvent(
                     actor=_cu_claim(),
                     action_type=AuditAction.CLAIM_TABLE,

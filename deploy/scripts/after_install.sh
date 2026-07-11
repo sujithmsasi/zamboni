@@ -119,14 +119,29 @@ echo "[after_install] zamboni-api service registered." | tee -a "$LOG"
 # hk_config, domain_registry, nonprod_registry, controlm_jobs -- SQLite-
 # primary in production, see engine/core/control_plane.py) -- deliberately
 # OUTSIDE /opt/zamboni, which CodeDeploy replaces wholesale on every
-# revision. Lives on the instance's existing root EBS volume (no dedicated
-# volume provisioned for it -- deploy/zamboni-cfn.yaml only has the one
-# root volume today); this mkdir is idempotent and is the only place this
-# directory is created. It must never be deleted or recreated
-# destructively here or anywhere else in this deploy pipeline.
-mkdir -p /data/zamboni
+# revision.
+#
+# 2026-07-11 audit fix: this now lives on a dedicated, retained EBS volume
+# (deploy/zamboni-cfn.yaml's ZamboniControlPlaneVolume) that UserData
+# mounts here at boot -- NOT the instance's root volume, which is
+# DeleteOnTermination=true. Real gap this closes: the previous version of
+# this step unconditionally ran `mkdir -p /data/zamboni` regardless of
+# whether the dedicated volume actually mounted -- if the mount had
+# silently failed (or the CFN template predated the dedicated volume),
+# this mkdir would have happily succeeded creating a plain directory on
+# ephemeral root storage, masking the failure until the NEXT instance
+# replacement wiped it, having never actually been on retained storage at
+# all. This step now REFUSES to proceed (exits non-zero, failing the
+# whole deploy via this script's `set -euo pipefail`) unless /data/zamboni
+# is a genuine mountpoint -- it must already exist by the time CodeDeploy
+# reaches this hook, since UserData runs once at boot, before any
+# CodeDeploy deployment ever fires.
+if ! mountpoint -q /data/zamboni; then
+    echo "[after_install] FATAL: /data/zamboni is not a mounted filesystem -- the dedicated control-plane EBS volume did not attach/mount at boot (check /var/log/zamboni/bootstrap.log). Refusing to proceed: writing the control-plane DB to ephemeral root storage would silently defeat its own durability guarantee." | tee -a "$LOG"
+    exit 1
+fi
 chown ec2-user:ec2-user /data/zamboni
-echo "[after_install] /data/zamboni ready." | tee -a "$LOG"
+echo "[after_install] /data/zamboni confirmed mounted and ready." | tee -a "$LOG"
 
 # ── 8. Control-plane DB schema init/migrate ──────────────────────────────────
 # Idempotent -- CREATE TABLE IF NOT EXISTS + guarded ALTER TABLE, safe on

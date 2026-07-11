@@ -4,6 +4,8 @@ No AWS required.
 """
 from unittest.mock import patch
 
+import pytest
+
 from config.settings import ORPHAN_MIN_RETENTION_HOURS, SNAPSHOT_MIN_FLOOR
 
 # ── Snapshot floor enforcement ────────────────────────────────────────────────
@@ -95,3 +97,55 @@ def test_orphan_retention_longer_config_respected():
         )
 
     assert result["operation"] == "orphan_cleanup"  # retention via TBLPROPERTIES
+
+
+# ── cancel_check / lease-lost (2026-07-11 audit fix) ─────────────────────────
+
+def test_run_expire_snapshots_cancel_check_stops_before_first_iteration():
+    """A lease already lost before the first VACUUM iteration must stop
+    the whole loop -- no subsequent operation should start."""
+    from engine.core.health_checker import HealthResult
+    from engine.operations.vacuum import VacuumCancelledLeaseLost, run_expire_snapshots
+
+    health = HealthResult(table_fqn="glue_catalog.test_db.test_table", snapshot_count=100)
+    hk_config = {"snapshot_retention_days": 7, "snapshot_min_to_keep": 30}
+
+    with patch("engine.operations.vacuum.run_query") as mock_run:
+        with pytest.raises(VacuumCancelledLeaseLost):
+            run_expire_snapshots(
+                "glue_catalog.test_db.test_table", hk_config, health, "standard",
+                dry_run=False, cancel_check=lambda: True,
+            )
+        mock_run.assert_not_called()
+
+
+def test_run_expire_snapshots_cancel_check_false_proceeds_normally():
+    from engine.core.health_checker import HealthResult
+    from engine.operations.vacuum import run_expire_snapshots
+
+    health = HealthResult(table_fqn="glue_catalog.test_db.test_table", snapshot_count=100)
+    hk_config = {"snapshot_retention_days": 7, "snapshot_min_to_keep": 30}
+
+    with patch("engine.operations.vacuum.run_query", return_value="q1") as mock_run, \
+         patch("engine.operations.vacuum.get_query_stats", return_value={}):
+        result = run_expire_snapshots(
+            "glue_catalog.test_db.test_table", hk_config, health, "standard",
+            dry_run=False, cancel_check=lambda: False,
+        )
+
+    assert mock_run.called
+    assert result["vacuum_iterations"] == 1
+
+
+def test_run_orphan_cleanup_cancel_check_stops_before_submitting():
+    from engine.operations.vacuum import VacuumCancelledLeaseLost, run_orphan_cleanup
+
+    hk_config = {"orphan_file_retention_days": 5}
+
+    with patch("engine.operations.vacuum.run_query") as mock_run:
+        with pytest.raises(VacuumCancelledLeaseLost):
+            run_orphan_cleanup(
+                "glue_catalog.test_db.test_table", hk_config, tier="standard",
+                dry_run=False, cancel_check=lambda: True,
+            )
+        mock_run.assert_not_called()

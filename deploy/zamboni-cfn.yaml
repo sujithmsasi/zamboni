@@ -70,13 +70,48 @@ Parameters:
   AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: Amazon Linux 2023 AMI, resolved via the public SSM parameter.
+    Description: >-
+      Amazon Linux 2023 AMI, resolved via the public SSM parameter.
+      IMPORTANT (2026-07-09): this SSM path resolves to whatever AMI AWS
+      currently publishes there -- it drifts over time as new patched AMIs
+      ship. Changing an EC2 instance's ImageId forces CloudFormation to
+      REPLACE the instance (terminate + relaunch). This default is only
+      safe for the FIRST deploy of this stack. On every deploy after that,
+      pass the exact value from this stack's ResolvedAmiId output
+      explicitly as --parameter-overrides AmiId=ami-xxxxxxxx -- otherwise
+      a routine, unrelated stack update (or just re-running the same
+      deploy command later) can silently pick up a newer AMI and tear
+      down/respawn the running EC2 instance, the same "entire EC2
+      terminates and respawns" failure this stack's Source→Build→Deploy
+      CodePipeline (below) exists specifically to avoid for ordinary code
+      pushes -- this is the one way that same symptom can still happen,
+      via a stack update instead of a push.
 
   RootVolumeSizeGiB:
     Type: Number
     Default: 30
     MinValue: 20
     MaxValue: 500
+
+  ControlPlaneVolumeSizeGiB:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    MaxValue: 200
+    Description: >-
+      Size of the dedicated EBS volume mounted at /data/zamboni for the
+      SQLite control-plane DB (stream_registry/hk_config/domain_registry/
+      nonprod_registry/controlm_jobs). 2026-07-11 audit fix: this volume
+      is retained independently of the EC2 instance (DeletionPolicy/
+      UpdateReplacePolicy: Retain) -- an instance replacement driven by a
+      CFN stack update (e.g. AmiId drift) detaches and reattaches this
+      SAME volume to the new instance rather than losing it, unlike the
+      root volume (DeleteOnTermination: true). This does not cover an
+      instance replaced completely outside CloudFormation's awareness
+      (manual termination) -- scripts/control_plane_backup.py's S3
+      backups remain the fallback for that case, restored via
+      scripts/control_plane_restore.py or the automatic
+      restore-on-empty in scripts/init_control_plane_db.py.
 
   LogRetentionDays:
     Type: Number
@@ -131,9 +166,25 @@ Parameters:
     Default: main
     Description: Branch CodePipeline deploys from.
 
+  EnableEngineScheduling:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether the 5 EventBridge rules below actually run the engines on
+      their schedule (contracts.md's documented steady-state: HK hourly,
+      Archival/Lifecycle weekly). Set to "false" during initial setup/
+      testing so nothing fires until domains/tables are registered and
+      you're ready to go live -- the rules themselves still get created
+      either way (DISABLED vs ENABLED state), so flipping this later is a
+      stack update, not a rule re-creation. Independent of DRY_RUN_DEFAULT
+      in .env, which additionally gates whether a triggered run performs
+      real writes at all -- both layers apply.
+
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
   HasGitHubConnection: !Not [!Equals [!Ref GitHubConnectionArn, ""]]
+  EngineSchedulingEnabled: !Equals [!Ref EnableEngineScheduling, "true"]
 
 Resources:
   # ── DynamoDB — maintenance locks (contracts.md §3.1, verbatim) ─────────────
@@ -169,6 +220,16 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Real gap fixed here (2026-07-09): without this, SSM Run Command/
+        # Session Manager can't reach this instance at all -- the AL2023 AMI
+        # ships the SSM agent pre-installed, but the agent still needs the
+        # instance's own IAM role to carry these permissions to register
+        # with the SSM service and receive commands. Needed both for the
+        # EventBridge-scheduled engine runs below (SSM Run Command target)
+        # and for interactive Session Manager access as a KeyName-free SSH
+        # alternative (see the KeyName parameter's own description).
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
       Policies:
         - PolicyName: AthenaQueryExecution
           PolicyDocument:
@@ -369,19 +430,314 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -euo pipefail
-          dnf update -y --quiet
-          dnf install -y python3.11 python3.11-pip python3.11-devel git gcc ruby wget --quiet
-          mkdir -p /opt/zamboni
-          chown ec2-user:ec2-user /opt/zamboni
-          cd /home/ec2-user
-          wget -q https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
-          chmod +x install
-          ./install auto
-          systemctl enable codedeploy-agent --now
+          # Hardened 2026-07-10: the previous version used `set -euo pipefail`,
+          # so a single transient failure anywhere (a dnf network hiccup, a
+          # flaky S3 download) silently aborted the ENTIRE script -- including
+          # the CodeDeploy agent install -- leaving an instance that passes EC2
+          # status checks but has no working agent at all, undetectable until
+          # someone actually tries to deploy to it (a real incident: a replaced
+          # instance's bootstrap likely failed silently, and the resulting
+          # CodeDeploy "agent was not able to receive the lifecycle event"
+          # failure wasn't traced back to it for over 2 hours). This version
+          # retries network-dependent steps, never lets one failure skip the
+          # rest of the script, logs every step with a timestamp to
+          # /var/log/zamboni/bootstrap.log, and publishes a
+          # Zamboni/BootstrapSuccess CloudWatch metric (0 or 1, using the
+          # cloudwatch:PutMetricData permission this role already has) so a
+          # failed bootstrap is observable fleet-wide without SSHing into the
+          # specific replaced instance -- an alarm can be built on that metric
+          # org-side to page on it automatically instead of discovering it via
+          # a failed deployment hours later.
+          set -uo pipefail
+
+          LOG=/var/log/zamboni/bootstrap.log
           mkdir -p /var/log/zamboni
-          chown ec2-user:ec2-user /var/log/zamboni
-          echo "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh." > /var/log/zamboni/bootstrap.log
+          touch "$LOG"
+          chown ec2-user:ec2-user /var/log/zamboni "$LOG" 2>/dev/null || true
+
+          log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG"; }
+
+          retry() {
+            # retry <max_attempts> <sleep_seconds> <command...>
+            local max=$1 sleep_s=$2; shift 2
+            local attempt=1
+            until "$@"; do
+              if [ "$attempt" -ge "$max" ]; then
+                log "FAILED after $attempt attempts: $*"
+                return 1
+              fi
+              log "Attempt $attempt/$max failed: $* -- retrying in $sleep_s seconds"
+              attempt=$((attempt + 1))
+              sleep "$sleep_s"
+            done
+          }
+
+          publish_metric() {
+            # publish_metric <value>
+            aws cloudwatch put-metric-data \
+              --region "${AWS::Region}" \
+              --namespace Zamboni \
+              --metric-name BootstrapSuccess \
+              --value "$1" \
+              --unit None 2>>"$LOG" || log "WARNING: could not publish BootstrapSuccess metric"
+          }
+
+          BOOTSTRAP_OK=1
+          log "Bootstrap starting."
+
+          retry 5 10 dnf update -y --quiet \
+            || log "WARNING: dnf update -y failed after retries -- continuing (non-fatal, general system update only)."
+
+          retry 5 10 dnf install -y python3.11 python3.11-pip python3.11-devel git gcc ruby wget --quiet \
+            || { log "FAILED: dnf install of required packages."; BOOTSTRAP_OK=0; }
+
+          if mkdir -p /opt/zamboni && chown ec2-user:ec2-user /opt/zamboni; then
+            log "Created /opt/zamboni."
+          else
+            log "FAILED: could not create/chown /opt/zamboni -- CodeDeploy will not be able to deploy to this instance."
+            BOOTSTRAP_OK=0
+          fi
+
+          cd /home/ec2-user
+          retry 5 10 wget -q "https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install" -O install \
+            || { log "FAILED: could not download the CodeDeploy agent installer."; BOOTSTRAP_OK=0; }
+          chmod +x install
+
+          if ./install auto >>"$LOG" 2>&1; then
+            log "CodeDeploy agent installer ran."
+          else
+            log "FAILED: CodeDeploy agent installer (./install auto) exited non-zero."
+            BOOTSTRAP_OK=0
+          fi
+
+          systemctl enable codedeploy-agent --now 2>>"$LOG" \
+            || { log "FAILED: could not enable/start codedeploy-agent."; BOOTSTRAP_OK=0; }
+
+          sleep 5
+          if systemctl is-active --quiet codedeploy-agent; then
+            log "codedeploy-agent is active."
+          else
+            log "FAILED: codedeploy-agent is NOT active after install -- CodeDeploy will not be able to reach this instance."
+            BOOTSTRAP_OK=0
+          fi
+
+          # 2026-07-11 audit fix: mount the dedicated, retained control-plane
+          # EBS volume at /data/zamboni. A FRESH volume (first-ever launch)
+          # has no filesystem yet and is formatted here, once; a volume that
+          # survived from a prior instance (CFN-driven replacement -- see
+          # ControlPlaneVolumeSizeGiB's description) already has one and must
+          # NEVER be reformatted, since that would destroy the exact data
+          # this volume exists to protect. Nitro instances (t3/m6i) expose
+          # attached EBS volumes as /dev/nvme*n1 under the hood, but AL2023's
+          # udev rules also provide the originally-requested device-name
+          # symlink (/dev/sdf here) -- checked first since it's the most
+          # readable path when it works, with /dev/xvdf and a raw NVMe
+          # device as fallbacks.
+          mount_control_plane_volume() {
+            local dev=""
+            for candidate in /dev/sdf /dev/xvdf /dev/nvme1n1; do
+              if [ -e "$candidate" ]; then
+                dev="$candidate"
+                break
+              fi
+            done
+            if [ -z "$dev" ]; then
+              log "FAILED: could not locate the control-plane EBS volume (checked sdf/xvdf/nvme1n1)."
+              return 1
+            fi
+
+            if ! blkid "$dev" >/dev/null 2>&1; then
+              log "Control-plane volume $dev has no filesystem -- creating ext4 (first boot only)."
+              if ! mkfs -t ext4 -q "$dev"; then
+                log "FAILED: mkfs.ext4 on $dev."
+                return 1
+              fi
+            else
+              log "Control-plane volume $dev already has a filesystem -- mounting as-is, NOT reformatting."
+            fi
+
+            mkdir -p /data/zamboni
+            if ! mountpoint -q /data/zamboni; then
+              if ! mount "$dev" /data/zamboni; then
+                log "FAILED: could not mount $dev at /data/zamboni."
+                return 1
+              fi
+            fi
+            chown ec2-user:ec2-user /data/zamboni
+
+            if ! grep -q " /data/zamboni " /etc/fstab 2>/dev/null; then
+              echo "$dev /data/zamboni ext4 defaults,nofail 0 2" >> /etc/fstab
+            fi
+            log "/data/zamboni mounted on $dev."
+          }
+
+          if retry 10 6 mount_control_plane_volume; then
+            :
+          else
+            log "FAILED: control-plane volume mount did not succeed after retries -- /data/zamboni will NOT be a real mountpoint. after_install.sh refuses to proceed in that state rather than silently writing the control-plane DB to ephemeral root storage."
+            BOOTSTRAP_OK=0
+          fi
+
+          if [ "$BOOTSTRAP_OK" -eq 1 ]; then
+            log "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh."
+            publish_metric 1
+          else
+            log "Zamboni EC2 bootstrap FINISHED WITH ERRORS -- see above. This instance may not be deployable via CodeDeploy until fixed."
+            publish_metric 0
+          fi
+
+  # ── Control-plane EBS volume — retained independently of the instance ────
+  # 2026-07-11 audit fix: see ControlPlaneVolumeSizeGiB's description. AZ is
+  # taken from the instance rather than a separate parameter -- CFN resolves
+  # this by creating the instance first, then the volume in the same AZ,
+  # then attaching; this is the standard, non-circular EBS-alongside-EC2-in-
+  # the-same-template pattern (the Volume depends on the Instance, not the
+  # other way around).
+  ZamboniControlPlaneVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !GetAtt ZamboniInstance.AvailabilityZone
+      Size: !Ref ControlPlaneVolumeSizeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-control-plane"
+
+  ZamboniControlPlaneVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref ZamboniInstance
+      VolumeId: !Ref ZamboniControlPlaneVolume
+      Device: /dev/sdf
+
+  # ── EventBridge — engine scheduling (added 2026-07-09) ─────────────────────
+  # Real gap fixed here: no prior version of this template scheduled the
+  # three engines at all -- a full CFN + CodeDeploy run stood up the app but
+  # left HK/Archival/Lifecycle entirely unscheduled, meaning nothing would
+  # ever actually run the governance work Zamboni exists to do. Schedule
+  # matches docs/zamboni-direct-setup.md's pre-replatform EventBridge table
+  # (HK hourly, Archival/Lifecycle weekly), updated for this repo's current
+  # CodeDeploy layout: /opt/zamboni + a venv (Phase 6), .env sourced
+  # explicitly since SSM Run Command doesn't read a systemd EnvironmentFile.
+  # Each rule's actual DRY_RUN behavior is still gated by .env's
+  # DRY_RUN_DEFAULT (and every Gate 0-3 / lock / domain-active check) same
+  # as any other invocation -- EnableEngineScheduling only controls whether
+  # the script runs on schedule at all, not what it's allowed to do once it
+  # does.
+  ZamboniEventBridgeSsmRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-eventbridge-ssm-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeSsmRunCommand
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ZamboniInstance}"
+
+  ZamboniHkScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-hk"
+      Description: HK Engine — compaction, snapshot expiry, orphan cleanup.
+      ScheduleExpression: rate(1 hour)
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: HkEngineTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_hk >> /var/log/zamboni/hk.log 2>&1"]}'
+
+  ZamboniArchivalScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-archival"
+      Description: Archival Engine — export-then-delete cold staging partitions. Weekly, Sun 04:00 UTC.
+      ScheduleExpression: "cron(0 4 ? * SUN *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: ArchivalEngineTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_archival >> /var/log/zamboni/archival.log 2>&1"]}'
+
+  ZamboniNonprodScanScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-nonprod-scan"
+      Description: Lifecycle Engine — discover non-prod tables, refresh activity signals. Weekly, Sat 02:00 UTC.
+      ScheduleExpression: "cron(0 2 ? * SAT *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: NonprodScanTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_lifecycle_scan >> /var/log/zamboni/lifecycle_scan.log 2>&1"]}'
+
+  ZamboniNonprodLifecycleScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-nonprod-lifecycle"
+      Description: Lifecycle Engine — evaluate states, send GREENZONE/PENDING_DROP notifications. Weekly, Sat 03:00 UTC.
+      ScheduleExpression: "cron(0 3 ? * SAT *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: NonprodLifecycleTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_lifecycle_cycle >> /var/log/zamboni/lifecycle.log 2>&1"]}'
+
+  ZamboniNonprodCleanupScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-nonprod-cleanup"
+      Description: Lifecycle Engine — hard-delete expired PENDING_DROP tables. Weekly, Sun 05:00 UTC.
+      ScheduleExpression: "cron(0 5 ? * SUN *)"
+      State: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
+      Targets:
+        - Id: NonprodCleanupTarget
+          Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+          RoleArn: !GetAtt ZamboniEventBridgeSsmRole.Arn
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: InstanceIds
+                Values:
+                  - !Ref ZamboniInstance
+          Input: '{"commands": ["set -a", "source /opt/zamboni/.env", "set +a", "cd /opt/zamboni", "/opt/zamboni/.venv/bin/python -m engine.scripts.run_cleanup >> /var/log/zamboni/cleanup.log 2>&1"]}'
 
   # ── CodeBuild ────────────────────────────────────────────────────────────
   ZamboniCodeBuildServiceRole:
@@ -589,6 +945,16 @@ Outputs:
     Description: Private IP of the Zamboni EC2 instance.
     Value: !GetAtt ZamboniInstance.PrivateIp
 
+  ResolvedAmiId:
+    Description: >-
+      The literal AMI ID the AmiId SSM parameter resolved to for THIS
+      deploy. Pass this exact value as --parameter-overrides
+      AmiId=<this> on every subsequent `aws cloudformation deploy` of
+      this stack -- see AmiId parameter's description for why leaving
+      the SSM-path default in place risks an unintended EC2 replacement
+      on a later redeploy.
+    Value: !Ref AmiId
+
   SecurityGroupId:
     Description: Security group gating :8000/:8501/:22 access.
     Value: !Ref ZamboniSecurityGroup
@@ -600,6 +966,24 @@ Outputs:
   InstanceRoleArn:
     Description: IAM role ARN attached to the EC2 instance.
     Value: !GetAtt ZamboniInstanceRole.Arn
+
+  ControlPlaneVolumeId:
+    Description: >-
+      Dedicated, retained EBS volume ID mounted at /data/zamboni. Survives
+      stack deletion and CFN-driven instance replacement (DeletionPolicy/
+      UpdateReplacePolicy: Retain) -- record this ID; after a stack
+      deletion it becomes unmanaged and must be cleaned up (or reattached
+      to a new stack) manually.
+    Value: !Ref ZamboniControlPlaneVolume
+
+  EngineSchedulingState:
+    Description: >-
+      ENABLED means the 5 EventBridge rules (zamboni-hk/-archival/
+      -nonprod-scan/-nonprod-lifecycle/-nonprod-cleanup) are actually
+      firing on schedule right now; DISABLED means they exist but won't
+      fire until EnableEngineScheduling is flipped to "true" in a stack
+      update.
+    Value: !If [EngineSchedulingEnabled, ENABLED, DISABLED]
 
   CodeDeployApplicationName:
     Description: CodeDeploy application name.

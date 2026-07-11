@@ -66,21 +66,59 @@ If you ever need to wipe and re-seed: `python scripts/seed_local_db.py --reset`.
 
 ## 2. aws_local Mode (laptop demo against real AWS)
 
-Runs from your own machine, but talks to a real AWS account via an SSO
+Runs from your own machine, but talks to a real AWS account via a named
 profile — no EC2 instance needed. Useful for demos where the data needs to
 be real, or for validating a change against real Athena/Glue before it goes
-anywhere near a deployed instance.
+anywhere near a deployed instance. Despite the name, `AWS_SSO_PROFILE` works
+with any named profile — SSO, role-chaining (`role_arn`/`source_profile`),
+or static/session credentials — not only real SSO.
 
 **Prerequisites:**
-1. An AWS SSO profile already configured: `aws configure sso --profile <name>`
-2. `cp .env.aws_local.example .env.aws_local` and fill in the real bucket
-   names, SNS topic ARNs, and table names for your AWS account (every value
-   in the template is a placeholder — `your-athena-results-bucket`,
-   `123456789012`, etc.)
+1. A named AWS CLI profile already configured and pointed at in
+   `.env.aws_local`'s `AWS_SSO_PROFILE`. **Never set this to
+   `prod-toolsgenai-sso`** unless that specific cross-team profile is
+   genuinely what you use — in some environments it's a Bedrock-only
+   profile, not a Zamboni AWS account, and pointing there will fail or,
+   worse, quietly authenticate as the wrong identity.
+2. `.env.aws_local` filled in with real bucket names, Athena workgroups,
+   SNS topic ARNs, and account ID for your target AWS account (every
+   value in `.env.aws_local.example` is a placeholder —
+   `your-athena-results-bucket`, `123456789012`, etc.). If the target
+   account is greenfield for Zamboni (no Athena workgroups / Glue
+   `zamboni_catalog` metadata tables / SNS topics / DynamoDB lock table
+   yet), that infra has to be provisioned once before any of this works.
+
+### Setting up the AWS profile
+
+Run once (and again whenever pasted credentials expire):
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_aws_local_profile.ps1
+```
+It interactively creates/updates a named profile and writes it into
+`.env.aws_local`'s `AWS_SSO_PROFILE`, via one of two modes you choose at
+the prompt:
+
+- **Paste credentials** (Access Key ID / Secret / Session Token) — simplest
+  if that's what you have, but an assumed-role session token expires
+  (often ~1h), so you'd need to re-run this script with fresh values each
+  time.
+- **Chain to an existing long-lived profile** (`role_arn` +
+  `source_profile` — e.g. point it at a dev SSO profile you already use
+  day-to-day, supplying the target account's role ARN it can assume).
+  **Recommended** for anything spanning more than a single sitting — a
+  multi-day demo-prep window in particular — since AWS CLI/boto3 then
+  assumes and auto-refreshes the role on every call with no manual
+  re-entry ever needed.
+
+It also creates `.env.aws_local` from the `.example` template
+automatically if it doesn't exist yet, and validates the profile via
+`aws sts get-caller-identity` before finishing.
+
+### Running it
 
 ```powershell
-# Windows — handles SSO login, loads .env.aws_local, builds the UI if
-# missing, starts uvicorn on :8000, opens the browser
+# Windows — checks/refreshes the profile session, loads .env.aws_local,
+# builds the UI if missing, starts uvicorn on :8000, opens the browser
 powershell -ExecutionPolicy Bypass -File run_aws_local.ps1
 
 # Dev mode (hot-reload) — starts uvicorn --reload + npm run dev together
@@ -92,12 +130,21 @@ powershell -ExecutionPolicy Bypass -File run_ui_dev.ps1 -Mode aws_local
 so there's no wipe-on-deploy risk. It gets created fresh in your working
 directory on first write; delete it any time to start over.
 
-Once running, verify connectivity end-to-end:
+### Verifying it
+
 ```bash
-python scripts/aws_smoke_test.py
+python scripts/aws_smoke_test.py --create-lock-table
 ```
 Every check should PASS (not SKIPPED — SKIPPED means it's actually still
-running in local mode; check your env vars).
+running in local mode; check your env vars). Note this specifically
+forces the profile via `get_boto3_session()` to validate it — passing
+proves the *profile* itself works, not that the rest of the app (Athena/
+Glue/S3/SNS calls, which build plain `boto3` clients relying on the
+ambient default credential chain rather than this profile explicitly) is
+actually using it. `run_aws_local.ps1`/`run_ui_dev.ps1` close that gap by
+also exporting `AWS_PROFILE` (not just `AWS_SSO_PROFILE`) into the
+process environment — if you launch the app any other way, set
+`$env:AWS_PROFILE` yourself first.
 
 ---
 
@@ -108,7 +155,11 @@ one command) or the manual path. Full detail lives in
 **`docs/deployment/ec2_api_deploy.md`** — this section is just the
 shortest path to a working instance; read that doc for anything beyond
 first deploy (IAM specifics, security group rules, the cutover checklist
-for retiring the Streamlit fallback).
+for retiring the Streamlit fallback). Once the instance is up,
+**`docs/deployment/data_operations_guide.md`** is the next step — it
+covers everything after "the app is running": scheduling the engines,
+registering domains/tables, configuring policies, validating with a dry
+run, and going live safely.
 
 ```bash
 # 1. Lint the CFN template — zero errors required
@@ -156,6 +207,7 @@ Every check should PASS. If `control_plane_db` fails with a message about
 
 | Doc | What it covers |
 |---|---|
+| `docs/deployment/data_operations_guide.md` | End-to-end: infra deploy → EventBridge engine scheduling → registering domains/tables → policy config → dry-run validation → going live → monitoring → incident response |
 | `docs/deployment/ec2_api_deploy.md` | Full EC2/CFN deploy detail, IAM specifics, the control plane's systemd services, the Streamlit cutover checklist |
 | `docs/demo/showcase_runbook.md` | A guided click-path through the app for demos, with a local-mode fallback for every step |
 | The in-app **App Guide** (sidebar → Administration → App Guide, `/help`) | What every page in the running app actually does — the day-to-day reference once it's up |

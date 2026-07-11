@@ -39,6 +39,10 @@ if ($Mode -eq "aws_local") {
     }
     $ssoProfile = if ($env:AWS_SSO_PROFILE) { $env:AWS_SSO_PROFILE } else { "prod-toolsgenai-sso" }
     $env:AWS_SSO_PROFILE = $ssoProfile
+    # Same fix as run_aws_local.ps1 (2026-07-09): most AWS calls (Athena/
+    # Glue/S3/SNS) don't consume AWS_SSO_PROFILE at all -- they rely on
+    # boto3's default chain, which needs AWS_PROFILE set instead.
+    $env:AWS_PROFILE     = $ssoProfile
     aws sts get-caller-identity --profile $ssoProfile 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "No valid SSO session -- running: aws sso login --profile $ssoProfile" -ForegroundColor Yellow
