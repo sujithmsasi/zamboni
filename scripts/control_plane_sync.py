@@ -31,6 +31,7 @@ from config.platform_settings import get_settings  # noqa: E402
 from config.settings import (  # noqa: E402
     ATHENA_DATABASE,
     ATHENA_WORKGROUPS,
+    CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE,
     CONTROLM_JOBS_TABLE,
     DOMAIN_REGISTRY_TABLE,
     HK_CONFIG_TABLE,
@@ -38,7 +39,7 @@ from config.settings import (  # noqa: E402
     STREAM_REGISTRY_TABLE,
     get_boto3_session,
 )
-from engine.core import control_plane  # noqa: E402
+from engine.core import control_plane, notifier  # noqa: E402
 from engine.utils.logger import get_logger  # noqa: E402
 
 log = get_logger(__name__)
@@ -70,6 +71,15 @@ _ENGINE_OWNED_COLUMNS: dict[str, list[str]] = {
         "properties_synced",
     ],
 }
+
+
+class SuspiciousEmptyOverwrite(RuntimeError):
+    """
+    Raised when the SQLite side of a table is empty but the real Athena
+    table currently has rows -- see sync_table()'s docstring. Must
+    propagate out of sync_table() uncaught (no overwrite pushed at all),
+    same as EngineOwnedColumnsUnavailable below.
+    """
 
 
 class EngineOwnedColumnsUnavailable(RuntimeError):
@@ -135,6 +145,46 @@ def _fetch_engine_owned_columns(athena_table: str, columns: list[str]):
         ) from e
 
 
+def _athena_row_count(athena_table: str) -> int | None:
+    """
+    Current row count of the real Athena table. Returns None ONLY when
+    the table is confirmed not to exist yet (a genuinely fresh
+    environment's first sync -- nothing to protect, sync_table() proceeds
+    normally).
+
+    2026-07-11 audit fix: any OTHER failure (a permissions issue,
+    throttling, a network blip) now raises SuspiciousEmptyOverwrite
+    instead of being swallowed into None. The whole point of this check
+    is to protect real Athena data from a stale/empty SQLite overwrite --
+    treating "couldn't tell" the same as "confirmed nothing to protect"
+    defeated that guarantee for any transient Athena error, not just a
+    genuinely fresh table. Same allowlist convention as
+    _fetch_engine_owned_columns() above: only a table-not-found-shaped
+    error is treated as safe.
+    """
+    from engine.utils.athena_client import read_sql as athena_read_sql
+
+    try:
+        df = athena_read_sql(
+            f"SELECT COUNT(*) AS cnt FROM {athena_table}",
+            workgroup=ATHENA_WORKGROUPS.get("app", "app"),
+        )
+    except Exception as e:
+        msg = str(e)
+        if any(marker.lower() in msg.lower() for marker in _TABLE_NOT_FOUND_MARKERS):
+            log.info("control_plane_sync.athena_row_count_table_not_found", table=athena_table)
+            return None
+        log.error("control_plane_sync.athena_row_count_failed_blocking_sync", table=athena_table, error=msg)
+        raise SuspiciousEmptyOverwrite(
+            f"could not verify Athena row count for {athena_table} (not a table-not-found "
+            f"error -- refusing to assume it's safe to overwrite): {msg}"
+        ) from e
+
+    if df.empty:
+        return None
+    return int(df.iloc[0]["cnt"])
+
+
 def sync_table(bare_name: str, athena_table: str) -> None:
     """
     Push bare_name's current full contents from the SQLite control-plane DB
@@ -145,9 +195,24 @@ def sync_table(bare_name: str, athena_table: str) -> None:
     a MERGE would silently leave them behind in Athena forever. Table
     sizes here are config-metadata scale (tens to low thousands of rows),
     so a full read-and-replace per cycle is cheap. Deliberately does NOT
-    skip an empty result -- a table that's been emptied out (last row
-    deleted) must still overwrite Athena down to zero rows, not leave the
-    last-synced data stranded there.
+    generally skip an empty result -- a table that's been emptied out one
+    row at a time (last row deleted through the normal UI/API) must still
+    overwrite Athena down to zero rows, not leave the last-synced data
+    stranded there.
+
+    2026-07-10 audit fix -- the one case that DOES need to block: if the
+    SQLite side is empty AND the real Athena table still has rows, that
+    combination is far more likely to mean the control-plane DB was just
+    wiped (e.g. an EC2 instance replacement -- deploy/zamboni-cfn.yaml's
+    root volume is DeleteOnTermination=true) and hasn't been restored yet
+    (scripts/control_plane_restore.py) than a genuine one-row-at-a-time
+    full clear-out reaching zero in exactly this cycle. Pushing the
+    overwrite in that state would destroy the last real copy of this
+    data -- the Athena "replica" control_plane_backup.py's docstring
+    already relies on as a secondary durability layer. Blocked by default
+    (raises, aborts only this table's sync, alerts); set
+    CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE=true for a deliberate,
+    operator-confirmed full deregistration.
 
     Known caveat, not fixed here: if a table's very first sync ever
     happens while it holds zero rows, pandas has no data to infer real
@@ -160,6 +225,28 @@ def sync_table(bare_name: str, athena_table: str) -> None:
     import awswrangler as wr
 
     df = control_plane.read_sql(f"SELECT * FROM {bare_name}")
+
+    if df.empty and not CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE:
+        athena_count = _athena_row_count(athena_table)
+        if athena_count is not None and athena_count > 0:
+            log.error(
+                "control_plane_sync.suspicious_empty_overwrite_blocked",
+                table=bare_name, athena_table=athena_table, athena_row_count=athena_count,
+            )
+            notifier.send_alert(
+                subject=f"Control-plane sync blocked — {bare_name} is empty but Athena has {athena_count} row(s)",
+                message=(
+                    f"scripts/control_plane_sync.py refused to overwrite {athena_table} down to zero "
+                    f"rows -- the SQLite control-plane copy of {bare_name} is empty while the real Athena "
+                    f"table still has {athena_count} row(s). This usually means the control-plane DB was "
+                    "recently wiped (e.g. an EC2 instance replacement) and hasn't been restored yet -- see "
+                    "scripts/control_plane_restore.py. If this table is genuinely meant to be fully "
+                    "cleared, set CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE=true and retry."
+                ),
+            )
+            raise SuspiciousEmptyOverwrite(
+                f"{bare_name} is empty in the control plane but {athena_table} has {athena_count} row(s) in Athena"
+            )
 
     engine_owned = _ENGINE_OWNED_COLUMNS.get(bare_name)
     if engine_owned and not df.empty:

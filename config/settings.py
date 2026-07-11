@@ -138,6 +138,32 @@ ZAMBONI_LOCAL_DB   = os.getenv("ZAMBONI_LOCAL_DB", "zamboni_local.db")
 # pushes its current state to Athena for reporting/recovery/history.
 ZAMBONI_CONTROL_PLANE_DB = os.getenv("ZAMBONI_CONTROL_PLANE_DB", "zamboni_control.db")
 
+# 2026-07-10 audit fix: scripts/control_plane_sync.py's full-table
+# overwrite must not silently push an empty SQLite table over a real
+# Athena table that still has rows -- that combination almost always means
+# the control-plane DB was recently wiped (e.g. an EC2 instance
+# replacement, see deploy/zamboni-cfn.yaml's DeleteOnTermination=true root
+# volume) and hasn't been restored yet (scripts/control_plane_restore.py),
+# not a genuine intentional full clear-out. Default false (block + alert);
+# set true only for a deliberate, operator-confirmed full deregistration.
+CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE = (
+    os.getenv("CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE", "false").lower() == "true"
+)
+
+# 2026-07-11 audit fix: scripts/init_control_plane_db.py refuses to start
+# (raises, failing the CodeDeploy AfterInstall hook via its `set -e`) when
+# the control-plane DB is empty AND no S3 backup was available to restore
+# it -- a replacement instance must never silently come up with a blank
+# production control plane. The ONE legitimate case where "empty" is
+# correct is a genuine first-ever deployment (no prior data exists
+# anywhere yet); set this to true explicitly to acknowledge that and let
+# the deploy proceed with an empty DB. Never set this permanently in a
+# real environment's .env -- it's a one-time acknowledgment for the first
+# deploy, not a standing configuration.
+ZAMBONI_CONTROL_PLANE_FIRST_INSTALL = (
+    os.getenv("ZAMBONI_CONTROL_PLANE_FIRST_INSTALL", "false").lower() == "true"
+)
+
 
 # ── Mode / Session Factory (Workstream A, Phase 1a — contracts.md §2) ───────
 # get_mode() is the single source of truth for which backend a call should

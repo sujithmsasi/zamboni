@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
 
 import config.settings as settings
 import scripts.control_plane_backup as backup_mod
@@ -131,3 +134,149 @@ def test_prune_backups_noop_when_nothing_to_prune(monkeypatch):
 def test_run_forever_returns_immediately_in_local_mode(monkeypatch):
     monkeypatch.setattr(settings, "ZAMBONI_LOCAL_MODE", True)
     backup_mod._run_forever()
+
+
+# ── list_backups / restore_latest (2026-07-10 audit fix) ─────────────────────
+#
+# Real gap closed: take_backup()/prune_backups() ran on schedule, but
+# nothing in this codebase ever read a backup back. Combined with
+# deploy/zamboni-cfn.yaml's DeleteOnTermination=true root volume, a real
+# EC2 instance replacement would silently start the control-plane DB
+# empty with no way back -- these two functions are the missing restore
+# half of the backup story.
+
+def test_list_backups_sorted_newest_first(monkeypatch):
+    now = datetime.now(UTC)
+    older = _key(now - timedelta(hours=5))
+    newer = _key(now - timedelta(hours=1))
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/")
+    monkeypatch.setattr(backup_mod, "list_keys", lambda bucket, prefix: [older, newer])
+
+    backups = backup_mod.list_backups()
+
+    assert [key for _, key in backups] == [newer, older]
+
+
+def test_list_backups_empty_when_none_exist(monkeypatch):
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/")
+    monkeypatch.setattr(backup_mod, "list_keys", lambda bucket, prefix: [])
+
+    assert backup_mod.list_backups() == []
+
+
+def _write_valid_control_plane_db(path: str) -> None:
+    """A minimal (empty-rows) but schema-valid control-plane SQLite file
+    -- passes both PRAGMA integrity_check and the expected-table check."""
+    from config.control_plane_schema import CONTROL_PLANE_TABLES
+    conn = sqlite3.connect(path)
+    for ddl in CONTROL_PLANE_TABLES.values():
+        conn.execute(ddl)
+    conn.commit()
+    conn.close()
+
+
+def test_restore_latest_downloads_newest_backup(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    older = _key(now - timedelta(hours=5))
+    newer = _key(now - timedelta(hours=1))
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/meta/")
+    monkeypatch.setattr(backup_mod, "list_keys", lambda bucket, prefix: [older, newer])
+
+    downloads = []
+
+    def _fake_download(bucket, key, path):
+        downloads.append((bucket, key, path))
+        _write_valid_control_plane_db(path)
+
+    monkeypatch.setattr(backup_mod, "download_file", _fake_download)
+
+    dest = str(tmp_path / "restored.db")
+    restored_key = backup_mod.restore_latest(dest)
+
+    assert restored_key == newer
+    assert len(downloads) == 1
+    bucket, key, path = downloads[0]
+    assert bucket == "test-bucket"
+    assert key == newer
+    assert path != dest, "must download to a temp candidate first, never straight onto dest"
+    assert Path(dest).exists()
+
+
+# ── restore validation: PRAGMA integrity_check + schema + atomic replace ─────
+# (2026-07-11 audit fix)
+
+def test_restore_key_rejects_corrupted_backup_and_leaves_dest_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/")
+
+    def _fake_download(bucket, key, path):
+        Path(path).write_bytes(b"this is not a sqlite file at all")
+
+    monkeypatch.setattr(backup_mod, "download_file", _fake_download)
+
+    dest = tmp_path / "control.db"
+    dest.write_text("original content")
+
+    with pytest.raises(backup_mod.BackupValidationError):
+        backup_mod._restore_key("some-key.db", str(dest))
+
+    assert dest.read_text() == "original content", "dest must be untouched when the backup is corrupted"
+    # No stray temp candidate left behind either.
+    leftovers = list(tmp_path.glob(".restore_candidate_*"))
+    assert leftovers == []
+
+
+def test_restore_key_rejects_schema_incompatible_backup(tmp_path, monkeypatch):
+    """A backup missing one of the 5 expected control-plane tables (taken
+    by an older/incompatible schema version) must be rejected, not
+    silently accepted just because SQLite itself can open it."""
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/")
+
+    def _fake_download(bucket, key, path):
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE domain_registry (domain_name TEXT PRIMARY KEY)")
+        # Missing stream_registry/hk_config/nonprod_registry/controlm_jobs.
+        conn.commit()
+        conn.close()
+
+    monkeypatch.setattr(backup_mod, "download_file", _fake_download)
+
+    dest = tmp_path / "control.db"
+
+    with pytest.raises(backup_mod.BackupValidationError, match="missing expected table"):
+        backup_mod._restore_key("some-key.db", str(dest))
+
+    assert not dest.exists()
+
+
+def test_restore_key_atomically_replaces_dest_on_valid_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/")
+    monkeypatch.setattr(backup_mod, "download_file", lambda bucket, key, path: _write_valid_control_plane_db(path))
+
+    dest = tmp_path / "control.db"
+    dest.write_text("stale placeholder")
+
+    backup_mod._restore_key("some-key.db", str(dest))
+
+    # dest is now a real, valid control-plane SQLite file, not the stale placeholder.
+    conn = sqlite3.connect(str(dest))
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    conn.close()
+    from config.control_plane_schema import CONTROL_PLANE_TABLES
+    assert set(CONTROL_PLANE_TABLES) <= tables
+    leftovers = list(tmp_path.glob(".restore_candidate_*"))
+    assert leftovers == []
+
+
+def test_restore_latest_returns_none_when_no_backups_exist(tmp_path, monkeypatch):
+    """A genuinely first-ever deployment -- nothing to restore, caller
+    must fall through to starting empty rather than erroring."""
+    monkeypatch.setattr(backup_mod, "ZAMBONI_METADATA_BUCKET", "s3://test-bucket/")
+    monkeypatch.setattr(backup_mod, "list_keys", lambda bucket, prefix: [])
+
+    downloads = []
+    monkeypatch.setattr(backup_mod, "download_file", lambda *a: downloads.append(a))
+
+    result = backup_mod.restore_latest(str(tmp_path / "restored.db"))
+
+    assert result is None
+    assert downloads == []

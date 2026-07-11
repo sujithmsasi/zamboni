@@ -103,6 +103,13 @@ def upload_file(bucket: str, key: str, local_path: str) -> None:
     _get_client().upload_file(local_path, bucket, key)
 
 
+def download_file(bucket: str, key: str, local_path: str) -> None:
+    """Download an S3 object to a local path. Used by
+    scripts/control_plane_backup.py::restore_latest() (2026-07-10 audit
+    fix -- backups were being taken but nothing ever restored them)."""
+    _get_client().download_file(bucket, key, local_path)
+
+
 def delete_keys(bucket: str, keys: list[str]) -> int:
     """Delete an explicit list of object keys (not a whole prefix -- see
     delete_prefix() for that). Returns count deleted."""

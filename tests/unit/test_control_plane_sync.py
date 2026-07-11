@@ -71,7 +71,14 @@ def test_sync_table_reflects_a_deleted_row(cp_db, fake_to_iceberg):
     assert list(call["df"]["domain_name"]) == ["finance"]
 
 
-def test_sync_table_pushes_zero_rows_when_table_emptied(cp_db, fake_to_iceberg):
+def test_sync_table_pushes_zero_rows_when_table_emptied_and_athena_already_empty_too(
+    cp_db, fake_to_iceberg, monkeypatch
+):
+    """A table emptied one row at a time down to zero must still overwrite
+    Athena to zero -- as long as Athena isn't the one holding real data
+    the SQLite side no longer has (see the suspicious-empty tests below)."""
+    monkeypatch.setattr(athena_client, "read_sql", lambda *a, **k: pd.DataFrame([{"cnt": 0}]))
+
     cp_db.execute("DELETE FROM domain_registry")
     cp_db.commit()
 
@@ -79,6 +86,90 @@ def test_sync_table_pushes_zero_rows_when_table_emptied(cp_db, fake_to_iceberg):
 
     call = fake_to_iceberg[0]
     assert len(call["df"]) == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Suspicious-empty-overwrite guard (2026-07-10 audit fix)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_sync_table_blocks_empty_overwrite_when_athena_still_has_rows(cp_db, fake_to_iceberg, monkeypatch):
+    """
+    Real gap closed: the SQLite control-plane copy going empty while the
+    real Athena table still has rows almost always means the control-plane
+    DB was recently wiped (e.g. an EC2 instance replacement) and hasn't
+    been restored yet -- not a genuine one-row-at-a-time clear-out. Must
+    refuse the overwrite (no to_iceberg call) rather than destroy the last
+    real copy of this data.
+    """
+    monkeypatch.setattr(athena_client, "read_sql", lambda *a, **k: pd.DataFrame([{"cnt": 2}]))
+    alerts = []
+    monkeypatch.setattr(sync_mod.notifier, "send_alert", lambda **k: alerts.append(k))
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    with pytest.raises(sync_mod.SuspiciousEmptyOverwrite):
+        sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert fake_to_iceberg == [], "no overwrite must be pushed when blocked"
+    assert len(alerts) == 1
+    assert "domain_registry" in alerts[0]["subject"]
+
+
+def test_sync_table_empty_overwrite_override_env_allows_it(cp_db, fake_to_iceberg, monkeypatch):
+    """CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE=true is the documented,
+    operator-confirmed escape hatch for a genuine full clear-out."""
+    monkeypatch.setattr(settings, "CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE", True)
+    monkeypatch.setattr(sync_mod, "CONTROL_PLANE_SYNC_ALLOW_EMPTY_OVERWRITE", True)
+    called = []
+    monkeypatch.setattr(athena_client, "read_sql", lambda *a, **k: called.append(1) or pd.DataFrame([{"cnt": 2}]))
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert called == [], "the override must skip the Athena row-count check entirely"
+    assert len(fake_to_iceberg[0]["df"]) == 0
+
+
+def test_sync_table_athena_count_table_not_found_does_not_block(cp_db, fake_to_iceberg, monkeypatch):
+    """A confirmed table-not-found Athena count (a genuinely fresh
+    environment's first sync) must not block the sync -- nothing to
+    protect against."""
+    def _raise(*_a, **_k):
+        raise RuntimeError("TABLE_NOT_FOUND")
+
+    monkeypatch.setattr(athena_client, "read_sql", _raise)
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert len(fake_to_iceberg[0]["df"]) == 0
+
+
+def test_sync_table_athena_count_unexpected_error_blocks_sync(cp_db, fake_to_iceberg, monkeypatch):
+    """
+    2026-07-11 audit fix: a non-table-not-found Athena failure (a
+    permissions issue, throttling, a network blip) must now BLOCK the
+    sync rather than being treated the same as 'nothing to protect' --
+    the whole point of the suspicious-empty-overwrite guard is defeated
+    if any transient Athena error can bypass it.
+    """
+    def _raise(*_a, **_k):
+        raise RuntimeError("Access Denied: not authorized to perform athena:GetQueryResults")
+
+    monkeypatch.setattr(athena_client, "read_sql", _raise)
+
+    cp_db.execute("DELETE FROM domain_registry")
+    cp_db.commit()
+
+    with pytest.raises(sync_mod.SuspiciousEmptyOverwrite):
+        sync_mod.sync_table("domain_registry", "domain_registry")
+
+    assert fake_to_iceberg == [], "no overwrite must be pushed when the row-count check itself fails"
 
 
 def test_run_once_continues_past_a_failing_table(monkeypatch):
