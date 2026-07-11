@@ -94,6 +94,26 @@ Parameters:
     MinValue: 20
     MaxValue: 500
 
+  ControlPlaneVolumeSizeGiB:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    MaxValue: 200
+    Description: >-
+      Size of the dedicated EBS volume mounted at /data/zamboni for the
+      SQLite control-plane DB (stream_registry/hk_config/domain_registry/
+      nonprod_registry/controlm_jobs). 2026-07-11 audit fix: this volume
+      is retained independently of the EC2 instance (DeletionPolicy/
+      UpdateReplacePolicy: Retain) -- an instance replacement driven by a
+      CFN stack update (e.g. AmiId drift) detaches and reattaches this
+      SAME volume to the new instance rather than losing it, unlike the
+      root volume (DeleteOnTermination: true). This does not cover an
+      instance replaced completely outside CloudFormation's awareness
+      (manual termination) -- scripts/control_plane_backup.py's S3
+      backups remain the fallback for that case, restored via
+      scripts/control_plane_restore.py or the automatic
+      restore-on-empty in scripts/init_control_plane_db.py.
+
   LogRetentionDays:
     Type: Number
     Default: 30
@@ -502,6 +522,63 @@ Resources:
             BOOTSTRAP_OK=0
           fi
 
+          # 2026-07-11 audit fix: mount the dedicated, retained control-plane
+          # EBS volume at /data/zamboni. A FRESH volume (first-ever launch)
+          # has no filesystem yet and is formatted here, once; a volume that
+          # survived from a prior instance (CFN-driven replacement -- see
+          # ControlPlaneVolumeSizeGiB's description) already has one and must
+          # NEVER be reformatted, since that would destroy the exact data
+          # this volume exists to protect. Nitro instances (t3/m6i) expose
+          # attached EBS volumes as /dev/nvme*n1 under the hood, but AL2023's
+          # udev rules also provide the originally-requested device-name
+          # symlink (/dev/sdf here) -- checked first since it's the most
+          # readable path when it works, with /dev/xvdf and a raw NVMe
+          # device as fallbacks.
+          mount_control_plane_volume() {
+            local dev=""
+            for candidate in /dev/sdf /dev/xvdf /dev/nvme1n1; do
+              if [ -e "$candidate" ]; then
+                dev="$candidate"
+                break
+              fi
+            done
+            if [ -z "$dev" ]; then
+              log "FAILED: could not locate the control-plane EBS volume (checked sdf/xvdf/nvme1n1)."
+              return 1
+            fi
+
+            if ! blkid "$dev" >/dev/null 2>&1; then
+              log "Control-plane volume $dev has no filesystem -- creating ext4 (first boot only)."
+              if ! mkfs -t ext4 -q "$dev"; then
+                log "FAILED: mkfs.ext4 on $dev."
+                return 1
+              fi
+            else
+              log "Control-plane volume $dev already has a filesystem -- mounting as-is, NOT reformatting."
+            fi
+
+            mkdir -p /data/zamboni
+            if ! mountpoint -q /data/zamboni; then
+              if ! mount "$dev" /data/zamboni; then
+                log "FAILED: could not mount $dev at /data/zamboni."
+                return 1
+              fi
+            fi
+            chown ec2-user:ec2-user /data/zamboni
+
+            if ! grep -q " /data/zamboni " /etc/fstab 2>/dev/null; then
+              echo "$dev /data/zamboni ext4 defaults,nofail 0 2" >> /etc/fstab
+            fi
+            log "/data/zamboni mounted on $dev."
+          }
+
+          if retry 10 6 mount_control_plane_volume; then
+            :
+          else
+            log "FAILED: control-plane volume mount did not succeed after retries -- /data/zamboni will NOT be a real mountpoint. after_install.sh refuses to proceed in that state rather than silently writing the control-plane DB to ephemeral root storage."
+            BOOTSTRAP_OK=0
+          fi
+
           if [ "$BOOTSTRAP_OK" -eq 1 ]; then
             log "Zamboni EC2 bootstrap complete. Deploy via CodeDeploy or scp + deploy/setup_ec2.sh."
             publish_metric 1
@@ -509,6 +586,33 @@ Resources:
             log "Zamboni EC2 bootstrap FINISHED WITH ERRORS -- see above. This instance may not be deployable via CodeDeploy until fixed."
             publish_metric 0
           fi
+
+  # ── Control-plane EBS volume — retained independently of the instance ────
+  # 2026-07-11 audit fix: see ControlPlaneVolumeSizeGiB's description. AZ is
+  # taken from the instance rather than a separate parameter -- CFN resolves
+  # this by creating the instance first, then the volume in the same AZ,
+  # then attaching; this is the standard, non-circular EBS-alongside-EC2-in-
+  # the-same-template pattern (the Volume depends on the Instance, not the
+  # other way around).
+  ZamboniControlPlaneVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !GetAtt ZamboniInstance.AvailabilityZone
+      Size: !Ref ControlPlaneVolumeSizeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-control-plane"
+
+  ZamboniControlPlaneVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref ZamboniInstance
+      VolumeId: !Ref ZamboniControlPlaneVolume
+      Device: /dev/sdf
 
   # ── EventBridge — engine scheduling (added 2026-07-09) ─────────────────────
   # Real gap fixed here: no prior version of this template scheduled the
@@ -863,6 +967,15 @@ Outputs:
   InstanceRoleArn:
     Description: IAM role ARN attached to the EC2 instance.
     Value: !GetAtt ZamboniInstanceRole.Arn
+
+  ControlPlaneVolumeId:
+    Description: >-
+      Dedicated, retained EBS volume ID mounted at /data/zamboni. Survives
+      stack deletion and CFN-driven instance replacement (DeletionPolicy/
+      UpdateReplacePolicy: Retain) -- record this ID; after a stack
+      deletion it becomes unmanaged and must be cleaned up (or reattached
+      to a new stack) manually.
+    Value: !Ref ZamboniControlPlaneVolume
 
   EngineSchedulingState:
     Description: >-

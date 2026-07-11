@@ -70,10 +70,24 @@ phases:
   build:
     commands:
       - echo "[build] Running integration tests against dev Athena..."
-      - pytest tests/integration/ -v -m "integration"
-            --tb=short
-            --override-ini="addopts="
-            || echo "[build] WARNING: No integration tests found yet — skipping."
+      # 2026-07-10 audit fix: the old `|| echo "...skipping"` swallowed ANY
+      # non-zero exit code uniformly -- not just pytest's exit code 5
+      # ("no tests collected", the only case this was meant to tolerate),
+      # but also exit 1 (real test failures) and exit 2 (interrupted).
+      # Currently harmless (there are zero integration tests yet), but it
+      # was a live footgun for the day a real integration test starts
+      # failing -- CodeBuild would still print the same generic
+      # "skipping" message and pass the build. Now only exit 5 is treated
+      # as non-fatal; any other non-zero exit fails the build for real.
+      - >
+        pytest tests/integration/ -v -m "integration" --tb=short --override-ini="addopts=";
+        rc=$?;
+        if [ $rc -eq 5 ]; then
+          echo "[build] No integration tests collected yet -- skipping.";
+        elif [ $rc -ne 0 ]; then
+          echo "[build] Integration tests FAILED (exit $rc)";
+          exit $rc;
+        fi
 
       - echo "[build] Building the React UI (ui/dist)..."
       - cd ui && npm run build && cd ..
