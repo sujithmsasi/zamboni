@@ -27,17 +27,57 @@ Write-Host ""
 if ($Mode -eq "aws_local") {
     $envFile = Join-Path $root ".env.aws_local"
     if (-not (Test-Path $envFile)) {
-        Write-Error "$envFile not found. Copy .env.aws_local.example to .env.aws_local first."
+        Write-Error "$envFile not found. Copy .env.aws_local.example to .env.aws_local first (or run setup_aws_local_profile.ps1, which creates it for you)."
         exit 1
     }
-    Get-Content $envFile | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -eq "" -or $line.StartsWith("#")) { return }
-        $idx = $line.IndexOf("=")
-        if ($idx -lt 1) { return }
-        Set-Item -Path "Env:$($line.Substring(0, $idx).Trim())" -Value $line.Substring($idx + 1).Trim()
+    function Import-DotEnvFile($path) {
+        Get-Content $path | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -eq "" -or $line.StartsWith("#")) { return }
+            $idx = $line.IndexOf("=")
+            if ($idx -lt 1) { return }
+            Set-Item -Path "Env:$($line.Substring(0, $idx).Trim())" -Value $line.Substring($idx + 1).Trim()
+        }
     }
-    $ssoProfile = if ($env:AWS_SSO_PROFILE) { $env:AWS_SSO_PROFILE } else { "prod-toolsgenai-sso" }
+    function Test-AwsProfileExists($profileName) {
+        aws configure list --profile $profileName 2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
+    Import-DotEnvFile $envFile
+
+    # 2026-07-11 fix: no more hardcoded "prod-toolsgenai-sso" fallback --
+    # same bug/fix as run_aws_local.ps1. That profile is cross-team/
+    # Bedrock-only in at least one org's account and unrelated to Zamboni's
+    # own AWS account; silently defaulting to it hid a missing
+    # AWS_SSO_PROFILE until AWS calls failed or authenticated as the wrong
+    # identity.
+    $ssoProfile = $env:AWS_SSO_PROFILE
+    if ([string]::IsNullOrWhiteSpace($ssoProfile)) {
+        Write-Error "AWS_SSO_PROFILE is not set in $envFile. Run setup_aws_local_profile.ps1 to create a profile and fill this in, then re-run."
+        exit 1
+    }
+
+    if (-not (Test-AwsProfileExists $ssoProfile)) {
+        Write-Host "Profile '$ssoProfile' does not exist on this machine yet." -ForegroundColor Red
+        $runSetup = Read-Host "Set it up now via setup_aws_local_profile.ps1? [Y/n]"
+        if ($runSetup -match '^[Nn]') {
+            Write-Error "Cannot continue without a valid AWS profile. Run setup_aws_local_profile.ps1 manually, then re-run this script."
+            exit 1
+        }
+        & (Join-Path $root "setup_aws_local_profile.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Profile setup did not complete successfully."
+            exit 1
+        }
+        Import-DotEnvFile $envFile
+        $ssoProfile = $env:AWS_SSO_PROFILE
+        if ([string]::IsNullOrWhiteSpace($ssoProfile) -or -not (Test-AwsProfileExists $ssoProfile)) {
+            Write-Error "Profile setup finished but '$ssoProfile' still isn't usable. Check .env.aws_local and re-run."
+            exit 1
+        }
+    }
+
     $env:AWS_SSO_PROFILE = $ssoProfile
     # Same fix as run_aws_local.ps1 (2026-07-09): most AWS calls (Athena/
     # Glue/S3/SNS) don't consume AWS_SSO_PROFILE at all -- they rely on

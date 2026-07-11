@@ -166,6 +166,14 @@ def _date(offset_days: int = 0) -> str:
 
 
 def seed_domains() -> list[dict]:
+    # NOTE: every dict below must carry the SAME set of keys. insert_rows()
+    # (engine/utils/local_db.py) derives its INSERT column list from
+    # rows[0].keys() alone -- a row with extra keys not present on row 0
+    # silently has those values dropped, for every row in the batch, not
+    # just its own. Real bug found this way: "ers" used to be the only
+    # domain carrying display_name/owner_name/team_name/description/
+    # archive_duration_days/auto_delete_after_days/registered_at, so all
+    # 5 domains (including "ers" itself) were seeded without them.
     return [
         {
             "domain_name":          "finance",
@@ -181,6 +189,13 @@ def seed_domains() -> list[dict]:
             "notes":                "Finance domain - payment, claims, reconciliation",
             "created_at":           _now(120),
             "updated_at":           _now(5),
+            "registered_at":        _now(120),
+            "display_name":         "Finance",
+            "owner_name":           "D&A Finance Lead",
+            "team_name":            "Data & Analytics - Finance",
+            "description":          "Finance domain covering payment, claims, and reconciliation pipelines",
+            "archive_duration_days": 365,
+            "auto_delete_after_days": 120,
         },
         {
             "domain_name":          "ers",
@@ -218,6 +233,13 @@ def seed_domains() -> list[dict]:
             "notes":                "Membership domain - profiles, activity",
             "created_at":           _now(90),
             "updated_at":           _now(3),
+            "registered_at":        _now(90),
+            "display_name":         "Membership",
+            "owner_name":           "D&A Membership Lead",
+            "team_name":            "Data & Analytics - Membership",
+            "description":          "Membership domain covering profile and activity pipelines",
+            "archive_duration_days": 365,
+            "auto_delete_after_days": 120,
         },
         {
             "domain_name":          "claims",
@@ -233,6 +255,13 @@ def seed_domains() -> list[dict]:
             "notes":                "Claims domain - 90-day retention for reopening",
             "created_at":           _now(80),
             "updated_at":           _now(7),
+            "registered_at":        _now(80),
+            "display_name":         "Claims",
+            "owner_name":           "D&A Claims Lead",
+            "team_name":            "Data & Analytics - Claims",
+            "description":          "Claims domain - 90-day retention for reopening pipelines",
+            "archive_duration_days": 365,
+            "auto_delete_after_days": 120,
         },
         {
             "domain_name":          "travel",
@@ -248,6 +277,13 @@ def seed_domains() -> list[dict]:
             "notes":                "Travel domain - itineraries, bookings",
             "created_at":           _now(60),
             "updated_at":           _now(2),
+            "registered_at":        _now(60),
+            "display_name":         "Travel",
+            "owner_name":           "D&A Travel Lead",
+            "team_name":            "Data & Analytics - Travel",
+            "description":          "Travel domain covering itinerary and booking pipelines",
+            "archive_duration_days": 365,
+            "auto_delete_after_days": 120,
         },
     ]
 
@@ -656,21 +692,92 @@ def seed_nonprod_registry() -> list[dict]:
 
 
 def seed_home_snapshot(stream_rows: list[dict]) -> list[dict]:
+    """Matches home_snapshot's actual DDL (see the CREATE TABLE dict above)
+    and the columns app/components/home_snapshot.py's _load_snapshot()/
+    _save_snapshot() read and write. The previous version of this function
+    emitted a completely different, unused column shape (environment,
+    hk_coverage_pct, dry_run_count, tables_needing_hk, gb_compacted_today,
+    snapshots_expired_today, failures_today, circuit_breakers_open) -- none
+    of which exist in the table -- so insert_rows() (whose INSERT column
+    list is derived from rows[0].keys()) always failed with "home_snapshot
+    has no column named environment" and the table was silently left empty.
+    """
+    total = len(stream_rows)
     enabled = sum(1 for r in stream_rows if r["hk_enabled"])
-    total   = len(stream_rows)
+    domains = sorted({r["domain"] for r in stream_rows})
+    layers = sorted({r["layer"] for r in stream_rows})
+
+    fleet_coverage = []
+    for domain in domains:
+        for layer in layers:
+            rows = [r for r in stream_rows if r["domain"] == domain and r["layer"] == layer]
+            if not rows:
+                continue
+            fleet_coverage.append({
+                "domain":     domain,
+                "layer":      layer,
+                "total":      len(rows),
+                "enabled":    sum(1 for r in rows if r["hk_enabled"]),
+                "in_dry_run": sum(1 for r in rows if r.get("dry_run_until")),
+            })
+
+    compaction_needed = [
+        {
+            "table_fqn":  r["table_fqn"],
+            "domain":     r["domain"],
+            "layer":      r["layer"],
+            "tier":       r["tier"],
+            "hk_enabled": r["hk_enabled"],
+        }
+        for r in stream_rows
+        if r["hk_enabled"] and r["environment"] == "prod"
+    ][:20]
+
+    recent_failures = [
+        {
+            "table_fqn":     r["table_fqn"],
+            "domain":        r["domain"],
+            "engine":        "hk",
+            "operation":     "vacuum",
+            "error_message": "Simulated demo failure -- Athena query timeout",
+            "started_at":    _now(random.randint(0, 6)),
+        }
+        for r in stream_rows[:2]
+    ]
+
+    domain_stats = [
+        {
+            "domain":          domain,
+            "total_tables":    sum(1 for r in stream_rows if r["domain"] == domain),
+            "hk_enabled":      sum(1 for r in stream_rows if r["domain"] == domain and r["hk_enabled"]),
+            "archive_enabled": sum(1 for r in stream_rows if r["domain"] == domain and r["archive_enabled"]),
+        }
+        for domain in domains
+    ]
+
+    cost_summary = [
+        {
+            "domain":             domain,
+            "gb_scanned":         round(random.uniform(5, 50), 2),
+            "estimated_cost_usd": round(random.uniform(0.1, 5), 4),
+            "run_count":          sum(1 for r in stream_rows if r["domain"] == domain),
+        }
+        for domain in domains
+    ]
+
     return [{
-        "snapshot_date":           _date(0),
-        "environment":             "prod",
-        "total_tables":            total,
-        "hk_enabled_count":        enabled,
-        "hk_coverage_pct":         round(enabled / total * 100, 1),
-        "dry_run_count":           2,
-        "tables_needing_hk":       random.randint(3, 8),
-        "gb_compacted_today":      round(random.uniform(10, 80), 2),
-        "snapshots_expired_today": random.randint(200, 800),
-        "failures_today":          random.randint(0, 2),
-        "circuit_breakers_open":   1,
-        "generated_at":            _now(0),
+        "snapshot_date":          _date(0),
+        "generated_at":           _now(0),
+        "generated_by":           "system",
+        "total_tables":           total,
+        "hk_enabled_count":       enabled,
+        "failures_7d":            len(recent_failures),
+        "bytes_reclaimed_30d":    random.randint(50_000_000_000, 500_000_000_000),
+        "fleet_coverage_json":    json.dumps(fleet_coverage),
+        "compaction_needed_json": json.dumps(compaction_needed),
+        "recent_failures_json":   json.dumps(recent_failures),
+        "domain_stats_json":      json.dumps(domain_stats),
+        "cost_summary_json":      json.dumps(cost_summary),
     }]
 
 

@@ -4,7 +4,7 @@ This is the guide for taking Zamboni from "nothing deployed" to "the HK,
 Archival, and Lifecycle engines are safely running scheduled governance
 work against real tables, with monitoring and a recovery path in place."
 It assumes `aws_ec2` (production) deployment — for a laptop demo against
-real AWS instead, see `docs/SETUP_GUIDE.md`'s aws_local section.
+real AWS instead, see `docs/setup/aws_local.md`.
 
 Each step links out to the deeper existing doc for full detail rather
 than repeating it — this guide's job is the *order* and the *why*, not

@@ -3490,3 +3490,223 @@ tests passing, ruff clean, cfn-lint clean.
   as a checkpoint rather than guessed at. Items 6 (integration/frontend
   tests) and 7 (documentation consolidation) also not started, per the
   agreed execution order.
+- Committed and pushed as 5 commits split by concern rather than one
+  60-file commit, so a future `git bisect` stays useful: engine hardening
+  (`6e414b1`), control-plane strict errors + backup/restore (`53c02c9`),
+  deploy hardening (`374310c`), UI validation/tooltip audit + sidebar
+  spacing fix (`7456619`), this changelog entry itself (`40f6079`).
+
+2026-07-11 (later same day) Org-drop migration script + a real
+`home_snapshot` seed bug fix. Two unrelated pieces of work in one
+session: a new git-history migration tool (ops tooling, not app code)
+and a genuine fix for a previously "found, not fixed" seeding bug.
+
+- **`migrate_to_org_repo.ps1`** (new, repo root, deliberately untracked
+  -- it excludes itself from its own migration output via
+  `--invert-paths`): a HISTORY-PRESERVING alternative to
+  `.claude/prompts/07_org_drop.md`'s orphan-branch/single-commit
+  protocol. An initial draft used that clean-drop/squash approach: export
+  `HEAD` only via `git archive`, scrub, one new commit, push. Sujith's
+  explicit call after reviewing it: full per-commit history must survive
+  the move to the org repo, not get squashed -- so it was redesigned
+  around history preservation instead. Current design: clones the
+  current branch into a disposable directory (`git clone --no-local
+  --single-branch`, source repo never touched), rewrites via
+  `git filter-repo` (pip-installed if missing) -- a `--mailmap` remaps
+  every commit's author/committer identity, including the `GitHub
+  <noreply@github.com>` web-merge committer; regex `--replace-text`/
+  `--replace-message` (inline `(?i)` case-insensitive, most-specific-
+  pattern-first to avoid a bare-username rule partially mangling a full
+  URL before the URL-specific rule gets to match it) scrub the public
+  username/clone-URL across every historical blob and commit message,
+  not just HEAD; `--invert-paths` strips a handful of files -- notably
+  the tracked `zamboni_local.db`, rewritten dozens of times across this
+  repo's history per its own seeding entries above -- from every commit,
+  not just the tip. Verification then runs across EVERY commit, not just
+  HEAD: identity (`git log --all --format=...`), blob/message content
+  (`git grep -a -i` across `git rev-list --all`), and historical
+  filenames. Dry-run push, then a typed `PUSH` confirmation; never force-
+  pushes. Falls back to `git filter-branch` (identity + path removal
+  only) if `git-filter-repo` can't be pip-installed, gated behind an
+  explicit typed `ACKNOWLEDGE` up front, since that fallback can only
+  guarantee the final tree is clean, not every historical blob -- an
+  honest-limitation disclosure rather than silently shipping a weaker
+  guarantee under the same confidence level as the primary path.
+  - **Real bug found and fixed while testing this script** (in a
+    throwaway scratch repo, never the real project): `git filter-branch
+    ... -- --all` does not reliably update a clone's
+    `refs/remotes/origin/<branch>` tracking ref to the rewritten commit,
+    leaving old unrewritten content reachable via `--all` even after an
+    apparently successful rewrite -- confirmed empirically by reproducing
+    it, not assumed from documentation. Fixed by removing the clone's
+    `origin` remote immediately after cloning, before either rewrite path
+    runs; harmless for the `git-filter-repo` path too, which removes
+    `origin` itself as part of its own normal completion regardless.
+  - Validated end-to-end against throwaway repos (never the real
+    project, per this codebase's own live-verification convention): `git
+    grep -a -i`'s inverted exit-code semantics (0 = match found, 1 = no
+    match -- the opposite of most greps); the `--no-local --single-branch
+    --branch` clone flags; and a full real `git-filter-repo` run (mailmap
+    + regex replace-text/replace-message) against a 2-commit test
+    history -- confirmed it correctly remapped both author identities and
+    the `GitHub` bot committer identity to one new identity, scrubbed the
+    clone URL/bare username/a typo variant/an uppercase variant, and
+    scrubbed the commit message text itself.
+  - Not yet run against a real org remote (none available in this
+    environment) -- the dry-run-push step and pre-flight
+    destination-branch-exists check are the safety net for that first
+    real run.
+- **`scripts/seed_local_db.py::seed_home_snapshot()` schema-mismatch bug,
+  actually fixed this session** (the 2026-07-07 entry above logged this
+  as "found, not fixed" -- this closes it out): the function returned a
+  dict shaped for a completely different, long-abandoned column set
+  (`environment`, `hk_coverage_pct`, `dry_run_count`, `tables_needing_hk`,
+  `gb_compacted_today`, `snapshots_expired_today`, `failures_today`,
+  `circuit_breakers_open`) that matches neither `home_snapshot`'s actual
+  DDL (defined a few lines above `seed_home_snapshot()` in the same file)
+  nor what the real consumer, `app/components/home_snapshot.py`'s
+  `_load_snapshot()`/`_save_snapshot()`, reads and writes. Since
+  `insert_rows()` derives its INSERT column list from `rows[0].keys()`
+  alone, every local seed run silently failed to insert the row (caught
+  and logged, never raised), leaving `home_snapshot` permanently empty in
+  every fresh local setup. Fixed to emit the columns the table and its
+  real consumer actually use (`total_tables`/`hk_enabled_count`/
+  `failures_7d`/`bytes_reclaimed_30d` plus the five `*_json` blob
+  columns), deriving the JSON content from the real seeded
+  `stream_registry` rows (domain/layer/tier/hk_enabled/archive_enabled)
+  instead of the abandoned fields.
+  - Verified against the real `zamboni_local.db`, not a throwaway test
+    DB: confirmed the table was genuinely empty beforehand (0 rows,
+    matching the documented bug), then ran the fix through the exact
+    `insert_rows()` call path `main()` uses -- reported 1 row inserted,
+    with correct, real-seeded-data-derived content -- then reverted the
+    test insert so no stray data was left behind in the tracked DB file
+    (`git status` confirms only `scripts/seed_local_db.py` changed).
+  - Only consumer is the legacy Streamlit `app/components/
+    home_snapshot.py` (confirmed via grep -- nothing in `api/` touches
+    this table), which is fallback-only per this file's own documented
+    status, so the practical impact was limited to that fallback page
+    always regenerating live instead of ever hitting its cache. Not a
+    change any current React/API user-facing behavior depends on.
+  - Not yet committed.
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, the lock
+  service, or any other engine file this session -- both pieces of work
+  are ops-tooling (the migration script) and a legacy-seed-only fix
+  (`home_snapshot`), respectively.
+
+2026-07-11 (org-laptop setup pass) Three real setup gaps found and fixed
+after Sujith configured the repo on a second, org-issued laptop and hit
+them independently. 719 unit (unchanged) + 100 api (unchanged) tests
+passing, PowerShell syntax-validated (no PowerShell test runner in this
+environment, so `run_aws_local.ps1`/`run_ui_dev.ps1` are parse-checked via
+`[System.Management.Automation.Language.Parser]::ParseInput`, not executed
+end-to-end against real AWS).
+
+- **A second, distinct `insert_rows()` silent-data-loss bug, same root
+  cause as the 2026-07-11 (earlier) `home_snapshot` fix, different table**:
+  `scripts/seed_local_db.py::seed_domains()` built 5 domain dicts where
+  only `ers` (not `finance`, the first/row-0 domain) carried
+  `display_name`/`owner_name`/`team_name`/`description`/
+  `archive_duration_days`/`auto_delete_after_days`/`registered_at`.
+  `engine/utils/local_db.py::insert_rows()` derives its INSERT column list
+  from `rows[0].keys()` alone (`cols = list(rows[0].keys())`, then
+  `r.get(c) for c in cols` for every row) -- since `finance` (row 0) lacked
+  those 7 keys, **all 5 domains**, including `ers` itself, silently lost
+  them on every fresh seed, falling back to the table's column defaults
+  (`NULL` for `display_name`/`owner_name`/`team_name`/`description`, the
+  DDL's numeric defaults for the other two) instead of the values the
+  script actually authored. This is exactly the same class of bug the
+  `home_snapshot` fix closed earlier in this same session (`insert_rows()`
+  never raises on a column mismatch, it just quietly narrows what gets
+  written) -- confirms the class is real and worth grep-auditing, not a
+  one-off. Every OTHER `insert_rows()` call site was checked and is either
+  genuinely homogeneous (row dicts built inside a single loop with a fixed
+  key set -- `seed_stream_registry`, `seed_hk_config`, `seed_execution_log`,
+  `seed_vacuum_audit_demo_rows`, `seed_archival_demo_rows`,
+  `seed_nonprod_registry`, `seed_audit_log`) or already deliberately split
+  into its own `insert_rows()` call specifically because of this
+  limitation (`seed_rollback_demo_rows()`, `seed_archival_demo_rows()` --
+  both have an explanatory comment at their call site in `main()` already).
+  `seed_domains()` was the one place the discipline wasn't followed. Fixed
+  by giving `finance`/`membership`/`claims`/`travel` the same 7 keys `ers`
+  already had (concrete, non-empty values: display name, a "D&A `<Domain>`
+  Lead" owner_name, a "Data & Analytics - `<Domain>`" team_name, a
+  one-line description, `archive_duration_days=365`,
+  `auto_delete_after_days=120`, and each domain's own existing `created_at`
+  reused for `registered_at`) -- added a comment at the top of
+  `seed_domains()` explaining the `rows[0].keys()` hazard so a future edit
+  doesn't reintroduce it by adding a key to only one domain. Verified two
+  ways: (1) a standalone key-set-equality check across all 5 returned
+  dicts, (2) killed a stale `uvicorn` process that was holding
+  `zamboni_local.db` locked (the documented Windows gotcha -- see
+  `[[project_windows_dev_env_gotchas]]`), ran the full
+  `python scripts/seed_local_db.py` end-to-end, then queried the real
+  `domain_registry` table directly and confirmed all 5 domains now have
+  non-null `display_name`/`owner_name`/etc. Full `tests/unit`/`tests/api`
+  suites re-run clean afterward (719/100, unchanged counts -- this is a
+  seed-data fix, not new coverage).
+- **aws_local profile bootstrap real bug**: `.env.aws_local.example`
+  defaulted `AWS_SSO_PROFILE=prod-toolsgenai-sso` -- the exact cross-team,
+  Bedrock-only profile `docs/SETUP_GUIDE.md`'s own aws_local section
+  already warned never to use. Anyone who copied the example file without
+  editing that one line (the normal path) would point `run_aws_local.ps1`/
+  `run_ui_dev.ps1` at the wrong AWS identity from the start. Compounding
+  it: both scripts' profile-session check went straight to
+  `aws sts get-caller-identity --profile $ssoProfile` and, on failure,
+  assumed an *expired SSO session* and ran `aws sso login` -- which fails
+  confusingly (no `sso_start_url` configured) when the real problem is
+  that **the profile doesn't exist at all yet**, the normal state on a
+  fresh machine/org account, since Zamboni ships no working default.
+  Fixed in three places:
+  1. `.env.aws_local.example`'s default changed to `zamboni-preprod`
+     (matching `setup_aws_local_profile.ps1`'s own default profile name,
+     so the two line up with no manual edit needed), with a comment
+     explaining why the old default was actively dangerous.
+  2. `run_aws_local.ps1` and `run_ui_dev.ps1` both gained a
+     `Test-AwsProfileExists()` check (`aws configure list --profile X`,
+     `$LASTEXITCODE`-based per this repo's established PS 5.1 convention)
+     run *before* the session-validity check. If the profile doesn't
+     exist, the script explains why and (interactively) offers to run
+     `setup_aws_local_profile.ps1` right there -- Y/n prompt, then
+     re-invokes it in-process -- and reloads `.env.aws_local` afterward
+     (factored into a shared `Import-DotEnvFile` helper) since that script
+     may have written a different profile name into the file than what
+     was there before. `run_aws_local.ps1` also hard-errors immediately
+     (rather than silently falling back to a wrong default) if
+     `AWS_SSO_PROFILE` is empty/unset after loading the env file.
+  3. Both scripts still fall through to the existing
+     `aws sts get-caller-identity` -> `aws sso login` flow once the profile
+     is confirmed to exist, unchanged from before -- this fix only closes
+     the "profile doesn't exist yet" gap, it doesn't touch the
+     already-correct expired-session-refresh path.
+  Not run end-to-end against real AWS in this environment (no credentials
+  here) -- both scripts syntax-validated via
+  `[System.Management.Automation.Language.Parser]::ParseInput` after every
+  edit, matching this repo's established PowerShell-verification
+  convention for `.ps1` changes made without a live AWS session available.
+- **Setup docs split**: `docs/SETUP_GUIDE.md` (previously one ~220-line
+  file cramming all three modes together -- Sujith's own words, "setup doc
+  is confusing") is now a slim picker/index. Full per-mode detail moved to
+  three new, self-contained pages: `docs/setup/local.md`,
+  `docs/setup/aws_local.md` (updated to describe the new interactive
+  profile-bootstrap flow above), `docs/setup/aws_ec2.md`. Each new page
+  ends with a footer linking to the other two plus back to the index, and
+  `local.md`/`aws_local.md` both gained a "Troubleshooting" table (Windows
+  stale-process DB lock, the `insert_rows()` heterogeneous-keys hazard,
+  the profile-bootstrap failure modes) that the original combined file
+  didn't have room for. `docs/deployment/ec2_api_deploy.md` was already a
+  complete installation/IAM/CodePipeline/CodeDeploy/GitHub-connection
+  reference (Phase 6 + the two 2026-07-09/07-10 follow-up sessions) --
+  confirmed, not rewritten; `aws_ec2.md` and the `SETUP_GUIDE.md` index
+  both now link to it explicitly as "the deployment-operations reference,
+  not just a first-deploy shortcut" so it's unambiguous which doc is the
+  "DO guide" Sujith asked for. Fixed the one stale cross-reference this
+  broke (`docs/deployment/data_operations_guide.md`'s "see
+  `docs/SETUP_GUIDE.md`'s aws_local section" -> `docs/setup/aws_local.md`,
+  since that section no longer contains the detail being pointed at) --
+  grepped the whole repo for other `SETUP_GUIDE` references first; the
+  only other hits are historical, dated `.claude/CLAUDE.md` changelog
+  entries, correctly left untouched.
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, the lock
+  service, or any other engine file this session -- this pass is a seed
+  script data-integrity fix plus PowerShell/docs tooling only.
