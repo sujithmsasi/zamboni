@@ -3,10 +3,10 @@
 # Instructs the CodeDeploy agent on EC2 how to deploy the application.
 #
 # Hooks run in this order:
-#   BeforeInstall    → stop Streamlit service, backup .env
+#   BeforeInstall    → stop zamboni-api + control-plane services, backup .env
 #   [Install]        → CodeDeploy copies files to /opt/zamboni/
 #   AfterInstall     → restore .env, pip install, set permissions
-#   ApplicationStart → restart Streamlit, validate connectivity
+#   ApplicationStart → start zamboni-api + control-plane services, validate connectivity
 # =============================================================================
 
 version: 0.0
@@ -23,16 +23,15 @@ hooks:
       runas: root
 
   AfterInstall:
-    # Phase 6: bumped from 300s -- now also creates/updates a venv and
-    # installs requirements.txt into it for zamboni-api.service, on top of
-    # the existing system-wide pip install for the Streamlit service.
+    # Bumped from 300s -- creates/updates a venv and installs
+    # requirements.txt into it for zamboni-api.service.
     - location: deploy/scripts/after_install.sh
       timeout: 600
       runas: root
 
   ApplicationStart:
-    # Phase 6: bumped from 120s -- now starts and health-checks both
-    # zamboni-app (Streamlit, :8501) and zamboni-api (FastAPI, :8000).
+    # Bumped from 120s -- starts and health-checks zamboni-api (:8000) and
+    # the control-plane sync/backup services.
     - location: deploy/scripts/app_start.sh
       timeout: 180
       runas: root

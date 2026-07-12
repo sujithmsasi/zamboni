@@ -9,11 +9,11 @@ the FastAPI/React service and a complete standalone CloudFormation stack.
 |---|---|
 | `buildspec.yml` | CodeBuild — install, test, build UI, package |
 | `appspec.yml` | CodeDeploy — lifecycle hooks |
-| `scripts/before_install.sh` | Stop Streamlit + API services, backup .env |
-| `scripts/after_install.sh` | Restore .env, pip install (+ venv for the API service), install both systemd units, permissions |
-| `scripts/app_start.sh` | Restart Streamlit + API, validate connectivity |
-| `iam_policy.json` | EC2 instance role (legacy Streamlit-only) — superseded by `zamboni-cfn.yaml`'s inline role for new deploys |
-| `pipeline_config.md` | Manual DO-team setup instructions (superseded by `zamboni-cfn.yaml` — kept for reference/comparison) |
+| `scripts/before_install.sh` | Stop the API + control-plane services, backup .env |
+| `scripts/after_install.sh` | Restore .env, pip install (+ venv for the API service), install systemd units, permissions |
+| `scripts/app_start.sh` | Start the API + control-plane services, validate connectivity |
+| `iam_policy.json` | EC2 instance role — superseded by `zamboni-cfn.yaml`'s inline role for new deploys |
+| `pipeline_config.md` | Manual DO-team setup instructions (superseded by `zamboni-cfn.yaml` — kept for reference/comparison; predates the FastAPI/React replatform, describes a different pipeline topology) |
 
 ## Files (Phase 6 — contracts.md §10 R10.3)
 
@@ -21,7 +21,6 @@ the FastAPI/React service and a complete standalone CloudFormation stack.
 |---|---|
 | `zamboni-cfn.yaml` | Complete standalone CFN stack: EC2 + IAM + DynamoDB lock table + security group + CodePipeline/CodeBuild/CodeDeploy skeleton. Parameterized for org adaptation — see `../docs/ORG_DROP.md`. |
 | `systemd/zamboni-api.service` | FastAPI/uvicorn unit (:8000), installed by `after_install.sh` |
-| `systemd/zamboni-streamlit.service` | Reference Streamlit unit (venv-based alternative to the heredoc-generated `zamboni-app.service`) |
 
 Run `cfn-lint deploy/zamboni-cfn.yaml` before any deploy — CI gate, zero
 errors required (warnings reported).

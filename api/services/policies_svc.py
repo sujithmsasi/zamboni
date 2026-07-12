@@ -181,9 +181,8 @@ def count_template_usage(name: str) -> int:
 
 
 def delete_template(name: str, dry_run: bool) -> bool:
-    """> ADDED (Phase 5a) -- see create_template()'s note. Mirrors the
-    Streamlit "Delete Template" sub-tab's built-in-protection + usage-count
-    guard exactly."""
+    """> ADDED (Phase 5a) -- see create_template()'s note. Enforces the
+    built-in-protection + usage-count guard exactly."""
     if name in _BUILTIN_TEMPLATES:
         raise ValueError(f"Template '{name}' is built-in and cannot be deleted.")
 

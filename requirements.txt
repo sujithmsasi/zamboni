@@ -28,11 +28,6 @@ rich>=15.0.0
 # ── YAML ──────────────────────────────────────────────────────────────────────
 pyyaml>=6.0.2
 
-# ── Streamlit app ─────────────────────────────────────────────────────────────
-streamlit>=1.57.0
-plotly>=6.7.0
-itables>=2.0.0
-
 # ── Iceberg metadata (Workstream A recovery tooling) ──────────────────────────
 # Optional: engine/core/recovery.py's data-file spot-check lazily imports this
 # to parse Avro manifest-lists/manifests; degrades to "skipped" if absent.

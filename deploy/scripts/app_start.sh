@@ -4,11 +4,9 @@
 # Runs AFTER AfterInstall. Final validation before CodeDeploy marks SUCCESS.
 #
 # Responsibilities:
-#   1. Restart Streamlit service
-#   2. Validate settings load correctly
-#   3. Verify Athena connectivity (SELECT 1)
-#   4. Confirm Streamlit is responding on port 8501
-#   5. Log deploy event
+#   1. Validate settings load correctly
+#   2. Verify Athena connectivity (SELECT 1)
+#   3. Log deploy event
 #
 # Exit non-zero → CodeDeploy marks deployment FAILED and rolls back.
 # =============================================================================
@@ -23,20 +21,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === ApplicationStart START ===" | tee -a 
 
 cd "$DEPLOY_DIR"
 
-# ── 1. Restart Streamlit service ──────────────────────────────────────────────
-echo "[app_start] Starting zamboni-app service..." | tee -a "$LOG"
-systemctl start zamboni-app
-sleep 5  # Give Streamlit a moment to start
-
-if systemctl is-active --quiet zamboni-app; then
-    echo "[app_start] zamboni-app is running ✓" | tee -a "$LOG"
-else
-    echo "[app_start] ERROR: zamboni-app failed to start." | tee -a "$LOG"
-    journalctl -u zamboni-app -n 20 | tee -a "$LOG"
-    exit 1
-fi
-
-# ── 2. Validate settings ──────────────────────────────────────────────────────
+# ── 1. Validate settings ──────────────────────────────────────────────────────
 echo "[app_start] Validating settings..." | tee -a "$LOG"
 $PYTHON -c "
 from config.settings import (
@@ -55,7 +40,7 @@ if [ $? -ne 0 ]; then
 fi
 echo "[app_start] Settings validated ✓" | tee -a "$LOG"
 
-# ── 2b. Control-plane DB liveness check ───────────────────────────────────────
+# ── 1b. Control-plane DB liveness check ───────────────────────────────────────
 # stream_registry/hk_config/domain_registry/nonprod_registry/controlm_jobs are
 # SQLite-primary in production now (engine/core/control_plane.py) -- unlike
 # the Athena check below, this one is FATAL: it's not a nice-to-have, it's
@@ -72,7 +57,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# ── 3. Athena connectivity check ──────────────────────────────────────────────
+# ── 2. Athena connectivity check ──────────────────────────────────────────────
 echo "[app_start] Checking Athena connectivity..." | tee -a "$LOG"
 $PYTHON -c "
 import sys
@@ -87,22 +72,7 @@ except Exception as e:
     sys.exit(0)
 " | tee -a "$LOG"
 
-# ── 4. Streamlit health check ─────────────────────────────────────────────────
-echo "[app_start] Checking Streamlit on port 8501..." | tee -a "$LOG"
-RETRY=0
-MAX_RETRIES=6
-until curl -sf http://localhost:8501/_stcore/health > /dev/null 2>&1; do
-    RETRY=$((RETRY + 1))
-    if [ $RETRY -ge $MAX_RETRIES ]; then
-        echo "[app_start] WARNING: Streamlit health check timed out after ${MAX_RETRIES} retries." | tee -a "$LOG"
-        echo "[app_start] Service is running but may still be loading." | tee -a "$LOG"
-        break
-    fi
-    echo "[app_start] Waiting for Streamlit... attempt $RETRY/$MAX_RETRIES" | tee -a "$LOG"
-    sleep 5
-done
-
-# ── 5. Start + health-check zamboni-api (Phase 6 -- new, additive) ───────────
+# ── 3. Start + health-check zamboni-api ──────────────────────────────────────
 echo "[app_start] Starting zamboni-api service..." | tee -a "$LOG"
 systemctl start zamboni-api
 sleep 3
@@ -129,7 +99,7 @@ until curl -sf http://localhost:8000/api/system/mode > /dev/null 2>&1; do
     sleep 5
 done
 
-# ── 6. Start zamboni-control-plane-{sync,backup} ─────────────────────────────
+# ── 4. Start zamboni-control-plane-{sync,backup} ─────────────────────────────
 # Non-fatal if either fails to start -- the control-plane DB liveness check
 # above (step 2b) already confirmed the app itself can read/write it; these
 # two are the Athena-sync and S3-backup loops layered on top, not something
@@ -150,7 +120,7 @@ done
 # deploy/systemd/zamboni-control-plane-integrity.timer) -- nothing to start
 # here, systemctl enable in after_install.sh is sufficient.
 
-# ── 7. Log deploy event ───────────────────────────────────────────────────────
+# ── 5. Log deploy event ───────────────────────────────────────────────────────
 DEPLOY_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 HOSTNAME=$(hostname)
 echo "[app_start] Deploy completed successfully at $DEPLOY_TIME on $HOSTNAME" | tee -a "$LOG"

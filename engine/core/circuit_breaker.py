@@ -61,7 +61,7 @@ def trip(table_fqn: str, failure_count: int, dry_run: bool = False) -> None:
     reason = (
         f"Circuit breaker tripped after {failure_count} consecutive failures "
         f"(threshold: {CIRCUIT_BREAKER_THRESHOLD}). "
-        f"Table disabled — investigate and re-enable manually via Zamboni CLI or Streamlit app."
+        f"Table disabled — investigate and re-enable manually via Zamboni CLI or the app."
     )
 
     log.error(

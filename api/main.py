@@ -1,8 +1,8 @@
 """
 Zamboni API -- FastAPI app (contracts.md §6 Phase 2).
 
-Engine is called in-process (direct imports), never shelled. Streamlit stays
-untouched and running on :8501; this app serves :8000.
+Engine is called in-process (direct imports), never shelled. This app
+serves :8000 -- the only UI/API surface (Streamlit was decommissioned).
 """
 from __future__ import annotations
 

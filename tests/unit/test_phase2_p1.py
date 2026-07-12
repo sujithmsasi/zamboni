@@ -291,58 +291,6 @@ class TestCostExplorer:
         assert result["total_usd"] is None
 
 
-# ── Settings page has new sections ───────────────────────────────────────────
-
-class TestSettingsPageContent:
-    def test_teams_section_in_settings(self):
-        with open("app/pages/11_Settings.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "Teams" in content
-        assert "teams_enabled" in content
-        assert "teams_webhook_url" in content
-
-    def test_cost_explorer_section_in_settings(self):
-        with open("app/pages/11_Settings.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "Cost Explorer" in content
-        assert "cost_explorer_enabled" in content
-
-    def test_teams_webhook_masked_in_ui(self):
-        with open("app/pages/11_Settings.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "mask_webhook_url" in content
-
-    def test_test_message_button_present(self):
-        with open("app/pages/11_Settings.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "Send Test Message" in content
-
-    def test_cost_explorer_iam_note_present(self):
-        with open("app/pages/11_Settings.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "ce:GetCostAndUsage" in content
-
-
-# ── Domain Management digest opt-in ──────────────────────────────────────────
-
-class TestDomainDigestOptIn:
-    def test_digest_fields_in_register_form(self):
-        with open("app/pages/1_Domain_Management.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "digest_enabled" in content
-        assert "digest_email" in content
-
-    def test_digest_preview_button_present(self):
-        with open("app/pages/1_Domain_Management.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "Preview Digest" in content
-
-    def test_digest_sender_status_shown(self):
-        with open("app/pages/1_Domain_Management.py", encoding="utf-8") as f:
-            content = f.read()
-        assert "email_sender_status" in content
-
-
 # ── DDL and IAM ───────────────────────────────────────────────────────────────
 
 def test_domain_registry_ddl_has_digest_fields():
@@ -379,10 +327,3 @@ def test_zamboni_settings_json_has_cost_explorer_config():
         settings = json.load(f)
     assert "cost_explorer_enabled" in settings
     assert "cost_explorer_tag_key" in settings
-
-
-def test_cost_report_page_uses_cost_explorer():
-    with open("app/pages/8_Cost_Report.py", encoding="utf-8") as f:
-        content = f.read()
-    assert "cost_explorer" in content
-    assert "ce_enabled" in content

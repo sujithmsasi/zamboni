@@ -41,12 +41,12 @@ The old org branch remains untouched and deployable — it IS the rollback.
    deploy/zamboni-cfn.yaml --stack-name <org-name> --capabilities
    CAPABILITY_NAMED_IAM --parameter-overrides ...` (see
    `docs/deployment/ec2_api_deploy.md`'s "CloudFormation path" for the
-   full parameter list). First CodeDeploy run installs both
-   `zamboni-app` (Streamlit fallback) and `zamboni-api` (FastAPI,
-   primary) side by side — Phase 6's `deploy/scripts/after_install.sh`
-   already handles both, plus (post-Phase-6) `/data/zamboni` provisioning
-   and the 3 `zamboni-control-plane-*` services (see
-   `docs/deployment/ec2_api_deploy.md`'s "Control Plane" section).
+   full parameter list). First CodeDeploy run installs `zamboni-api`
+   (FastAPI, the only app process — Streamlit was decommissioned
+   2026-07-11) — `deploy/scripts/after_install.sh` handles this, plus
+   `/data/zamboni` provisioning and the 3 `zamboni-control-plane-*`
+   services (see `docs/deployment/ec2_api_deploy.md`'s "Control Plane"
+   section).
 4a. **Set `ZAMBONI_CONTROL_PLANE_DB` in the instance's `.env`** to
    `/data/zamboni/zamboni_control.db` (absolute path, must stay outside
    `/opt/zamboni`) — this is a manual `.env` edit, not something the CFN

@@ -7,7 +7,7 @@ escalation matrix, approval flags) goes through here. Pages and engine code
 must never read zamboni_settings.json directly.
 
 Thread safety: get_settings() re-reads the file on every call in production
-to pick up changes made via the Settings page without restarting Streamlit.
+to pick up changes made via the Settings page without restarting the app.
 For test mode, a cached in-memory dict is returned.
 """
 from __future__ import annotations

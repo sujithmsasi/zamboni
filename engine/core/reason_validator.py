@@ -9,7 +9,7 @@ Rules (driven by platform_settings):
   - In dev/test: reason-only or relaxed validation based on settings.
   - Dry-run mode: reason is always optional (never blocks simulation).
 
-Used by Streamlit pages and CLI to consistently enforce the same rules
+Used by the API layer and CLI to consistently enforce the same rules
 without duplicating validation logic.
 """
 from __future__ import annotations
@@ -170,39 +170,3 @@ def _env_requires_reason(environment: str, settings: dict) -> bool:
         return settings.get("require_reason_in_preprod", True)
     # dev/test: configurable, default off
     return settings.get("require_reason_in_dev", False)
-
-
-def render_reason_form(
-    action_type: str,
-    environment: str,
-    key_prefix:  str = "reason",
-) -> tuple[str, str]:
-    """
-    Render a Streamlit reason + ticket form.
-    Returns (reason, ticket_number).
-    Call this inside a Streamlit form or container.
-
-    Only renders the ticket field if required for this action + environment.
-    """
-    import streamlit as st
-
-    reason_required = require_reason_for_action(action_type, environment)
-    ticket_required = require_ticket_for_action(action_type, environment)
-
-    reason = st.text_area(
-        "Reason" + (" *" if reason_required else " (optional)"),
-        placeholder="Describe why this action is being taken...",
-        key=f"{key_prefix}_reason",
-        help="Required for production live actions." if reason_required else
-             "Optional but recommended for audit trail.",
-    )
-
-    ticket = ""
-    if ticket_required or environment == "prod":
-        ticket = st.text_input(
-            "Change / Ticket Number" + (" *" if ticket_required else " (optional)"),
-            placeholder="e.g. CHG0012345 or JIRA-456",
-            key=f"{key_prefix}_ticket",
-        )
-
-    return reason.strip(), ticket.strip()

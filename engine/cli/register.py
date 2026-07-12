@@ -229,7 +229,7 @@ def single(table, domain, layer, tier, env, owner, ci, template, dry_run):
     console.print(f"\n[bold blue]Registering:[/] [cyan]{table}[/]")
 
     if table_exists(table):
-        console.print("[yellow]⚠  Already registered.[/] Use Streamlit app to update config.")
+        console.print("[yellow]⚠  Already registered.[/] Use the Table Registration page to update config.")
         return
 
     tmpl = template or infer_template(layer, tier)

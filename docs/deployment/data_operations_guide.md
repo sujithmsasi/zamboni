@@ -98,9 +98,9 @@ Notes:
 
 ## 3. First boot on the instance
 
-CodeDeploy's first run installs both `zamboni-app` (Streamlit fallback)
-and `zamboni-api` (FastAPI, primary) — see `deploy/scripts/after_install.sh`.
-Before anything works end to end:
+CodeDeploy's first run installs `zamboni-api` (FastAPI, the only app
+process — Streamlit was decommissioned 2026-07-11) — see
+`deploy/scripts/after_install.sh`. Before anything works end to end:
 
 ```bash
 # On the instance, /opt/zamboni/.env (after_install.sh copies .env.example
@@ -278,13 +278,15 @@ a small, deliberately-chosen set.
 
 ---
 
-## 10. Retiring the Streamlit fallback
+## 10. Streamlit decommission (complete)
 
-Once the React/FastAPI stack has run in parity with Streamlit for the
-agreed window, `docs/deployment/ec2_api_deploy.md`'s cutover checklist
-covers stopping `zamboni-app`, removing the `:8501` security-group rule,
-and archiving `app/` — deliberately a checklist of judgment calls
-("does the React app actually match"), not a script.
+The React/FastAPI stack ran in parity with Streamlit through the agreed
+window; Streamlit was then fully decommissioned (2026-07-11) — `app/`,
+`.streamlit/`, the `zamboni-app` systemd unit, and the `:8501`
+security-group rule are all removed, not archived. See
+`docs/deployment/ec2_api_deploy.md`'s "Streamlit decommission" section
+for the by-hand retirement steps if you're upgrading an older instance
+that still has the service installed.
 
 ---
 

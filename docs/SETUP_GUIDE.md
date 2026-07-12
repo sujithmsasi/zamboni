@@ -60,8 +60,8 @@ domains/tables, policy config, dry-run validation, going live.
 shortest path to a first working instance) **→ Installation / CodePipeline
 internals: [`docs/deployment/ec2_api_deploy.md`](deployment/ec2_api_deploy.md)**
 (IAM specifics, security groups, the full CodeBuild/CodeDeploy/CodePipeline
-wiring, the GitHub connection setup, the Streamlit cutover checklist — this
-is the deployment-operations reference, not just a first-deploy shortcut)
+wiring, the GitHub connection setup — this is the deployment-operations
+reference, not just a first-deploy shortcut)
 
 ---
 
@@ -73,7 +73,7 @@ is the deployment-operations reference, not just a first-deploy shortcut)
 | `docs/setup/aws_local.md` | aws_local mode: profile bootstrap (interactive, no manual AWS CLI config needed), running, verifying, troubleshooting |
 | `docs/setup/aws_ec2.md` | aws_ec2 mode: shortest path to a first deployed instance |
 | `docs/deployment/data_operations_guide.md` | End-to-end: infra deploy → EventBridge engine scheduling → registering domains/tables → policy config → dry-run validation → going live → monitoring → incident response |
-| `docs/deployment/ec2_api_deploy.md` | Full EC2/CFN deploy detail, IAM specifics, the control plane's systemd services, the Streamlit cutover checklist |
+| `docs/deployment/ec2_api_deploy.md` | Full EC2/CFN deploy detail, IAM specifics, the control plane's systemd services |
 | `docs/ORG_DROP.md` | Adapting this repo into a different org's AWS account — parameter list, no-merge branch strategy |
 | `docs/demo/showcase_runbook.md` | A guided click-path through the app for demos, with a local-mode fallback for every step |
 | The in-app **App Guide** (sidebar → Administration → App Guide, `/help`) | What every page in the running app actually does — the day-to-day reference once it's up |

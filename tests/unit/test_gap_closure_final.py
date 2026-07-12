@@ -8,22 +8,6 @@ from unittest.mock import patch
 
 import pandas as pd
 
-# ── Gap 1: systemd entrypoint ─────────────────────────────────────────────────
-
-def test_gap1_after_install_uses_home_py():
-    """deploy/scripts/after_install.sh must reference app/Home.py as ExecStart."""
-    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
-        content = f.read()
-    assert "app/Home.py" in content, "app/Home.py not found in after_install.sh"
-
-
-def test_gap1_after_install_no_main_py():
-    """deploy/scripts/after_install.sh must NOT reference app/main.py."""
-    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
-        content = f.read()
-    assert "app/main.py" not in content, "app/main.py still present in after_install.sh"
-
-
 # ── Gap 2: _is_due uses hk_run operation filter ───────────────────────────────
 
 def test_gap2_is_due_queries_hk_run_operation():

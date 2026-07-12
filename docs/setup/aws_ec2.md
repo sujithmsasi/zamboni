@@ -4,8 +4,8 @@ The real, deployed instance — either the CloudFormation path (preferred, one
 command) or the manual path. **This page is only the shortest path to a
 first working instance.** For the full installation walkthrough — IAM
 specifics, security group rules, the CodePipeline/CodeBuild/CodeDeploy
-wiring, the GitHub connection setup and its most common failure mode, the
-Streamlit cutover checklist — see **`docs/deployment/ec2_api_deploy.md`**,
+wiring, the GitHub connection setup and its most common failure mode — see
+**`docs/deployment/ec2_api_deploy.md`**,
 the dedicated deployment-operations reference. Once the instance is up,
 **`docs/deployment/data_operations_guide.md`** is the next step — it covers
 everything after "the app is running": scheduling the engines, registering

@@ -104,7 +104,7 @@ def register_domain(
     auto_delete_after_days: int = 120,
     is_active: bool = True,
     environment: str = "prod",
-    registered_by: str = "streamlit",
+    registered_by: str = "system",
     notes: str = "",
     dry_run: bool = False,
 ) -> bool:
@@ -289,7 +289,7 @@ def register_table(
     hk_enabled: bool = False,
     archive_enabled: bool = False,
     archive_retention_days: int | None = None,
-    registered_by: str = "streamlit",
+    registered_by: str = "system",
     notes: str = "",
     # Control-M integration fields
     controlm_pipeline_job: str | None = None,

@@ -3710,3 +3710,196 @@ end-to-end against real AWS).
 - No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, the lock
   service, or any other engine file this session -- this pass is a seed
   script data-integrity fix plus PowerShell/docs tooling only.
+
+2026-07-11 (continued org-laptop session) Further aws_local setup issues,
+`APP_ENV` selectability in local mode, and a full Streamlit decommission.
+Sujith continued testing on the org laptop with a real `zamboni-dev` AWS
+profile (all infra already provisioned from the pre-replatform Streamlit
+setup) and hit an `ExpiredTokenException` despite a successful
+`aws sso login`, asked for local mode's environment to be selectable, and
+asked for every Streamlit reference/fallback removed outright since it's
+decommissioned org-side. 660 unit (719 - 59 removed Streamlit-page-content
+tests, see below) + 100 api tests passing, ruff clean, cfn-lint clean,
+live-verified: booted the app in local mode with `app/` fully deleted and
+confirmed `/`, `/api/system/mode`, `/api/tables` all serve correctly.
+
+- **Real bug: `ExpiredTokenException` despite a successful `aws sso
+  login`.** Root cause: boto3's default credential-chain resolution checks
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` env vars
+  **before** a profile's own credentials, even when `profile_name=` is
+  passed explicitly to `boto3.Session(...)`. A stale export of these three
+  (from an earlier paste-credentials session, an org credential-helper
+  tool, a leftover console-copied export in the shell) silently wins over
+  a fresh SSO login, so the app sends AWS the old, actually-expired static
+  credentials while the profile's own live SSO session sits unused --
+  producing a confusing error that reads like the login itself failed.
+  `config/settings.py::get_boto3_session()` (the one function every AWS
+  call in `aws_local` mode goes through) now: (a) drops the hardcoded
+  `"prod-toolsgenai-sso"` fallback -- raises `RuntimeError` immediately if
+  `AWS_SSO_PROFILE` is unset, same fix already applied to the two launcher
+  scripts on 2026-07-11 earlier the same day, just not previously applied
+  here, the actual function that matters most; (b) explicitly pops
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`/
+  `AWS_SECURITY_TOKEN` from `os.environ` before constructing the session,
+  forcing unambiguous profile-based resolution. Documented as a named
+  troubleshooting entry in `docs/setup/aws_local.md`.
+- **`APP_ENV` made genuinely selectable in local mode, not just a UI
+  label.** Sujith's framing: "in aws its static because each account owns
+  its own env" (true -- one AWS account = one environment in practice) "I
+  should have the privilege to select/set the env when starting in local
+  mode" (no such constraint locally). `APP_ENV` already existed
+  (`config/settings.py`, surfaced via `GET /api/system/mode`'s `app_env`
+  field, shown as the "DEV · LOCAL" header tag) but `scripts/
+  seed_local_db.py` hardcoded every seeded domain/table/execution-log/
+  audit-log row's own `environment` field to the literal string `"prod"`
+  regardless -- so setting `APP_ENV=dev` changed the header tag but left
+  every registered table still claiming `environment=prod` underneath,
+  a real inconsistency. Fixed by adding a module-level `_SEED_ENV =` in
+  `seed_local_db.py`, deliberately **imported from `config.settings.
+  APP_ENV`** rather than re-read via a second, independently-defaulted
+  `os.getenv("APP_ENV", ...)` call -- an independent default would
+  silently drift from the running app's own default and reintroduce the
+  exact mismatch this closes. Threaded through every previously-hardcoded
+  `"environment": "prod"` literal (`seed_domains`, `seed_stream_registry`,
+  `seed_execution_log`, `seed_rollback_demo_rows`, `seed_archival_demo_rows`,
+  `seed_audit_log`, and the `compaction_needed` filter inside
+  `seed_home_snapshot`) -- `seed_nonprod_registry()` deliberately excluded,
+  since it already seeds a genuine dev/preprod/test mix by design (it
+  exists to exercise the Lifecycle Engine across multiple non-prod
+  environments at once, a different concept from "which env is this
+  local instance simulating"). Verified three ways: reseeded with
+  `APP_ENV=dev` and confirmed `domain_registry`/`stream_registry` both
+  came back `dev`-only via a direct SQLite query; reseeded again with no
+  override and confirmed it picked up *this machine's* pre-existing local
+  `.env` file's `APP_ENV=dev` (unrelated, already present before this
+  session) rather than silently defaulting to something else; reseeded a
+  third time with an explicit `APP_ENV=prod` override to restore the
+  historical "prod" baseline for the **committed** `zamboni_local.db`
+  fixture specifically, since that machine-dependent default shouldn't
+  leak into what gets checked in. Documented in `docs/setup/local.md`'s
+  new "Choosing which environment this simulates" section.
+- **`docs/setup/local.md` rewritten for PowerShell correctness and
+  clarity** -- Sujith's own report: `cd ui && npm ci && npm run build &&
+  cd ..` "will not work in powershell" (true -- `&&` chaining and cmd.exe's
+  `set VAR=value` are not native PowerShell 5.1 syntax) and the dev-mode
+  paragraph was confusing prose with no concrete steps. Rewrote the
+  "Manual step-by-step" section as literal, one-command-per-line
+  PowerShell (`$env:VAR = "value"`, no `&&`), and the dev-mode section as
+  an explicit "two servers, here's what each one is and which URL you
+  actually open" explanation instead of a single dense sentence.
+- **Streamlit decommissioned outright** (Sujith's explicit choice, asked
+  via `AskUserQuestion` given the ~80-file blast radius: archive vs. hard
+  delete vs. docs-only -- picked hard delete). Removed, not archived:
+  - `app/` (all 47 files: `Home.py`, 12 pages, 11 components, assets) via
+    `git rm -r` -- confirmed zero uncommitted diffs in `app/` first so
+    nothing in-progress was lost.
+  - `.streamlit/` (`config.toml`, `pages.toml`, `secrets.toml.example` --
+    tracked; `secrets.toml` itself was untracked/gitignored, deleted from
+    disk too).
+  - `requirements.txt`: `streamlit`, `plotly`, `itables` (confirmed via
+    repo-wide import grep that nothing outside `app/` used the latter two
+    either).
+  - `config/settings.py`: `APP_PORT` constant (confirmed zero consumers
+    anywhere outside the constant's own definition).
+  - `.env.example`/`.env.aws_local.example`: `APP_PORT`,
+    `STREAMLIT_BROWSER_GATHER_USAGE_STATS`.
+  - Deploy: the `zamboni-app` systemd-unit heredoc block in
+    `after_install.sh` (renumbered the remaining steps 1-7), the Streamlit
+    restart/health-check steps in `app_start.sh` (renumbered 1-5), the
+    Streamlit-secrets restore/backup steps in `before_install.sh`/
+    `after_install.sh`, `appspec.yml`'s hook-order comments,
+    `zamboni-cfn.yaml`'s `:8501` security-group ingress rule + all
+    description-string mentions (re-verified `cfn-lint` clean after),
+    `deploy/systemd/zamboni-streamlit.service` (deleted outright),
+    `deploy/setup_ec2.sh` (deleted outright -- this file's *entire*
+    purpose was registering Streamlit as a systemd service on a fresh
+    EC2 instance, fully superseded by `zamboni-cfn.yaml` +
+    `deploy/scripts/*.sh`), `deploy/README.md` and `deploy/cloudwatch/
+    dashboard.json`'s Streamlit mentions.
+  - Launchers: `run_local.bat`, `run_local.ps1` (both 100% Streamlit,
+    superseded by `run_local_api.bat`/`run_ui_dev.ps1 -Mode local`),
+    `sync_zamboni.ps1` (already-obsolete pre-replatform zip-sync tooling
+    whose *entire* purpose was syncing the old Streamlit app -- also
+    referenced files/branches that no longer exist regardless).
+    `run_local_api.bat` itself and `scripts/seed_local_db.py`'s final
+    "how to start" print message both had their comments/output fixed to
+    stop pointing at the now-deleted Streamlit path.
+  - Docs: `docs/deployment/ec2_api_deploy.md`'s "Cutover checklist
+    (post-showcase — do NOT execute before sign-off)" section replaced
+    with a "Streamlit decommission (complete)" record, since the cutover
+    it was gating has now genuinely happened -- includes by-hand retire
+    steps for anyone deploying from an older, pre-decommission instance.
+    Matching updates to `docs/deployment/data_operations_guide.md`'s
+    "Retiring the Streamlit fallback" section, `docs/ORG_DROP.md`,
+    `docs/demo/showcase_runbook.md` (removed the "Last resort (Streamlit)"
+    fallback tier entirely -- there is no further fallback now),
+    `docs/SETUP_GUIDE.md` and `docs/setup/aws_ec2.md`'s "Streamlit cutover
+    checklist" mentions. Top-level `README.md` was more broadly stale
+    than just its Streamlit references (pre-replatform Repo Structure
+    diagram, Quick Start commands, D&A Logo section pointing at deleted
+    `app/assets/`) -- refreshed those sections too rather than leaving a
+    half-updated top-level entry point, while leaving the still-accurate
+    CLI reference and onboarding-workflow sections untouched.
+  - **Deliberately NOT touched** (same "frozen historical record"
+    treatment already established for `deploy/pipeline_config.md` in an
+    earlier session): `.claude/contracts.md`, `.claude/components.md`,
+    `.claude/prompts/*.md`, root `SHARED_CONTRACTS.md` -- frozen planning
+    docs, not live references. `docs/zamboni-direct-setup.md` (+ its
+    `.html` twin) and `docs/zamboni-setup-guide.html` were evaluated
+    specifically (not just skipped) -- `ec2_api_deploy.md` itself already
+    labels `zamboni-direct-setup.md` as "the pre-replatform, Streamlit-only
+    EC2 guide," i.e. already framed as a legacy artifact parallel to
+    `pipeline_config.md`, and it contains real, still-useful non-Streamlit
+    reference content (CLI reference, engine reference, onboarding-a-
+    domain walkthrough, window-config reference) that exists nowhere else
+    in the newer docs -- deleting it outright would have been a real
+    content regression disguised as cleanup, not a judgment call worth
+    making silently.
+  - **Tests**: `tests/conftest.py`'s ~75-line streamlit-module stub
+    deleted (kept the `ZAMBONI_TEST_MODE`/`PYTHONUTF8` setup, unrelated).
+    `tests/unit/test_phase1_page_features.py` deleted outright (every
+    single test in it read `app/pages/*.py` content or imported
+    `app.components.*` -- confirmed via full-file review, not just the
+    filename). Individual tests/classes removed from otherwise-live files
+    where only *part* of the file was Streamlit-specific:
+    `test_phase1_enterprise.py` (3 page/`.streamlit/pages.toml`-existence
+    tests, kept `TestAuditEvent`/`TestReasonValidator`/`TestEscalation`/
+    `TestPlatformSettings`), `test_sprint1.py` (2 entrypoint/systemd
+    tests), `test_sprint3.py` (3 `deploy/setup_ec2.sh` tests, kept the
+    unrelated `create_athena_tables.sh` tests), `test_phase2_p1.py`
+    (`TestSettingsPageContent` ×5, `TestDomainDigestOptIn` ×3,
+    `test_cost_report_page_uses_cost_explorer` -- all read deleted
+    `app/pages/*.py` files), `test_gap_closure_final.py` and
+    `test_v2_alignment.py` (3 tests total asserting `after_install.sh`
+    contains `app/Home.py`, now false by design). `test_sprint2.py`'s one
+    hit was docstring wording only, fixed in place, test kept.
+  - **A real, functional dead-code find, not just a comment**:
+    `engine/core/reason_validator.py::render_reason_form()` had a
+    module-body `import streamlit as st` and rendered an actual Streamlit
+    form -- confirmed via repo-wide grep that nothing called this
+    function at all (the rest of the module -- `validate()`,
+    `require_reason_for_action()`, etc. -- is still used by the API layer
+    and CLI). Deleted the function outright, not just the import.
+  - **A real, if minor, attribution bug**: `engine/core/registry.py`'s
+    `register_domain()`/`register_table()` both defaulted
+    `registered_by: str = "streamlit"` -- confirmed both real call sites
+    (`domains_svc.create_domain()`, the tables router) already pass a
+    real actor value explicitly, so this default is a pure fallback, but
+    a wrong and confusing one now. Changed both to `"system"`, matching
+    the convention already used elsewhere (`controlm_jobs.registered_by
+    TEXT DEFAULT 'system'` in `config/control_plane_schema.py`).
+  - Remaining ~15 comment/docstring-only mentions across `api/main.py`,
+    `api/services/{policies,tables}_svc.py`, `config/domain_retention.json`,
+    `config/platform_settings.py`, `engine/cli/register.py`,
+    `engine/core/{circuit_breaker,digest,governance,notifier}.py`,
+    `engine/monitoring/{health_check,metrics}.py`,
+    `engine/operations/dynamic_router.py` -- all fixed to describe current
+    reality (a handful were genuinely user-facing strings: the CLI's
+    "already registered" message, the circuit-breaker disable reason, the
+    notifier's re-enable instructions -- confirmed no test asserted their
+    exact previous text before editing).
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, the lock
+  service, or any Iceberg/Athena-facing engine logic this session --
+  every change is either a credential-resolution fix
+  (`get_boto3_session()`), a seed-data consistency fix, or subtractive
+  Streamlit-removal across docs/deploy/tests.

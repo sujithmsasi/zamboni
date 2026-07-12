@@ -97,7 +97,7 @@ def route(
 
 
 def describe_thresholds() -> list[dict]:
-    """Return routing thresholds as a list of dicts — used by Streamlit UI."""
+    """Return routing thresholds as a list of dicts — used by the UI."""
     rows = []
     for max_gb, max_files, wtype, nworkers in WORKER_THRESHOLDS:
         rows.append({

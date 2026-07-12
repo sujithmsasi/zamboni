@@ -4,9 +4,7 @@ Zamboni — Dual-Optimizer Risk Report (Governance, Workstream A / Phase 1c)
 VP-facing view of tables where Zamboni HK maintenance is enabled AND an AWS
 Glue table optimizer is also active -- exactly the conflict Gate 0
 (contracts.md §4) refuses to run alongside. This is the reusable engine
-function GET /api/conflicts (contracts.md §6, routers/gates.py) will call in
-Phase 2; the Streamlit stopgap panel (app/pages/4_Health_Dashboard.py) calls
-it directly for the July 17 showcase.
+function GET /api/conflicts (contracts.md §6, routers/gates.py) calls.
 """
 from __future__ import annotations
 

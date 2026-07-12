@@ -4,7 +4,7 @@ Phase 2.1: builds per-domain weekly digest content from execution_log.
 
 The digest email sender (SNS) is Phase 2.2.
 This module builds the digest as a structured dict usable by:
-  - The Settings page "Preview Digest" button (renders in Streamlit)
+  - The Settings page "Preview Digest" button
   - Phase 2.2 email sender (renders as HTML email)
   - Phase 2.2 Teams digest (renders as MessageCard)
 

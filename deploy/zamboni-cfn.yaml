@@ -16,8 +16,8 @@
 #   - EC2 instance role + instance profile (Athena/Glue incl.
 #     GetTableOptimizer, S3, SNS, CloudWatch Logs/Metrics, DynamoDB on the
 #     lock table — contracts.md §3.4)
-#   - Security group: :8000 (FastAPI) and :8501 (Streamlit fallback) open
-#     ONLY to SourceCidr — never 0.0.0.0/0
+#   - Security group: :8000 (FastAPI) open ONLY to SourceCidr — never
+#     0.0.0.0/0
 #   - One EC2 instance (AL2023, encrypted gp3 root volume)
 #   - CloudWatch log group
 #   - CodePipeline/CodeDeploy/CodeBuild skeleton (GitHub source via a
@@ -50,7 +50,7 @@ Parameters:
   SourceCidr:
     Type: String
     Description: >-
-      CIDR block allowed to reach the app on :8000/:8501 (and :22 for SSH).
+      CIDR block allowed to reach the app on :8000 (and :22 for SSH).
       Never set this to 0.0.0.0/0 — scope it to your VPN/office/VPC range.
     Default: 10.0.0.0/8
     AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$"
@@ -369,12 +369,12 @@ Resources:
       Roles:
         - !Ref ZamboniInstanceRole
 
-  # ── Security group — :8000/:8501 (and :22) from SourceCidr ONLY ───────────
+  # ── Security group — :8000 (and :22) from SourceCidr ONLY ─────────────────
   ZamboniSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub "${NamePrefix}-sg"
-      GroupDescription: !Sub "${NamePrefix} EC2 access - FastAPI 8000, Streamlit fallback 8501, SSH 22"
+      GroupDescription: !Sub "${NamePrefix} EC2 access - FastAPI 8000, SSH 22"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -382,11 +382,6 @@ Resources:
           ToPort: 8000
           CidrIp: !Ref SourceCidr
           Description: FastAPI (api.main:app)
-        - IpProtocol: tcp
-          FromPort: 8501
-          ToPort: 8501
-          CidrIp: !Ref SourceCidr
-          Description: Streamlit fallback app
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
@@ -957,7 +952,7 @@ Outputs:
     Value: !Ref AmiId
 
   SecurityGroupId:
-    Description: Security group gating :8000/:8501/:22 access.
+    Description: Security group gating :8000/:22 access.
     Value: !Ref ZamboniSecurityGroup
 
   LockTableName:
