@@ -684,7 +684,7 @@
       <li><span class="toc-num">02</span><span class="toc-title">Solution Overview</span></li>
       <li><span class="toc-num">03</span><span class="toc-title">Architecture Design</span></li>
       <li><span class="toc-num">04</span><span class="toc-title">Trigger Architecture — Control-M & EventBridge Flow Diagrams</span></li>
-      <li><span class="toc-num">05</span><span class="toc-title">Why Stream Grouping Matters</span></li>
+      <li><span class="toc-num">05</span><span class="toc-title">Why Stream Grouping Matters <em style="color:var(--muted);font-weight:400;font-size:12px;">(optional — not adopted)</em></span></li>
       <li><span class="toc-num">06</span><span class="toc-title">Stream Registry — Iceberg Table Schema</span></li>
       <li><span class="toc-num">07</span><span class="toc-title">Housekeeping Configuration — Iceberg Table Schema</span></li>
       <li><span class="toc-num">08</span><span class="toc-title">Python Orchestrator (EC2) — Logic & Intelligence</span></li>
@@ -1212,6 +1212,11 @@
   <h2>Why Stream Grouping Matters</h2>
   <div class="section-rule"></div>
 
+  <div class="callout warn">
+    <span class="callout-icon">🧭</span>
+    <div><p><strong>Optional pattern — not adopted.</strong> Stream-level grouping (a <code>stream_id</code> tying related tables like <code>finance_staging</code> → <code>finance_master</code> into one logical unit, e.g. <code>STR-FIN-001</code>) is presented below as originally proposed. The organization evaluated this and decided <strong>not</strong> to adopt the pipeline-stream-grouping model — <code>stream_id</code> and everything derived from it (the CLI <code>--stream-id</code> scope, stream-level Control-M triggering, stream-keyed cost tags) was removed from the schema, CLI, and every code path in the delivered implementation. Treat this section, the <code>stream_id</code> column in Section 06, and any <code>stream_id</code>/<code>STR-FIN-001</code> references elsewhere in this document as an optional design pattern that may or may not be reconsidered later — not a delivered feature. The <strong>Stream Registry</strong> table itself (per-table registration — domain, tier, dependencies, etc.) was retained; only the stream-grouping column and concept were dropped.</p></div>
+  </div>
+
   <p>
     A <strong>stream</strong> is the logical grouping of related tables that move data through the layers together as a single business data flow. For example, the "Finance" stream includes <code>finance_staging</code> (staging), <code>finance_datalake</code> (datalake), <code>finance_base</code> (base), and <code>finance_master</code> (master). Stream grouping is the foundation that makes targeted, safe, and scalable housekeeping possible.
   </p>
@@ -1306,7 +1311,7 @@
     <table class="compact">
       <thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td><code>stream_id</code></td><td>STRING</td><td>Unique stream identifier (e.g., <code>STR-FIN-001</code>)</td></tr>
+        <tr style="background:#fef3c7;"><td><code>stream_id</code></td><td>STRING</td><td><em>Optional — not adopted (see Section 05 note).</em> Unique stream identifier (e.g., <code>STR-FIN-001</code>), tying related tables together. Removed from the delivered schema.</td></tr>
         <tr><td><code>table_fqn</code></td><td>STRING</td><td>Fully qualified table name: <code>catalog.database.table</code></td></tr>
         <tr><td><code>table_description</code></td><td>STRING</td><td>Human-readable description of the table's purpose</td></tr>
         <tr><td><code>ci_number</code></td><td>STRING</td><td>Configuration Item ID for CMDB traceability</td></tr>
