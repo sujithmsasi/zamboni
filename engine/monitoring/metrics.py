@@ -1,7 +1,7 @@
 """
 Zamboni — CloudWatch Metrics Publisher
 Publishes custom metrics to CloudWatch namespace 'Zamboni'.
-Called at the end of each engine run and from the Streamlit app health check.
+Called at the end of each engine run and from the app's health check.
 
 Metrics published:
   HK/Archival/Lifecycle:
@@ -151,7 +151,7 @@ def publish_fleet_health(
 ) -> None:
     """
     Publish fleet-level health metrics.
-    Called by the monitoring cron job (or Streamlit home snapshot generation).
+    Called by the monitoring cron job (or home snapshot generation).
     """
     coverage_pct = round(hk_enabled / total_tables * 100, 1) if total_tables > 0 else 0
 

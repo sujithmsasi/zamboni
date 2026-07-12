@@ -90,6 +90,7 @@ export function DomainFormModal({ open, domain, onClose }: DomainFormModalProps)
                 { required: true, message: 'Owner email is required' },
                 { type: 'email', message: 'Enter a valid email address' },
               ]}
+              tooltip="Default digest/notification recipient for this domain -- overridable per-table via Digest Email below."
             >
               <Input placeholder="da-finance@company.com" />
             </Form.Item>
@@ -103,27 +104,43 @@ export function DomainFormModal({ open, domain, onClose }: DomainFormModalProps)
           <Col span={12}>
             <Form.Item
               name="hot_retention_days" label="Hot Retention (days)"
-              rules={[{ required: true, type: 'number', min: 1, message: 'Enter a whole number ≥ 1' }]}
+              rules={[{ required: true, type: 'number', min: 1, max: 3650, message: 'Enter a whole number between 1 and 3650' }]}
+              tooltip="How long staging data stays in S3 Standard before archival. Typical: Finance=30, ERS=7, Claims=90."
             >
-              <InputNumber min={1} style={{ width: '100%' }} />
+              <InputNumber min={1} max={3650} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item
               name="archive_duration_days" label="Archive Duration (days)"
-              rules={[{ required: true, type: 'number', min: 1, message: 'Enter a whole number ≥ 1' }]}
+              rules={[{ required: true, type: 'number', min: 1, max: 3650, message: 'Enter a whole number between 1 and 3650' }]}
+              tooltip="How long archived data is kept in S3 Intelligent-Tiering before it can be deleted."
             >
-              <InputNumber min={1} style={{ width: '100%' }} />
+              <InputNumber min={1} max={3650} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item
               name="stale_threshold_days" label="Stale Threshold (days)"
-              rules={[{ required: true, type: 'number', min: 7, message: 'Enter a whole number ≥ 7' }]}
+              rules={[{ required: true, type: 'number', min: 7, max: 3650, message: 'Enter a whole number between 7 and 3650' }]}
+              tooltip="Non-prod tables inactive beyond this threshold are flagged as STALE_CANDIDATE by the Lifecycle Engine."
             >
-              <InputNumber min={7} style={{ width: '100%' }} />
+              <InputNumber min={7} max={3650} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item
               name="auto_delete_after_days" label="Auto-Delete After (days)"
-              rules={[{ required: true, type: 'number', min: 30, message: 'Enter a whole number ≥ 30' }]}
+              dependencies={['stale_threshold_days']}
+              tooltip="Non-prod tables that have completed GREENZONE review and are still inactive are dropped after this many days. Must exceed Stale Threshold -- it's the next stage of the same lifecycle."
+              rules={[
+                { required: true, type: 'number', min: 30, max: 3650, message: 'Enter a whole number between 30 and 3650' },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    const staleThreshold = getFieldValue('stale_threshold_days');
+                    if (value == null || staleThreshold == null || value > staleThreshold) return Promise.resolve();
+                    return Promise.reject(
+                      new Error(`Must be greater than Stale Threshold (${staleThreshold} days) -- it's the later stage of the same non-prod lifecycle.`),
+                    );
+                  },
+                }),
+              ]}
             >
-              <InputNumber min={30} style={{ width: '100%' }} />
+              <InputNumber min={30} max={3650} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
         </Row>

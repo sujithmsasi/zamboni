@@ -10,6 +10,7 @@ import { downloadCsv, downloadRawCsv } from '../../../utils/csv';
 
 const JOB_TYPE_OPTIONS = ['controlm', 'glue', 'lambda', 'step_functions', 'airflow', 'other'];
 const JOB_FREQUENCY_OPTIONS = ['hourly', 'daily', 'weekly', 'monthly', 'every_trigger'];
+const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
 /** Drill-in popup for Job List's "Tables Mapped" count -- which tables
  * reference this job, and via which of the three Control-M role columns. */
@@ -72,6 +73,10 @@ function EditJobModal({ job, onClose }: { job: JobRow | null; onClose: () => voi
 
   const handleSave = () => {
     if (!job) return;
+    if (startTime.trim() && !HHMM_RE.test(startTime.trim())) {
+      message.error(`Expected start time '${startTime.trim()}' is not valid HH:MM (24h format).`);
+      return;
+    }
     upsert.mutate(
       {
         job_name: job.job_name, job_type: jobType, domain, description,
@@ -292,11 +297,27 @@ function AddSingleJob() {
   const [description, setDescription] = useState('');
 
   const domains = useDomainsList(true);
+  const jobs = useJobs();
   const upsert = useUpsertJob();
 
   const handleAdd = () => {
     if (!jobName.trim()) {
       message.error('Job Name is required.');
+      return;
+    }
+    // upsert_job is INSERT OR REPLACE keyed on job_name -- adding a name
+    // that already exists silently overwrites the existing entry (and
+    // every table currently pointed at it) with no warning. Block it here
+    // and point at Edit instead, the same way a real "add" action should.
+    const existing = (jobs.data ?? []).find(
+      (j) => j.job_name.trim().toLowerCase() === jobName.trim().toLowerCase(),
+    );
+    if (existing) {
+      message.error(`'${existing.job_name}' is already registered. Use Edit in Job List instead of Add to change it.`);
+      return;
+    }
+    if (startTime.trim() && !HHMM_RE.test(startTime.trim())) {
+      message.error(`Expected start time '${startTime.trim()}' is not valid HH:MM (24h format).`);
       return;
     }
     upsert.mutate(

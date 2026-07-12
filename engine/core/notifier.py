@@ -92,7 +92,7 @@ def send_circuit_breaker_alert(
         f"Action required:\n"
         f"  1. Investigate the failures in the Zamboni Execution Log\n"
         f"  2. Fix the root cause\n"
-        f"  3. Re-enable via Zamboni Streamlit app or CLI:\n"
+        f"  3. Re-enable via the Zamboni app or CLI:\n"
         f"     python -m engine.cli.enable --table {table_fqn}\n"
     )
     return send_alert(subject, message, table_fqn=table_fqn, dry_run=dry_run)

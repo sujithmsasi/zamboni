@@ -183,7 +183,32 @@ def get_boto3_session():
     """Return a boto3 Session appropriate for the current mode."""
     import boto3
     if get_mode() == "aws_local":
-        return boto3.Session(profile_name=os.getenv("AWS_SSO_PROFILE", "prod-toolsgenai-sso"))
+        # 2026-07-11 fix: no more hardcoded "prod-toolsgenai-sso" fallback --
+        # same bug already fixed in run_aws_local.ps1/run_ui_dev.ps1. Silently
+        # falling back to an unrelated, cross-team profile here (the actual
+        # function every AWS call in aws_local mode goes through) is worse
+        # than in the launcher scripts, since it can mask a real
+        # misconfiguration behind a confusing downstream AWS error instead of
+        # failing immediately with a clear message.
+        profile = os.getenv("AWS_SSO_PROFILE")
+        if not profile:
+            raise RuntimeError(
+                "AWS_SSO_PROFILE is not set (required in aws_local mode). "
+                "Run setup_aws_local_profile.ps1 or set it in .env.aws_local."
+            )
+        # Real bug found 2026-07-11: boto3's default credential chain checks
+        # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN env vars
+        # BEFORE the profile's own credentials, even when profile_name is
+        # passed explicitly. A stale export of these (from an earlier paste-
+        # credentials session, an unrelated org credential-helper tool, etc.)
+        # silently wins over a fresh `aws sso login --profile X` -- producing
+        # a confusing ExpiredTokenException that looks like the SSO login
+        # itself failed, when the real cause is these three env vars still
+        # holding old, expired static credentials. Clearing them forces
+        # resolution through the named profile, unambiguously.
+        for _var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
+            os.environ.pop(_var, None)
+        return boto3.Session(profile_name=profile)
     return boto3.Session()  # instance role / env chain
 
 
@@ -252,6 +277,9 @@ EXECUTION_LOG_MODE = os.getenv("EXECUTION_LOG_MODE", "auto").lower()
 CLOUDTRAIL_TABLE     = os.getenv("CLOUDTRAIL_TABLE", "")
 CLOUDTRAIL_LOOKBACK_DAYS = int(os.getenv("CLOUDTRAIL_LOOKBACK_DAYS", "90"))
 
-# ── Streamlit App ─────────────────────────────────────────────────────────────
-APP_PORT = int(os.getenv("APP_PORT", "8501"))
+# ── App ────────────────────────────────────────────────────────────────────────
+# Which environment this instance simulates/represents (dev/preprod/prod/test)
+# -- shown as the header's environment tag (GET /api/system/mode's app_env
+# field) and, in local mode, drives scripts/seed_local_db.py's seeded
+# environment values too (see that script's _SEED_ENV).
 APP_ENV  = os.getenv("APP_ENV", "dev")

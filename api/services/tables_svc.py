@@ -1,11 +1,9 @@
 """
 Zamboni API -- tables service (contracts.md §6 routers/tables.py).
 
-Lifts the table-registry query/mutation patterns from
-app/pages/2_Table_Registration.py (browse/register/bulk Control-M/job-mapping
-CSV import-export) into a reusable engine-layer function set the FastAPI
-router calls -- the Streamlit page keeps using its own inline SQL this phase
-(no page files touched).
+Table-registry query/mutation patterns (browse/register/bulk Control-M/
+job-mapping CSV import-export) as a reusable engine-layer function set the
+FastAPI router calls.
 """
 from __future__ import annotations
 

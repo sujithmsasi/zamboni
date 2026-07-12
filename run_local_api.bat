@@ -1,8 +1,6 @@
 @echo off
 REM Zamboni -- Local API Full-Stack Launcher (Windows)
 REM Runs FastAPI + the built React UI in mode=local (pure SQLite, no AWS).
-REM Windows parity for the run_local.bat Streamlit launcher, but serving the
-REM replatformed stack on :8000 instead of Streamlit on :8501.
 REM Usage: double-click or run from project root
 
 cd /d "%~dp0"

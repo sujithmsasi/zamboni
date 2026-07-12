@@ -14,7 +14,7 @@ Zamboni uses the following AWS services for deployment:
 | CodePipeline | Orchestrates the full deploy flow |
 | CodeBuild | Runs integration tests and packages the artifact |
 | CodeDeploy | Copies artifact to EC2 and runs lifecycle hooks |
-| EC2 (t3.large) | Runs the Zamboni engine (scheduled) and Streamlit app (always-on service) |
+| EC2 (t3.large) | Runs the Zamboni engine (scheduled) and the app (always-on service) |
 | SSM Parameter Store | Stores environment config — dev and prod values separately |
 | SNS | Sends approval notification email for prod deploys |
 
@@ -225,14 +225,14 @@ After all setup is complete:
 6. SSH to dev EC2 and verify:
 
 ```bash
-# Check Streamlit service
-systemctl status zamboni-app
+# Check the app service
+systemctl status zamboni-api
 
 # Check deploy log
 tail -50 /var/log/zamboni-deploy.log
 
 # Check app is accessible
-curl http://localhost:8501/_stcore/health
+curl http://localhost:8000/api/system/mode
 ```
 
 ---

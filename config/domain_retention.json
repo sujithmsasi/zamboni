@@ -1,5 +1,5 @@
 {
-  "_comment": "Archive retention policies per domain. New domains registered via Streamlit app or CLI will inherit 'default' until explicitly configured.",
+  "_comment": "Archive retention policies per domain. New domains registered via the app or CLI will inherit 'default' until explicitly configured.",
   "_note": "hot_retention_days = how long data stays in staging before archival. archive_duration_days = how long archived data is kept.",
 
   "default": {

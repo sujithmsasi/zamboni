@@ -44,7 +44,12 @@ Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ── 1. Profile name ────────────────────────────────────────────────────────────
-$defaultProfile = "zamboni-preprod"
+# Naming convention: "zamboni-{env}" -- each AWS account is its own
+# environment, so the profile name should say which one (zamboni-dev,
+# zamboni-preprod, zamboni-prod, ...). This also drives the APP_ENV prompt
+# below, so the header's environment tag and the account you're actually
+# talking to stay in sync instead of relying on remembering to edit both.
+$defaultProfile = "zamboni-dev"
 $profileName = Read-Host "Profile name to create/update [$defaultProfile]"
 if ([string]::IsNullOrWhiteSpace($profileName)) { $profileName = $defaultProfile }
 
@@ -54,6 +59,17 @@ if ($LASTEXITCODE -eq 0 -and $existing) {
     Write-Host "Profile '$profileName' already exists. Continuing will overwrite its credentials/config." -ForegroundColor Yellow
     $confirm = Read-Host "Continue? [y/N]"
     if ($confirm -notmatch '^[Yy]') { Write-Host "Aborted."; exit 0 }
+}
+
+# ── 1b. Environment (drives APP_ENV, the header's "DEV"/"PREPROD"/"PROD" tag) ──
+$envGuess = ""
+if ($profileName -match '^zamboni-(dev|preprod|prod|test)$') { $envGuess = $Matches[1] }
+$envPrompt = if ($envGuess) { "Environment this profile represents [$envGuess]" } else { "Environment this profile represents (dev/preprod/prod/test)" }
+$appEnv = Read-Host $envPrompt
+if ([string]::IsNullOrWhiteSpace($appEnv)) { $appEnv = $envGuess }
+if ([string]::IsNullOrWhiteSpace($appEnv)) {
+    Write-Error "An environment value is required (dev/preprod/prod/test) -- this drives the APP_ENV header tag."
+    exit 1
 }
 
 # ── 2. Credential mode ──────────────────────────────────────────────────────────
@@ -165,11 +181,20 @@ if ($content -match '(?m)^AWS_SSO_PROFILE=.*$') {
 } else {
     $content += "`nAWS_SSO_PROFILE=$profileName`n"
 }
+# Keep APP_ENV (the header's environment tag) in sync with the profile's
+# own environment -- these are two independent settings the app never
+# cross-checks, so writing both here is what actually keeps them paired
+# instead of relying on remembering to edit both by hand.
+if ($content -match '(?m)^APP_ENV=.*$') {
+    $content = $content -replace '(?m)^APP_ENV=.*$', "APP_ENV=$appEnv"
+} else {
+    $content += "`nAPP_ENV=$appEnv`n"
+}
 Set-Content -Path $envFile -Value $content -NoNewline
 
 Write-Host ""
 Write-Host "=============================================" -ForegroundColor Cyan
-Write-Host " Done -- AWS_SSO_PROFILE=$profileName in $envFile" -ForegroundColor Cyan
+Write-Host " Done -- AWS_SSO_PROFILE=$profileName, APP_ENV=$appEnv in $envFile" -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Gray

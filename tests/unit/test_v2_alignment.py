@@ -7,15 +7,6 @@ C.9 backpressure, D.10-12 Parquet log writer, E.13 DDL fields.
 from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import patch
 
-# ── A.1: systemd entrypoint ───────────────────────────────────────────────────
-
-def test_after_install_uses_home_py():
-    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
-        content = f.read()
-    assert "app/Home.py" in content
-    assert "app/main.py" not in content
-
-
 # ── A.2: effective dry_run propagation ───────────────────────────────────────
 
 def test_write_log_accepts_effective_dry_run():

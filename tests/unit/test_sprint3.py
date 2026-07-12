@@ -173,31 +173,10 @@ class TestActivitySignals:
 
 # ── M3: Deploy scripts exist ──────────────────────────────────────────────────
 
-def test_setup_ec2_script_exists():
-    """deploy/setup_ec2.sh must exist (referenced in setup guide)."""
-    assert os.path.exists("deploy/setup_ec2.sh"), \
-        "deploy/setup_ec2.sh missing — referenced in setup guide"
-
-
 def test_create_athena_tables_script_exists():
     """deploy/create_athena_tables.sh must exist (referenced in setup guide)."""
     assert os.path.exists("deploy/create_athena_tables.sh"), \
         "deploy/create_athena_tables.sh missing — referenced in setup guide"
-
-
-def test_setup_ec2_references_correct_entrypoint():
-    """setup_ec2.sh should reference app/Home.py not app/main.py."""
-    with open("deploy/setup_ec2.sh", encoding='utf-8') as f:
-        content = f.read()
-    assert "app/Home.py" in content
-    assert "app/main.py" not in content
-
-
-def test_setup_ec2_is_executable_script():
-    """setup_ec2.sh should have bash shebang."""
-    with open("deploy/setup_ec2.sh", encoding='utf-8') as f:
-        first_line = f.readline()
-    assert "bash" in first_line or "sh" in first_line
 
 
 def test_create_athena_tables_references_sql_files():

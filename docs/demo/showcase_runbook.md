@@ -30,14 +30,10 @@ This logs into AWS SSO if needed, builds `ui/dist` if missing, and opens
 No AWS, no SSO — pure SQLite (`zamboni_local.db`), same UI. Opens
 `http://localhost:8000`.
 
-**Last resort (Streamlit, if the React/FastAPI stack itself is unavailable):**
-```powershell
-.\run_local.ps1
-```
-Opens `http://localhost:8501` — the pre-replatform UI, feature-complete for
-everything except the Workstream A safety-core screens that only exist in
-React (Gate 0 override UI, locks strip, governance report). Use only if
-steps 1–7 below are literally not renderable.
+There is no further fallback tier — the Streamlit UI (`run_local.ps1`) was
+decommissioned 2026-07-11. If the React/FastAPI stack above is genuinely
+unavailable, that's a real incident to fix, not something to route around
+with an older UI.
 
 ---
 
@@ -219,10 +215,6 @@ Control-M dependency wiring without 200 manual edits."
 
 1. Don't debug live. Say "let me show you that in local mode" and switch —
    `run_local_api.bat` needs no network and starts in seconds.
-2. If the React/FastAPI stack itself won't start, fall back to
-   `run_local.ps1` (Streamlit, :8501) — slower, older UI, but the core
-   engine story (gates, vacuum floors, governance report) is still there
-   via `4_Health_Dashboard.py`'s Maintenance Governance section.
-3. `scripts\aws_smoke_test.py` (see `docs/deployment/ec2_api_deploy.md`)
+2. `scripts\aws_smoke_test.py` (see `docs/deployment/ec2_api_deploy.md`)
    is the fastest way to confirm *before* the room fills up whether
    aws_local connectivity is actually good that day.

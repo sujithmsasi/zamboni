@@ -1,7 +1,7 @@
 """
 Zamboni — System Health Check
 Run before every engine invocation to verify AWS connectivity.
-Also used by the CodeDeploy app_start.sh hook and Streamlit sidebar.
+Also used by the CodeDeploy app_start.sh hook.
 
 Checks:
   - Athena connectivity (SELECT 1)

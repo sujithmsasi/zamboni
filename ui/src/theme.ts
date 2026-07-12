@@ -37,13 +37,17 @@ export const zamboniTheme = {
       darkItemHoverColor: '#FFFFFF',
       darkItemSelectedBg: '#183F5D',
       darkItemSelectedColor: '#FFFFFF',
-      // Tuned so all 13 nav items + 5 group labels fit one viewport height
+      // Tuned so all nav items + group labels fit one viewport height
       // without the sidebar needing its own scrollbar (which, on Windows'
       // classic non-overlay scrollbars, was stealing layout width and
-      // truncating labels — see decisions.md) — loosened back up from an
-      // over-tightened first pass that felt cramped.
-      itemHeight: 36,
-      itemMarginBlock: 3,
+      // truncating labels — see decisions.md). Re-tightened 2026-07-11
+      // when the 14th route (/help, App Guide) pushed both 1366x768
+      // (79px) and 1280x720 (27px) past fitting (measured via Playwright,
+      // not guessed) — not as loose as the original 13-item tuning, but
+      // stopped short of the earlier "felt cramped" over-tightened pass
+      // (verified via screenshot at both sizes, not just the numbers).
+      itemHeight: 30,
+      itemMarginBlock: 1,
       groupTitleLineHeight: 1.4,
     },
 

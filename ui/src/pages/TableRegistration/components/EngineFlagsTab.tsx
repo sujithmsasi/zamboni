@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Checkbox, Col, Input, message, Row, Select, Tabs } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Input, message, Row, Select, Space, Tabs } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import { useBulkControlM, useTableDetail, useTablesSearch, useUpdateTable } from '../../../api/hooks/useTables';
@@ -79,9 +79,11 @@ function BulkApplyFlags() {
   const [hk, setHk] = useState<FlagChoice>('no_change');
   const [archive, setArchive] = useState<FlagChoice>('no_change');
   const [lifecycle, setLifecycle] = useState<FlagChoice>('no_change');
+  const [previewCount, setPreviewCount] = useState<number | null>(null);
 
   const domains = useDomainsList(true);
   const bulk = useBulkControlM();
+  const preview = useBulkControlM();
 
   const allNoChange = hk === 'no_change' && archive === 'no_change' && lifecycle === 'no_change';
 
@@ -89,6 +91,28 @@ function BulkApplyFlags() {
   if (hk !== 'no_change') setFields.hk_enabled = hk === 'enable';
   if (archive !== 'no_change') setFields.archive_enabled = archive === 'enable';
   if (lifecycle !== 'no_change') setFields.lifecycle_enabled = lifecycle === 'enable';
+
+  // Any scope/flag change invalidates a previous preview -- with no
+  // required filter here, leaving Domain/Layer/Database all blank
+  // matches every registered table, so a stale preview count could very
+  // easily be wrong for a new selection.
+  useEffect(() => {
+    setPreviewCount(null);
+  }, [domain, layer, databaseName, hk, archive, lifecycle]);
+
+  const handlePreview = () => {
+    preview.mutate(
+      {
+        filters: { domain, layer, database_name: databaseName || undefined },
+        set_fields: setFields,
+        dry_run: true,
+      },
+      {
+        onSuccess: (r) => setPreviewCount(r.affected),
+        onError: (err) => message.error(err instanceof Error ? err.message : 'Preview failed.'),
+      },
+    );
+  };
 
   const handleApply = () => {
     bulk.mutate(
@@ -98,7 +122,10 @@ function BulkApplyFlags() {
         dry_run: false,
       },
       {
-        onSuccess: (r) => message.success(`✅ Flags updated for ${r.affected} table(s) (audit: ${r.audit_id}).`),
+        onSuccess: (r) => {
+          message.success(`✅ Flags updated for ${r.affected} table(s) (audit: ${r.audit_id}).`);
+          setPreviewCount(null);
+        },
         onError: (err) => message.error(err instanceof Error ? err.message : 'Bulk update failed.'),
       },
     );
@@ -146,9 +173,35 @@ function BulkApplyFlags() {
           <Select style={{ width: '100%' }} value={lifecycle} onChange={setLifecycle} options={FLAG_OPTIONS} />
         </Col>
       </Row>
-      <Button type="primary" disabled={allNoChange} loading={bulk.isPending} onClick={handleApply}>
-        ⚙️ Apply Bulk Flags
-      </Button>
+      {previewCount === null ? (
+        <Space direction="vertical">
+          <Button disabled={allNoChange} loading={preview.isPending} onClick={handlePreview}>
+            🔍 Preview Affected Tables
+          </Button>
+          {!domain && !layer && !databaseName && (
+            <span style={{ fontSize: 12, color: '#B54708' }}>
+              ⚠️ No Domain, Layer, or Database filter set — this will match every registered table.
+            </span>
+          )}
+        </Space>
+      ) : (
+        <Space direction="vertical">
+          <Alert
+            type={previewCount > 0 ? 'warning' : 'info'}
+            showIcon
+            message={previewCount > 0 ? `${previewCount} table(s) will be updated.` : 'No tables match this filter.'}
+          />
+          <Space>
+            <Button
+              type="primary" danger={previewCount > 0} disabled={previewCount === 0}
+              loading={bulk.isPending} onClick={handleApply}
+            >
+              ⚙️ Confirm — Apply to {previewCount} Table(s)
+            </Button>
+            <Button onClick={() => setPreviewCount(null)}>Change selection</Button>
+          </Space>
+        </Space>
+      )}
     </div>
   );
 }

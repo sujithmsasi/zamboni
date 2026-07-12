@@ -4,6 +4,35 @@ import { useState } from 'react';
 import { useCreateEscalation, useDeleteEscalation, useEscalationList, useUpdateEscalation } from '../../../api/hooks/useSettings';
 import type { EscalationEntry } from '../../../api/types';
 
+// Mirrors engine/core/escalation.py::lookup()'s priority chain exactly --
+// it only ever probes these 6 exact shapes (built by _make_key()), never
+// any other combination or order. Notably "domain:X|tier:Y" (no env) is
+// NOT one of them, even though it looks plausible -- lookup() never
+// queries that combination, so an entry keyed that way would silently
+// never be reached. A key in any other shape (or a different part
+// order, e.g. "env:prod|domain:finance") is equally dead.
+const _KEY_PATTERN = new RegExp(
+  '^(?:'
+  + 'default'
+  + '|domain:[^|]+\\|tier:[^|]+\\|env:[^|]+'
+  + '|domain:[^|]+\\|env:[^|]+'
+  + '|domain:[^|]+'
+  + '|tier:[^|]+\\|env:[^|]+'
+  + '|env:[^|]+'
+  + ')$',
+);
+
+function validateLookupKey(_: unknown, value: string) {
+  if (!value) return Promise.resolve();
+  if (_KEY_PATTERN.test(value.trim())) return Promise.resolve();
+  return Promise.reject(
+    new Error(
+      'Must be exactly one of: default, domain:X, env:X, tier:X|env:X, domain:X|env:X, or domain:X|tier:X|env:X. '
+      + 'Any other shape (including domain:X|tier:X with no env) will never match a lookup.',
+    ),
+  );
+}
+
 /**
  * Escalation Matrix tab (11_Settings.py tab_escalation). Unlike the twin --
  * which needed a `st.session_state["esc_flash"]` + st.rerun() dance to show
@@ -144,22 +173,42 @@ export function EscalationMatrixTab() {
         <Form form={form} layout="vertical">
           <Form.Item
             name="_key" label="Lookup Key"
-            rules={[{ required: true, message: 'Lookup Key is required' }]}
-            extra="Examples: domain:finance|tier:critical|env:prod · domain:finance · tier:critical|env:prod · default"
+            rules={[
+              { required: true, message: 'Lookup Key is required' },
+              { validator: validateLookupKey },
+            ]}
+            tooltip="Must match one of the exact shapes the escalation lookup chain probes -- see below."
+            extra="Valid shapes only: domain:finance|tier:critical|env:prod · domain:finance|env:prod · domain:finance · tier:critical|env:prod · env:prod · default"
           >
             <Input disabled={!!editing} placeholder="domain:finance|env:prod" />
           </Form.Item>
-          <Form.Item name="primary_owner_email" label="Primary Owner Email" style={{ marginTop: 8 }}>
+          <Form.Item
+            name="primary_owner_email" label="Primary Owner Email" style={{ marginTop: 8 }}
+            rules={[{ type: 'email', message: 'Must be a valid email address' }]}
+            tooltip="Who gets paged first when this entry's escalations fire."
+          >
             <Input placeholder="team-dl@company.com" />
           </Form.Item>
-          <Form.Item name="escalation_email" label="Escalation Email">
+          <Form.Item
+            name="escalation_email" label="Escalation Email"
+            rules={[{ type: 'email', message: 'Must be a valid email address' }]}
+            tooltip="Secondary/manager contact, notified on higher-severity or unacknowledged escalations."
+          >
             <Input placeholder="manager-dl@company.com" />
           </Form.Item>
-          <Form.Item name="zamboni_owner_email" label="Zamboni Owner Email">
+          <Form.Item
+            name="zamboni_owner_email" label="Zamboni Owner Email"
+            rules={[{ type: 'email', message: 'Must be a valid email address' }]}
+            tooltip="Platform-team fallback contact for this entry."
+          >
             <Input placeholder="da-platform@company.com" />
           </Form.Item>
-          <Form.Item name="notify_sns_topic" label="SNS Topic ARN Override">
-            <Input placeholder="arn:aws:sns:us-west-2:123:my-topic (blank = default)" />
+          <Form.Item
+            name="notify_sns_topic" label="SNS Topic ARN Override"
+            rules={[{ pattern: /^arn:aws:sns:[a-z0-9-]+:\d{12}:.+$/, message: 'Must be a full SNS topic ARN, e.g. arn:aws:sns:us-west-2:123456789012:my-topic' }]}
+            tooltip="Leave blank to use the platform's default SNS topic; set this to route only this entry's alerts elsewhere."
+          >
+            <Input placeholder="arn:aws:sns:us-west-2:123456789012:my-topic (blank = default)" />
           </Form.Item>
         </Form>
       </Drawer>

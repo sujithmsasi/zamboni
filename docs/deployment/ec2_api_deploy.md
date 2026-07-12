@@ -22,7 +22,7 @@ Two ways to provision the new pieces described here:
 
 | Area | Before (Streamlit-only) | After (Phase 6) |
 |---|---|---|
-| App process | `zamboni-app` (Streamlit, :8501) only | `zamboni-app` (:8501, fallback) **+** `zamboni-api` (FastAPI/uvicorn, :8000, primary) |
+| App process | `zamboni-app` (Streamlit, :8501) only | `zamboni-app` (:8501, fallback) **+** `zamboni-api` (FastAPI/uvicorn, :8000, primary) — Streamlit has since been fully decommissioned (2026-07-11), see "Streamlit decommission" below |
 | Build artifact | Python source only | Python source **+** `ui/dist/` (React production build) |
 | CI (`buildspec.yml`) | Python 3.11 only | Python 3.11 **+** Node 20 (`cd ui && npm ci && npm run build`) |
 | IAM | `deploy/iam_policy.json` — no DynamoDB, no `GetTableOptimizer` | + DynamoDB (`PutItem`/`GetItem`/`UpdateItem`/`DeleteItem`/`DescribeTable`) on the lock table, + `glue:GetTableOptimizer`/`BatchGetTableOptimizer`/`ListTableOptimizerRuns` |
@@ -245,9 +245,6 @@ curl http://localhost:8000/api/system/mode
 # {"data":{"mode":"aws_ec2","app_env":"prod","dry_run_default":true},"pagination":null,"error":null}
 ```
 
-`zamboni-app` (Streamlit, :8501) is **untouched** — both services run side
-by side until the cutover checklist below is signed off (contracts.md §8).
-
 `deploy/scripts/before_install.sh`/`after_install.sh`/`app_start.sh` (used
 by the CodeDeploy path) already do steps 5 automatically as of Phase 6 —
 the manual commands above are for orgs not using CodeDeploy at all.
@@ -301,7 +298,6 @@ python scripts/aws_smoke_test.py                        # every check should PAS
 python scripts/aws_smoke_test.py --create-lock-table     # if dynamodb_lock_table FAILs the first time
 python scripts/aws_smoke_test.py --init-control-plane-db # if control_plane_db FAILs because the DB/tables don't exist yet
 curl http://localhost:8000/api/system/mode               # FastAPI up
-curl http://localhost:8501/_stcore/health                # Streamlit fallback still up
 ```
 
 Pay particular attention to the `control_plane_db` check specifically —
@@ -312,28 +308,24 @@ CodeDeploy's wipe zone, not just "the file happens to exist right now."
 
 ---
 
-## Cutover checklist (post-showcase — do NOT execute before sign-off)
+## Streamlit decommission (complete, 2026-07-11)
 
-Per contracts.md §8: "Streamlit unit untouched until cutover sign-off."
-This is intentionally a checklist, not a script — each step is a judgment
-call that needs a human to confirm the previous step actually held.
+The cutover this section used to describe as a pending, sign-off-gated
+checklist has happened: Streamlit is fully decommissioned, not just
+disabled. `app/`, `.streamlit/`, `deploy/systemd/zamboni-streamlit.service`,
+the `zamboni-app` systemd unit creation in `after_install.sh`, the `:8501`
+security group rule in `zamboni-cfn.yaml`, and the `streamlit`/`plotly`/
+`itables` entries in `requirements.txt` were all removed outright (not
+archived) — the React/FastAPI stack is the only UI, on any deployed
+instance going forward.
 
-- [ ] **Confirm parity for 1 week.** Run both `zamboni-app` (:8501) and
-      `zamboni-api` (:8000) side by side against the same production data.
-      Watch for any workflow, report, or number that the React app doesn't
-      match — not just "does it load," but "does every number agree."
-- [ ] **Stop and disable the Streamlit service.**
-      ```bash
-      sudo systemctl stop zamboni-app
-      sudo systemctl disable zamboni-app
-      ```
-- [ ] **Remove the :8501 security group rule** (CFN: remove the ingress
-      block from `deploy/zamboni-cfn.yaml` and redeploy the stack; manual:
-      `aws ec2 revoke-security-group-ingress --port 8501 ...`).
-- [ ] **Archive `app/pages/` with a README pointer** — don't delete the
-      Streamlit source outright (it's the documented fallback in the
-      showcase runbook's "last resort" step until this checklist is
-      signed off). Once cutover is confirmed, move `app/` to
-      `app_legacy_streamlit/` (or similar) and leave a one-line
-      `app/README.md` pointing at the React app's routes and this
-      checklist as the reason it moved.
+If you're deploying an EC2 instance from before this change and need to
+retire an existing `zamboni-app` service by hand:
+```bash
+sudo systemctl stop zamboni-app
+sudo systemctl disable zamboni-app
+sudo rm /etc/systemd/system/zamboni-app.service
+sudo systemctl daemon-reload
+```
+Then redeploy from this commit onward so `zamboni-cfn.yaml`'s security
+group no longer opens `:8501` at all.

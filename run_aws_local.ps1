@@ -26,6 +26,23 @@ Set-Location $root
 # ("aws sso login failed") before ever reaching the real profile name sitting
 # in .env.aws_local. Loading the env file first so the profile check uses the
 # real, intended value.
+function Import-DotEnvFile($path) {
+    Get-Content $path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { return }
+        $idx = $line.IndexOf("=")
+        if ($idx -lt 1) { return }
+        $name  = $line.Substring(0, $idx).Trim()
+        $value = $line.Substring($idx + 1).Trim()
+        Set-Item -Path "Env:$name" -Value $value
+    }
+}
+
+function Test-AwsProfileExists($profileName) {
+    aws configure list --profile $profileName 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
 $envFile = Join-Path $root ".env.aws_local"
 if (-not (Test-Path $envFile)) {
     Write-Error "$envFile not found. Copy .env.aws_local.example to .env.aws_local and fill in real values first (or run setup_aws_local_profile.ps1)."
@@ -37,24 +54,65 @@ Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host " Zamboni -- AWS Local Demo Mode" -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host "[1/4] Loading $envFile ..." -ForegroundColor Yellow
-Get-Content $envFile | ForEach-Object {
-    $line = $_.Trim()
-    if ($line -eq "" -or $line.StartsWith("#")) { return }
-    $idx = $line.IndexOf("=")
-    if ($idx -lt 1) { return }
-    $name  = $line.Substring(0, $idx).Trim()
-    $value = $line.Substring($idx + 1).Trim()
-    Set-Item -Path "Env:$name" -Value $value
-}
+Import-DotEnvFile $envFile
 $env:PYTHONPATH = $root
 Write-Host "      Loaded. ZAMBONI_MODE=$($env:ZAMBONI_MODE)" -ForegroundColor Green
 
-$ssoProfile = if ($env:AWS_SSO_PROFILE) { $env:AWS_SSO_PROFILE } else { "prod-toolsgenai-sso" }
+# 2026-07-11 fix: no more hardcoded "prod-toolsgenai-sso" fallback here --
+# that profile is cross-team/Bedrock-only in at least one org's account and
+# has nothing to do with Zamboni's own AWS account. Silently falling back to
+# it (rather than failing loudly) let a missing/placeholder AWS_SSO_PROFILE
+# go unnoticed until AWS calls started failing or quietly authenticated as
+# the wrong identity. Missing entirely is now a hard, immediate error.
+$ssoProfile = $env:AWS_SSO_PROFILE
+if ([string]::IsNullOrWhiteSpace($ssoProfile)) {
+    Write-Error "AWS_SSO_PROFILE is not set in $envFile. Run setup_aws_local_profile.ps1 to create a profile and fill this in, then re-run."
+    exit 1
+}
 Write-Host " AWS profile : $ssoProfile" -ForegroundColor Gray
 Write-Host ""
 
-# ── 2. Ensure the profile's session is valid, login if it's SSO-based ────────
-Write-Host "[2/4] Checking AWS session for profile '$ssoProfile'..." -ForegroundColor Yellow
+# ── 2. Make sure the profile actually exists, then that its session is valid ─
+# 2026-07-11 fix: previously this jumped straight to `aws sts
+# get-caller-identity --profile $ssoProfile`, and if the profile didn't
+# exist at all (the normal state on a fresh machine/org account -- Zamboni
+# ships no working default), that call fails exactly the same way an
+# expired-session call does, so the script would then try `aws sso login`
+# against a profile with no sso_start_url configured, fail confusingly, and
+# abort -- with no hint that the real fix is to create the profile, not log
+# into it. Now checks existence first and offers to run
+# setup_aws_local_profile.ps1 right here, interactively (paste keys from the
+# AWS console, or chain to an existing profile), then reloads
+# .env.aws_local afterward since that script may have written a different
+# profile name into it.
+Write-Host "[2/4] Checking AWS profile '$ssoProfile'..." -ForegroundColor Yellow
+if (-not (Test-AwsProfileExists $ssoProfile)) {
+    Write-Host "      Profile '$ssoProfile' does not exist on this machine yet." -ForegroundColor Red
+    Write-Host "      This is expected on a fresh machine/org account -- Zamboni has no" -ForegroundColor Yellow
+    Write-Host "      working default profile; it must be created once." -ForegroundColor Yellow
+    $runSetup = Read-Host "      Set it up now via setup_aws_local_profile.ps1? [Y/n]"
+    if ($runSetup -match '^[Nn]') {
+        Write-Error "Cannot continue without a valid AWS profile. Run setup_aws_local_profile.ps1 manually, then re-run this script."
+        exit 1
+    }
+    & (Join-Path $root "setup_aws_local_profile.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Profile setup did not complete successfully. Re-run setup_aws_local_profile.ps1, then re-run this script."
+        exit 1
+    }
+    Write-Host ""
+    Write-Host "      Reloading $envFile after profile setup..." -ForegroundColor Yellow
+    Import-DotEnvFile $envFile
+    $ssoProfile = $env:AWS_SSO_PROFILE
+    if ([string]::IsNullOrWhiteSpace($ssoProfile) -or -not (Test-AwsProfileExists $ssoProfile)) {
+        Write-Error "Profile setup finished but '$ssoProfile' still isn't usable. Check .env.aws_local and re-run."
+        exit 1
+    }
+    Write-Host "      Profile '$ssoProfile' created." -ForegroundColor Green
+} else {
+    Write-Host "      Profile exists." -ForegroundColor Green
+}
+
 aws sts get-caller-identity --profile $ssoProfile 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "      No valid session yet -- trying: aws sso login --profile $ssoProfile" -ForegroundColor Yellow
@@ -63,7 +121,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "       to refresh its credentials instead.)" -ForegroundColor Gray
     aws sso login --profile $ssoProfile
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Could not establish a valid session for profile '$ssoProfile'. Aborting."
+        Write-Error "Could not establish a valid session for profile '$ssoProfile'. If it uses pasted/static credentials instead of SSO, run setup_aws_local_profile.ps1 to refresh them. Aborting."
         exit 1
     }
 } else {

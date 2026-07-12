@@ -181,7 +181,7 @@ def test_write_log_passes_metrics_to_log_entry():
 # ── Integration: SKIP_NOT_DUE is a valid skip_reason constant ────────────────
 
 def test_skip_not_due_reason_format():
-    """SKIP_NOT_DUE reason must be parseable for Streamlit execution log."""
+    """SKIP_NOT_DUE reason must be parseable, stored in execution_log.skip_reason."""
     from engine.engines.hk_engine import HKEngine
     engine = HKEngine(dry_run=True)
     last_run_ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()

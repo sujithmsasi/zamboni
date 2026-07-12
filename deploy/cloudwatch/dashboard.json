@@ -8,7 +8,7 @@
         "type": "text",
         "x": 0, "y": 0, "width": 24, "height": 1,
         "properties": {
-          "markdown": "## 🧊 Zamboni — Iceberg Table Governance | [Execution Log](#) | [Streamlit App](#)"
+          "markdown": "## 🧊 Zamboni — Iceberg Table Governance | [Execution Log](#) | [App](#)"
         }
       },
 

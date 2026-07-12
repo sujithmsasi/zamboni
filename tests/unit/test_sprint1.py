@@ -89,25 +89,6 @@ def test_req_prefers_real_env_var():
     del os.environ["__ZAMBONI_TEST_VAR__"]
 
 
-# ── C1: verify systemd entrypoint ─────────────────────────────────────────────
-
-def test_streamlit_entrypoint_exists():
-    """app/Home.py (the Streamlit entrypoint) must exist."""
-    import os
-    assert os.path.exists("app/Home.py"), \
-        "app/Home.py not found — Streamlit entrypoint is missing"
-
-
-def test_systemd_service_uses_correct_entrypoint():
-    """deploy/scripts/after_install.sh must reference app/Home.py not app/main.py."""
-    with open("deploy/scripts/after_install.sh", encoding='utf-8') as f:
-        content = f.read()
-    assert "app/Home.py" in content, \
-        "after_install.sh still references old entrypoint — should be app/Home.py"
-    assert "app/main.py" not in content, \
-        "after_install.sh still references app/main.py which doesn't exist"
-
-
 # ── M2: IAM DeleteTable restriction ──────────────────────────────────────────
 
 def test_iam_delete_table_restricted_to_nonprod():

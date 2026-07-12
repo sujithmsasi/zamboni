@@ -6,6 +6,12 @@ import { useClaimTables, useExemptTables } from '../../../api/hooks/useLifecycle
 import type { NonprodRow } from '../../../api/types';
 import { StateBadge } from '../../../components/StateBadge';
 
+// Kept in sync with SingleActionTab.tsx's identical constant -- both tabs
+// validate the same "Business Reason" concept and must agree on the bar,
+// which used to be inconsistent (this tab accepted any non-empty string,
+// SingleActionTab required 10+ chars for the same action).
+const MIN_REASON_LENGTH = 10;
+
 const ACTIONABLE_STATES = ['PENDING_DROP', 'GREENZONE', 'STALE_CANDIDATE'] as const;
 const STATE_PRIORITY: Record<string, number> = { PENDING_DROP: 1, GREENZONE: 2, STALE_CANDIDATE: 3 };
 
@@ -54,8 +60,8 @@ export function BulkActionTab({ env }: { env: string }) {
   const claim = useClaimTables();
 
   const runAction = (kind: 'exempt' | 'claim') => {
-    if (!reason.trim()) {
-      message.error('Business reason is required.');
+    if (!reason.trim() || reason.trim().length < MIN_REASON_LENGTH) {
+      message.error(`Business reason must be at least ${MIN_REASON_LENGTH} characters.`);
       return;
     }
     const mutation = kind === 'exempt' ? exempt : claim;
@@ -96,12 +102,16 @@ export function BulkActionTab({ env }: { env: string }) {
       {selectedFqns.length > 0 && <div style={{ marginBottom: 8, fontWeight: 600 }}>{selectedFqns.length} table(s) selected</div>}
 
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Business Reason (required for all selected tables)</div>
+        <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>
+          Business Reason (required for all selected tables, min {MIN_REASON_LENGTH} characters)
+        </div>
         <Input.TextArea
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="Used by Q2 reporting sprint — will be cleaned up by 2026-06-30"
           rows={2}
+          maxLength={500}
+          showCount
         />
       </div>
 

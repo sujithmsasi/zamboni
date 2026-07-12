@@ -34,6 +34,8 @@ export function EditTableTab() {
   const updatePolicy = useUpdatePolicy();
   const updateGates = useUpdateGates();
   const compactionStrategy = Form.useWatch('compaction_strategy', form);
+  const compactionEngine = Form.useWatch('compaction_engine', form);
+  const strategyEngineConflict = ['sort', 'zorder'].includes(compactionStrategy) && compactionEngine === 'athena';
 
   // Applies server data into the local edit state exactly once per table
   // selection -- keying the effect on `detail.data`'s object identity
@@ -181,13 +183,13 @@ export function EditTableTab() {
                   <Form form={form} layout="vertical">
                     <Row gutter={16}>
                       <Col span={8}>
-                        <Form.Item name="snapshot_retention_days" label="Snapshot Retention (days) *">
-                          <InputNumber min={1} style={{ width: '100%' }} />
+                        <Form.Item name="snapshot_retention_days" label="Snapshot Retention (days) *" tooltip="How long Iceberg snapshots are kept before vacuum expires them.">
+                          <InputNumber min={1} max={3650} style={{ width: '100%' }} />
                         </Form.Item>
                       </Col>
                       <Col span={8}>
-                        <Form.Item name="snapshot_min_to_keep" label="Min Snapshots to Keep *">
-                          <InputNumber min={2} style={{ width: '100%' }} />
+                        <Form.Item name="snapshot_min_to_keep" label="Min Snapshots to Keep *" tooltip="Floor on snapshot count vacuum will never go below, regardless of age.">
+                          <InputNumber min={2} max={1000} style={{ width: '100%' }} />
                         </Form.Item>
                       </Col>
                       <Col span={8}>
@@ -198,24 +200,24 @@ export function EditTableTab() {
                     </Row>
                     <Row gutter={16}>
                       <Col span={8}>
-                        <Form.Item name="orphan_file_retention_days" label="Orphan Retention (days) *">
-                          <InputNumber min={2} style={{ width: '100%' }} />
+                        <Form.Item name="orphan_file_retention_days" label="Orphan Retention (days) *" tooltip="Orphan files younger than this are never deleted by vacuum.">
+                          <InputNumber min={2} max={3650} style={{ width: '100%' }} />
                         </Form.Item>
                       </Col>
                       <Col span={8}>
-                        <Form.Item name="orphan_cleanup_cadence_days" label="Orphan Cleanup Cadence (days)">
-                          <InputNumber min={0} style={{ width: '100%' }} />
+                        <Form.Item name="orphan_cleanup_cadence_days" label="Orphan Cleanup Cadence (days)" tooltip="How often orphan-file cleanup runs, independent of the retention floor above.">
+                          <InputNumber min={0} max={365} style={{ width: '100%' }} />
                         </Form.Item>
                       </Col>
                       <Col span={8}>
-                        <Form.Item name="compaction_target_file_size_mb" label="Target File Size (MB) *">
-                          <InputNumber min={64} style={{ width: '100%' }} />
+                        <Form.Item name="compaction_target_file_size_mb" label="Target File Size (MB) *" tooltip="Target output file size after compaction.">
+                          <InputNumber min={64} max={10240} style={{ width: '100%' }} />
                         </Form.Item>
                       </Col>
                     </Row>
                     <Row gutter={16}>
                       <Col span={8}>
-                        <Form.Item name="compaction_strategy" label="Compaction Strategy *">
+                        <Form.Item name="compaction_strategy" label="Compaction Strategy *" tooltip="sort/zorder require the Glue engine -- Athena only supports binpack.">
                           <Select options={['binpack', 'sort', 'zorder'].map((s) => ({ value: s, label: s }))} />
                         </Form.Item>
                       </Col>
@@ -230,6 +232,12 @@ export function EditTableTab() {
                         </Form.Item>
                       </Col>
                     </Row>
+                    {strategyEngineConflict && (
+                      <Alert
+                        type="error" showIcon style={{ marginBottom: 16 }}
+                        message={`Strategy '${compactionStrategy}' requires the Glue engine -- Athena only supports 'binpack'. Change one before saving.`}
+                      />
+                    )}
                     <Row gutter={16}>
                       <Col span={12}>
                         <Form.Item name="partition_column" label="Partition Column">

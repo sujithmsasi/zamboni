@@ -391,25 +391,6 @@ def test_audit_log_table_in_settings():
     assert "audit_log" in AUDIT_LOG_TABLE
 
 
-# ── Settings page exists ──────────────────────────────────────────────────────
-
-def test_settings_page_exists():
-    import os
-    assert os.path.exists("app/pages/11_Settings.py")
-
-
-def test_audit_log_page_exists():
-    import os
-    assert os.path.exists("app/pages/12_Audit_Log.py")
-
-
-def test_pages_toml_has_settings():
-    with open(".streamlit/pages.toml", encoding="utf-8") as f:
-        content = f.read()
-    assert "11_Settings.py" in content
-    assert "12_Audit_Log.py" in content
-
-
 def test_zamboni_settings_json_exists():
     import os
     assert os.path.exists("config/zamboni_settings.json")

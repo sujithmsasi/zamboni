@@ -2,6 +2,12 @@
 
 **Iceberg Table Governance Framework** — automated housekeeping, archival,
 and lifecycle management for Apache Iceberg tables at enterprise scale.
+FastAPI + React 18 UI (`api/` + `ui/`); Streamlit has been fully
+decommissioned.
+
+**Setting up? Start at [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md)** — it
+picks the right mode (local / aws_local / aws_ec2) and links to the rest.
+The sections below are a CLI/architecture reference, not a setup guide.
 
 ---
 
@@ -20,24 +26,21 @@ and lifecycle management for Apache Iceberg tables at enterprise scale.
 ```
 zamboni/
 ├── engine/
-│   ├── core/        ← Registry, config, health, window evaluator, circuit breaker
+│   ├── core/        ← Registry, config, control plane, health, window evaluator, circuit breaker
 │   ├── engines/     ← HK, Archival, Lifecycle engine classes
 │   ├── operations/  ← Compaction, vacuum, archival, catalog cleanup
 │   ├── strategies/  ← Binpack, sort, zorder
 │   ├── utils/       ← Athena, S3, Glue clients + logger
 │   ├── scripts/     ← Engine entry points (EventBridge / Control-M / manual)
 │   └── cli/         ← Helper tools for engineers
-├── app/
-│   ├── Home.py      ← Streamlit entry point
-│   ├── pages/       ← 10 UI pages
-│   ├── components/  ← Reusable UI components
-│   └── assets/      ← Logo files (da_logo.png, da_logo_small.png)
+├── api/             ← FastAPI app (routers/, services/) — the backend for ui/
+├── ui/              ← React 18 + TS + Vite + Ant Design — the UI
 ├── glue_jobs/       ← PySpark Glue job for sort/zorder compaction
 ├── sql/             ← Athena DDL (all metadata tables)
-├── config/          ← Settings, policy templates, domain retention
-├── tests/           ← Unit + integration tests
-├── deploy/          ← CI/CD, CodeDeploy hooks, IAM policy
-└── docs/            ← Design documents
+├── config/          ← Settings, policy templates, domain retention, control-plane schema
+├── tests/           ← Unit + api tests
+├── deploy/          ← CI/CD, CodeDeploy hooks, CloudFormation, IAM policy
+└── docs/            ← Setup guides, deployment/operations docs
 ```
 
 ---
@@ -51,7 +54,7 @@ zamboni/
 | Metadata Database | zamboni_catalog |
 | Layers | staging · datalake · base · master |
 | Python | 3.11 |
-| Streamlit | ≥ 1.36.0 |
+| Node | 20 (for `ui/`) |
 
 ## Athena Workgroups
 
@@ -61,40 +64,24 @@ zamboni/
 | `zamboni-standard` | Standard tier HK operations |
 | `zamboni-low` | Low priority HK operations |
 | `zamboni-archival` | Archival Engine |
-| `zamboni-app` | Streamlit app + CLI queries |
+| `zamboni-app` | API app + CLI queries |
 
 ---
 
 ## Quick Start
 
+See **[`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md)** for the full walkthrough
+of all three modes. Fastest path (no AWS account needed):
+
 ```bash
-# 1. Clone and install
-git clone https://github.com/sujithmsasi/zamboni.git
-cd zamboni && git checkout dev
-pip install -r requirements-dev.txt
+python scripts/seed_local_db.py   # one-time: create + seed the local database
+run_local_api.bat                 # Windows: builds the UI if needed, serves on :8000
+```
 
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your AWS values
-
-# 3. Create Athena metadata tables (one-time)
-# Option A: automated script (reads bucket paths from .env)
-bash deploy/create_athena_tables.sh
-
-# Option B: manual — run each file in sql/ against Athena in this order:
-#   1. create_domain_registry.sql
-#   2. create_stream_registry.sql
-#   3. create_hk_config.sql
-#   4. create_execution_log.sql
-#   5. create_nonprod_registry.sql
-#   6. create_home_snapshot.sql
-
-# 4. Run unit tests (no AWS needed)
-# No env vars needed — conftest.py sets ZAMBONI_TEST_MODE=true automatically
-python -m pytest tests/unit/ -v --override-ini="addopts="
-
-# 5. Run Streamlit app
-python -m streamlit run app/Home.py --server.port 8501
+To just run the tests (no AWS needed):
+```bash
+python -m pytest tests/unit/ -v
+python -m pytest tests/api/ -v    # separate invocation
 ```
 
 ---
@@ -284,13 +271,10 @@ python -m engine.cli.fleet_status health   --domain finance
 
 ---
 
-## D&A Logo
+## Logo
 
-Place your logo files at:
-- `app/assets/da_logo.png`       — 400×80px, used in page header
-- `app/assets/da_logo_small.png` — 120×40px, used in sidebar
-
-Gradient placeholder is shown until logo files are added.
+The React app's logo assets live under `ui/src/assets/` (see
+`ui/src/components/` for where they're used — the login page and sidebar).
 
 ---
 
@@ -314,6 +298,6 @@ Gradient placeholder is shown until logo files are added.
 | 4 | HK Engine — compaction, vacuum, dynamic router, Glue job | ✅ |
 | 5 | Archival Engine — export-then-delete | ✅ |
 | 6 | Lifecycle Engine — state machine, GREENZONE, cleanup | ✅ |
-| 7 | Streamlit App — 11 pages, daily snapshot home | ✅ |
+| 7 | UI — FastAPI + React 18 (replaces the original Streamlit app, since decommissioned) | ✅ |
 | 8 | CLI Tools — register, dry-run, fleet-status, enable, cost | ✅ |
 | 9 | Hardening — CloudWatch dashboards, alarms, load testing | ⏳ |

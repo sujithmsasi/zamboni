@@ -12,21 +12,23 @@ const JOB_TYPE_OPTIONS = [
   { value: 'other', label: 'other' },
 ];
 
-interface ControlMFieldsProps {
-  /** Job Name is required on Register/Bulk Apply, optional-but-shown on Edit. */
-  jobNameRequired?: boolean;
-}
-
 /**
- * The 6-field Control-M integration block shared by Register, Edit Table, and
- * Bulk Control-M (2_Table_Registration.py): Control-M Job Name (AutoComplete,
- * fed by the Control-M Job Registry via GET /api/jobs?search -- "ctrlm_helper"
+ * The 6-field Control-M integration block shared by Register and Edit Table
+ * (2_Table_Registration.py): Control-M Job Name (AutoComplete, fed by the
+ * Control-M Job Registry via GET /api/jobs?search -- "ctrlm_helper"
  * equivalent, free text still allowed), HK Control-M Job, AWS Job Name / Gate 1
  * (optional -- blank means "use Control-M Job Name"), Job Type, start time,
  * expected duration. Field names match stream_registry columns exactly so
  * every parent form can spread this straight into its submit payload.
+ *
+ * controlm_pipeline_job is deliberately optional everywhere -- backend
+ * (RegisterTableRequest/UpdateTableRequest) has no required constraint on
+ * it either, and a table is often registered before its Control-M job is
+ * assigned. An earlier version of this component made it required on Edit
+ * only, which blocked saving an unrelated field change on a table with no
+ * Control-M job yet -- fixed 2026-07-10.
  */
-export function ControlMFields({ jobNameRequired = false }: ControlMFieldsProps) {
+export function ControlMFields() {
   const [search, setSearch] = useState('');
   const jobs = useJobs(search || undefined);
   const jobOptions = (jobs.data ?? []).map((j) => ({ value: j.job_name }));
@@ -38,7 +40,6 @@ export function ControlMFields({ jobNameRequired = false }: ControlMFieldsProps)
           <Form.Item
             name="controlm_pipeline_job"
             label="Control-M Job Name"
-            rules={jobNameRequired ? [{ required: true, message: 'Control-M Job Name is required' }] : []}
             tooltip="The Control-M job that writes data to these tables."
           >
             <AutoComplete
