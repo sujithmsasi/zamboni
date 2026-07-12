@@ -384,6 +384,23 @@ would never reach an instance that's already up. `after_install.sh` runs on
 what actually lets the setup reach existing instances on their next
 ordinary deploy, no instance replacement required.
 
+**Upgrading an instance that predates this feature** needs two manual,
+one-time steps CodeDeploy won't do for you:
+- Apply the updated IAM policy (`logs:CreateLogGroup`/`CreateLogStream`/
+  `PutLogEvents`/`DescribeLogStreams`/`DescribeLogGroups`) via a
+  CloudFormation stack update (`aws cloudformation deploy` against
+  `zamboni-cfn.yaml`, same as any other template change) or by hand-editing
+  the instance role if you're on the manual path — CodeDeploy only pushes
+  application files and runs the lifecycle hooks, it never touches IAM.
+- Add `ZAMBONI_LOG_GROUP=...` to the instance's existing `/opt/zamboni/.env`
+  yourself. `before_install.sh` backs up and restores the CURRENT `.env`
+  on every deploy specifically so your real config survives a redeploy —
+  which means it will *not* pick up new keys from `.env.example` (a blank
+  `ZAMBONI_LOG_GROUP=` line there does nothing for an instance whose `.env`
+  predates it). Skipping this doesn't fail the deploy: `configure_logging.sh`
+  just warns and skips CloudWatch Agent setup (local log rotation still
+  configures and still enforces fatally either way).
+
 **CloudWatch Agent**: `configure_logging.sh` installs
 `amazon-cloudwatch-agent` and writes its config to a Zamboni-specific
 filename, not the agent's default

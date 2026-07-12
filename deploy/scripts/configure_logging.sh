@@ -190,8 +190,19 @@ fi
 # already has its own fragment under that default name, this would
 # overwrite THEIRS on every deploy, the same clobbering append-config was
 # chosen over fetch-config to avoid in the first place.
-mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
-cat > /opt/aws/amazon-cloudwatch-agent/etc/zamboni-logs.json <<CWAGENTCFG
+#
+# Checked, unlike an earlier version of this script: a silently-failed
+# mkdir/write here (disk full, a permissions change) would otherwise
+# leave whatever zamboni-logs.json already existed from a PREVIOUS run in
+# place, and the append-config call below would then silently reconfigure
+# the agent against that stale file instead of today's log group/file
+# list -- non-fatal like the rest of this section (shipping logs off-box
+# is a nice-to-have), but it should skip, not proceed on stale content.
+if ! mkdir -p /opt/aws/amazon-cloudwatch-agent/etc; then
+    log "WARNING: could not create /opt/aws/amazon-cloudwatch-agent/etc -- skipping CloudWatch Agent configuration."
+    exit 0
+fi
+if ! cat > /opt/aws/amazon-cloudwatch-agent/etc/zamboni-logs.json <<CWAGENTCFG
 {
   "logs": {
     "logs_collected": {
@@ -214,6 +225,10 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/zamboni-logs.json <<CWAGENTCFG
   }
 }
 CWAGENTCFG
+then
+    log "WARNING: could not write zamboni-logs.json -- skipping CloudWatch Agent configuration rather than reconfiguring against a possibly-stale prior version of this file."
+    exit 0
+fi
 
 # append-config (not fetch-config/set-config), on purpose: fetch-config
 # REPLACES the agent's entire running configuration with exactly what's in
