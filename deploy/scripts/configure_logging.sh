@@ -160,11 +160,16 @@ if [ -z "$ZAMBONI_LOG_GROUP" ]; then
     exit 0
 fi
 
-# CloudWatch Logs group names only allow [A-Za-z0-9._/#-] -- reject
-# anything else now rather than write JSON with an embedded value that
-# could break the string (or just silently create the wrong log group).
-if ! printf '%s' "$ZAMBONI_LOG_GROUP" | grep -qE '^[A-Za-z0-9._/#-]+$'; then
-    log "WARNING: ZAMBONI_LOG_GROUP='$ZAMBONI_LOG_GROUP' contains characters CloudWatch Logs group names don't allow -- skipping CloudWatch Agent configuration rather than writing malformed config."
+# CloudWatch Logs group names only allow [A-Za-z0-9._/#-], 1-512 chars.
+# Bash's [[ =~ ]] matches the WHOLE string, unlike `grep -E '^...$'`,
+# which matches per-LINE -- an embedded newline could otherwise slip
+# through as long as any one line matched. Length is checked separately
+# via ${#...} rather than a {1,512} regex bound -- some bash/regex builds
+# (confirmed: MSYS2/Git-Bash on Windows) silently fail to match ANY
+# interval bound above {1,255}, which a `bash -n` syntax check can't
+# catch, only running it does.
+if [ "${#ZAMBONI_LOG_GROUP}" -gt 512 ] || ! [[ "$ZAMBONI_LOG_GROUP" =~ ^[A-Za-z0-9._/#-]+$ ]]; then
+    log "WARNING: ZAMBONI_LOG_GROUP='$ZAMBONI_LOG_GROUP' contains characters CloudWatch Logs group names don't allow, or exceeds the 512-char limit -- skipping CloudWatch Agent configuration rather than writing malformed config."
     exit 0
 fi
 
@@ -219,7 +224,7 @@ if /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
     # does NOT confirm log data has actually reached CloudWatch. Check
     # the log group in the console, or `aws logs tail`, to verify real
     # ingestion.
-    log "CloudWatch Agent configured and started -- configured to ship /var/log/zamboni/*.log and /var/log/zamboni-deploy.log to log group $ZAMBONI_LOG_GROUP (not yet confirmed -- see the note above)."
+    log "CloudWatch Agent configured and started -- configured to ship /var/log/zamboni/*.log and /var/log/zamboni-deploy.log to log group $ZAMBONI_LOG_GROUP (agent startup confirmed, actual ingestion not verified -- check with: aws logs tail $ZAMBONI_LOG_GROUP --since 10m)."
 else
     log "WARNING: CloudWatch Agent append-config/start failed -- log shipping to CloudWatch will not be active. Check 'systemctl status amazon-cloudwatch-agent'."
 fi

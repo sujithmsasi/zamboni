@@ -258,12 +258,24 @@ one: `deploy/iam_policy.json`'s `CloudWatchLogs` statement only grants
 `/zamboni/*` ARN prefix, so a differently-named group gets `AccessDenied`
 unless you also update that ARN. Also set a retention policy explicitly —
 a manually-created log group defaults to **never expire**, unlike the CFN
-path's `LogRetentionDays` parameter (default 30 days):
+path's `LogRetentionDays` parameter (default 30 days).
+
+Run these two commands with your own provisioning credentials (the same
+identity you used for the IAM/DynamoDB/security-group steps above), not
+the EC2 instance's own role -- `deploy/iam_policy.json` grants the
+instance role `PutRetentionPolicy` nowhere at all, so it can't run the
+second command, and its `CreateLogGroup` grant exists only so the
+CloudWatch Agent can self-heal if the group is ever deleted out from
+under it, not as the intended way to create it the first time:
 
 ```bash
 aws logs create-log-group --log-group-name /zamboni/app
 aws logs put-retention-policy --log-group-name /zamboni/app --retention-in-days 30
+```
 
+Then, on the instance itself:
+
+```bash
 # ZAMBONI_LOG_GROUP must be on the SAME command as `sudo`, not exported on
 # a separate line first -- sudo starts a clean environment and drops
 # anything merely exported beforehand.
