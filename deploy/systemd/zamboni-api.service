@@ -11,8 +11,13 @@ Environment=PYTHONPATH=/opt/zamboni
 ExecStart=/opt/zamboni/.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2
 Restart=on-failure
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
+# 2026-07-12: file-based (not journal-only) so the CloudWatch Agent can tail
+# it and the weekly /etc/logrotate.d/zamboni policy can rotate it -- see
+# deploy/zamboni-cfn.yaml's UserData. `journalctl -u zamboni-api` still shows
+# unit lifecycle events (start/stop/exit codes) but no longer the app's own
+# stdout/stderr -- that's now only in this file.
+StandardOutput=append:/var/log/zamboni/api.log
+StandardError=append:/var/log/zamboni/api.log
 
 [Install]
 WantedBy=multi-user.target

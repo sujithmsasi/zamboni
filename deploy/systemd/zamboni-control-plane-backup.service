@@ -11,8 +11,11 @@ Environment=PYTHONPATH=/opt/zamboni
 ExecStart=/opt/zamboni/.venv/bin/python scripts/control_plane_backup.py
 Restart=on-failure
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
+# 2026-07-12: file-based so the CloudWatch Agent + weekly logrotate policy
+# can pick it up -- see deploy/zamboni-cfn.yaml's UserData and
+# deploy/systemd/zamboni-api.service's comment for the full rationale.
+StandardOutput=append:/var/log/zamboni/control-plane-backup.log
+StandardError=append:/var/log/zamboni/control-plane-backup.log
 
 [Install]
 WantedBy=multi-user.target

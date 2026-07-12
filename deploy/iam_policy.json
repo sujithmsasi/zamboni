@@ -157,6 +157,15 @@
       ]
     },
     {
+      "Sid": "CloudWatchLogsDescribeGroups",
+      "_comment": "logs:DescribeLogGroups has no resource-level permissions -- must be Resource: '*' (see deploy/zamboni-cfn.yaml's matching statement). The CloudWatch Agent's control script calls it internally.",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "CloudWatchMetrics",
       "Effect": "Allow",
       "Action": [

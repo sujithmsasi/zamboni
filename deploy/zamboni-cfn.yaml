@@ -343,6 +343,28 @@ Resources:
                 Resource:
                   - !GetAtt ZamboniLogGroup.Arn
                   - !Sub "${ZamboniLogGroup.Arn}:*"
+              - Sid: DescribeLogGroupsAccountWide
+                # logs:DescribeLogGroups has NO resource-level permissions
+                # (the IAM service authorization reference lists no
+                # resource type for it) -- it must be granted with
+                # Resource: "*". An earlier version of this statement
+                # scoped it to ZamboniLogGroup's ARN alongside the other
+                # actions above, which doesn't actually authorize the
+                # call: AWS evaluates this action against "*" regardless
+                # of what's granted, so a narrower Resource here would
+                # silently never match. AWS's own CloudWatchAgentServerPolicy
+                # grants it the same way, unscoped. The agent's control
+                # script (append-config/status checks) calls it
+                # internally; without it those calls can return
+                # AccessDenied even while metric/log ingestion itself
+                # keeps working. deploy/scripts/configure_logging.sh only
+                # confirms the agent accepted its config and started, not
+                # that log data actually reached CloudWatch -- check the
+                # log group directly (or `aws logs tail`) to confirm real
+                # ingestion.
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
               - Effect: Allow
                 Action: cloudwatch:PutMetricData
                 Resource: "*"
@@ -423,6 +445,24 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${NamePrefix}-app"
+      # NOTE (2026-07-12): CloudWatch Agent + logrotate setup deliberately
+      # does NOT live in the UserData script below -- see
+      # deploy/scripts/configure_logging.sh (called from after_install.sh
+      # on every deployment) instead.
+      #
+      # IMPORTANT: any edit to the Fn::Base64 string below changes this
+      # resource's UserData property, which CloudFormation updates with
+      # "Some interruptions" -- i.e. it stops and starts this
+      # already-running instance on the next stack update. Cloud-init only
+      # runs user-data once per instance-id, so that reboot does NOT even
+      # re-execute the changed script on this same instance -- only a full
+      # replacement (e.g. the AmiId drift case documented above) would. A
+      # 2026-07-12 review caught an earlier draft of this template editing
+      # this block for a fix (log-directory ownership) that didn't need a
+      # reboot at all -- it was moved to configure_logging.sh instead,
+      # which reaches an already-running instance on its next ordinary
+      # deploy with zero interruption. Don't add a fix here unless it
+      # genuinely can only run once, at first boot.
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -940,6 +980,15 @@ Outputs:
   InstancePrivateIp:
     Description: Private IP of the Zamboni EC2 instance.
     Value: !GetAtt ZamboniInstance.PrivateIp
+
+  LogGroupName:
+    Description: >-
+      CloudWatch Logs group name -- copy this into .env's ZAMBONI_LOG_GROUP
+      (see .env.example). Not auto-injected: this stack takes bucket/topic/
+      table names as parameters rather than discovering them, and this
+      value follows the same manual-copy convention (see docs/deployment/
+      ec2_api_deploy.md's "Logging" section).
+    Value: !Ref ZamboniLogGroup
 
   ResolvedAmiId:
     Description: >-

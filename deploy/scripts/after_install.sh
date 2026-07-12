@@ -118,4 +118,23 @@ systemctl daemon-reload
 systemctl enable zamboni-control-plane-integrity.timer
 echo "[after_install] zamboni-control-plane-integrity timer registered." | tee -a "$LOG"
 
+# ── 8. Log rotation + CloudWatch Agent ───────────────────────────────────────
+# Deliberately run here, not in EC2 UserData -- UserData only executes once,
+# at first boot, so it would never reach an already-running instance on an
+# ordinary CodeDeploy push (the normal, every-day deploy path). This hook
+# runs on EVERY deployment, the first one on a fresh instance included.
+#
+# 2026-07-12, corrected same day after review: NOT wrapped in `|| echo
+# WARNING (non-fatal)` anymore. configure_logging.sh now exits 1 if local
+# log rotation specifically fails to get configured (logrotate package/
+# config/timer) -- zamboni-api/-control-plane-sync/-control-plane-backup
+# log ONLY to a file now (no journal fallback), so unconfigured rotation
+# is a real unbounded-disk-growth risk, not a cosmetic gap. Letting that
+# propagate here (this script runs under set -euo pipefail) fails the
+# whole AfterInstall hook, which is what should happen. The CloudWatch
+# Agent half of configure_logging.sh stays non-fatal internally (exits 0
+# even if shipping logs off-box fails) -- that part is genuinely optional.
+echo "[after_install] Configuring log rotation + CloudWatch Agent..." | tee -a "$LOG"
+DEPLOY_DIR="$DEPLOY_DIR" LOG="$LOG" bash "$DEPLOY_DIR/deploy/scripts/configure_logging.sh"
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === AfterInstall DONE ===" | tee -a "$LOG"

@@ -81,7 +81,16 @@ if systemctl is-active --quiet zamboni-api; then
     echo "[app_start] zamboni-api is running ✓" | tee -a "$LOG"
 else
     echo "[app_start] ERROR: zamboni-api failed to start." | tee -a "$LOG"
+    # 2026-07-12: zamboni-api.service now logs to a file, not the journal --
+    # journalctl still shows unit lifecycle events (useful for crash-loop /
+    # exit-code diagnosis) but the app's own stdout/stderr is only in the file.
     journalctl -u zamboni-api -n 20 | tee -a "$LOG"
+    # `|| true`: under set -euo pipefail, tail failing (file doesn't exist
+    # yet, e.g. the service crashed before ever writing) would abort the
+    # script via the pipeline's exit status before reaching the explicit
+    # `exit 1` below -- harmless here since we're exiting 1 either way, but
+    # kept for consistency with the non-fatal occurrence in the loop below.
+    tail -n 40 /var/log/zamboni/api.log 2>/dev/null | tee -a "$LOG" || true
     exit 1
 fi
 
@@ -112,7 +121,17 @@ for svc in zamboni-control-plane-sync zamboni-control-plane-backup; do
         echo "[app_start] $svc is running ✓" | tee -a "$LOG"
     else
         echo "[app_start] WARNING: $svc is not active." | tee -a "$LOG"
+        # 2026-07-12: see the zamboni-api note above -- these services log
+        # to a file now, journalctl alone only shows unit lifecycle events.
         journalctl -u "$svc" -n 20 | tee -a "$LOG"
+        # `|| true`: this branch is explicitly non-fatal (see comment above
+        # the loop) -- without it, tail failing under set -euo pipefail
+        # would abort the WHOLE script here, silently turning a non-fatal
+        # warning into a failed deployment. Real bug this closes: it's not
+        # hypothetical -- a service that never started never creates its
+        # log file, so `tail` on a fresh instance's first deploy fails
+        # every time this branch is hit.
+        tail -n 40 "/var/log/zamboni/${svc#zamboni-}.log" 2>/dev/null | tee -a "$LOG" || true
     fi
 done
 

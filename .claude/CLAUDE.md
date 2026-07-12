@@ -3903,3 +3903,229 @@ confirmed `/`, `/api/system/mode`, `/api/tables` all serve correctly.
   every change is either a credential-resolution fix
   (`get_boto3_session()`), a seed-data consistency fix, or subtractive
   Streamlit-removal across docs/deploy/tests.
+
+2026-07-12 EC2 log shipping + rotation, then corrected after an external
+review found real gaps in the first pass. Sujith asked whether
+application/engine logs were being written to `/opt/zamboni/logs` or
+`/var/log/zamboni/` on EC2 -- investigation found `/var/log/zamboni/*.log`
+already existed for the 5 engine scripts + bootstrap, but the 4 systemd
+daemons only logged to the journal, nothing shipped off-box despite
+`engine/utils/logger.py`'s docstring claiming CloudWatch capture, and
+nothing rotated. First pass added CloudWatch Agent + logrotate setup
+inline in `deploy/zamboni-cfn.yaml`'s EC2 UserData; a review of that diff
+found it wouldn't actually reach the already-running EC2 instance (UserData
+only runs once, at first boot -- an ordinary CodeDeploy push never
+re-executes it) plus 4 smaller issues, all verified against the code before
+fixing (one review point -- untracked-file handling in `migrate_repo.ps1`
+-- was checked and found to be intentional, disclosed behavior already,
+not a defect):
+- **Moved the setup out of UserData into `deploy/scripts/configure_logging.sh`**,
+  called from `after_install.sh` instead -- that hook runs on *every*
+  CodeDeploy deployment (the first one on a fresh instance included), so
+  it actually reaches instances that are already running. Nothing needs to
+  log-ship before the first deployment anyway, since the app/engines don't
+  exist on the instance until CodeDeploy's Install step places them.
+  `ZAMBONI_LOG_GROUP` (new `.env` variable, copied from the stack's new
+  `LogGroupName` output) follows the same manual-copy convention this repo
+  already uses for bucket/SNS values, rather than trying to inject a
+  CloudFormation value into a script that runs outside any `!Sub` context.
+- **Added the missing `logs:DescribeLogGroups` IAM permission** --
+  AWS's own `CloudWatchAgentServerPolicy` includes it; its absence can
+  cause a partial failure (agent starts, later calls get `AccessDenied`)
+  that the agent's own exit code doesn't surface.
+- **Switched from `cronie`/`crond` to AL2023's own `logrotate.timer`**,
+  and added `maxsize 200M` alongside `weekly` so a crash loop can't fill
+  the root volume between scheduled rotations (the timer's own daily check
+  means `maxsize` is actually evaluated daily).
+- **Stopped chowning `/var/log/zamboni` to `ec2-user`** -- the app
+  services all run as `ec2-user` (`User=ec2-user` in every unit), and
+  since Unix directory *write* permission (not file ownership) governs
+  delete/rename, `ec2-user` owning the directory would let a compromised
+  service process unlink or replace any other service's log file, not
+  just its own. Kept root-owned (755, readable/traversable for SSH
+  debugging) -- systemd itself (running as root) opens each `append:`
+  file before dropping to `User=ec2-user`, so the service process never
+  needed directory write access in the first place.
+- **Fixed a real `set -euo pipefail` bug in `app_start.sh`**: the new
+  `tail -n 40 <file> | tee -a "$LOG"` diagnostic lines (added when the
+  4 services moved off the journal) had no `|| true` -- on a fresh
+  instance's first deploy, a service that fails to start has no log file
+  yet, so `tail` fails, and under `pipefail` that would abort the *entire*
+  script, turning an explicitly-non-fatal warning branch into a failed
+  deployment.
+- **Corrected the doc** (`docs/deployment/ec2_api_deploy.md`'s "Logging"
+  section, added in the first pass) to say 3 systemd-managed files need
+  `copytruncate`, not 4 -- `zamboni-control-plane-integrity` is a
+  `Type=oneshot` unit fired by a daily timer (fresh log fd each run, same
+  as the engine scripts), not a continuously-running daemon holding the
+  fd open.
+- All of the above re-verified after fixing: `cfn-lint` clean, the
+  rendered UserData (extracted via a small script, same technique used
+  when the UserData was originally hardened) and both new/changed bash
+  scripts syntax-checked, the CloudWatch Agent JSON config and logrotate
+  config extracted and validated directly.
+
+Also fixed, from the same review, in `migrate_repo.ps1` (the org-drop
+history-migration script -- unrelated to the logging work, reviewed at the
+same time): **all three fixes were live-tested end-to-end against a real
+throwaway repo run through the actual `git filter-repo` engine and an
+independently re-cloned result, not just reasoned about** -- this is what
+caught a real behavioral gap the reasoning alone missed (see below).
+- **Added independent commit-message scanning** (`Test-CommitMessagesClean`,
+  new): `Test-HistoryClean` (`git grep <rev>`) searches each revision's
+  tree/blob content, never the commit message itself (metadata on the
+  commit object, not part of any blob) -- and nothing else in the
+  verification step read messages either, despite the script's own
+  docstring already claiming full coverage including "commit message."
+  `--replace-message` scrubs messages during the rewrite, but nothing
+  independently confirmed that worked. Fixed by concatenating every
+  commit's raw body (`%B`) and running the same fixed-string,
+  case-insensitive substring search `Find-ForbiddenReferences` already
+  uses for file content.
+- **Escaped `$oldUser` before embedding it in regex patterns** (5 sites)
+  -- the input validation allows `.` (a regex metacharacter; real GitHub
+  usernames can't actually contain one, but this script's own validation
+  is more permissive), so an unescaped username could match more than the
+  literal string wherever a `.` stood in for any character.
+- **Bounded the standalone bare-username replacement rule** with
+  lookaround (`(?<![A-Za-z0-9_])...(?![A-Za-z0-9_])`) so a short/common
+  username can't over-match as a substring of an unrelated word (e.g. "jo"
+  inside "enjoy") -- the one rule with no surrounding literal context to
+  naturally constrain it. **Live-tested twice, not once**: the first
+  version's boundary class also excluded `.`/`-` (matching the username
+  charset), which correctly avoided false-positive substrings but then
+  under-matched a genuine mention like "faketestuser123-helper" in a
+  commit message -- caught only because `Test-CommitMessagesClean` (added
+  in the same pass) flagged it as an unscrubbed residual reference during
+  the live test run, refusing to push. Narrowed the boundary class to just
+  `[A-Za-z0-9_]` (dropping `.`/`-`) and re-ran the same test end-to-end;
+  an independent re-clone of the pushed branch confirmed the mention was
+  now correctly rewritten and `git grep` across all commits found nothing.
+- **Added `--prune-empty never --prune-degenerate never`** to the
+  `filter-repo` invocation -- its default (`auto`) prunes a commit that
+  becomes empty after `--invert-paths` removes its only changes (e.g. a
+  commit that touched only `zamboni_local.db`), silently contradicting the
+  script's own stated guarantee that every commit survives. The
+  post-rewrite commit-count check was also tightened from a warn-only
+  "difference is expected" message to a hard failure, now that pruning is
+  no longer possible in either rewrite path (the `filter-branch` fallback
+  never passed `--prune-empty` either, so it was already compliant).
+- Confirmed **not** a defect, left as-is: untracked files being excluded
+  from migration (inherent to how `git clone` works, already explicitly
+  disclosed in the script's own docstring and listed at runtime) and the
+  git-filter-branch fallback still being push-capable with disclosed
+  residual risk (a deliberate, already-reviewed design choice from when
+  this script was built, gated behind its own explicit `ACKNOWLEDGE`
+  prompt -- not a new problem introduced now that message-scanning covers
+  it too).
+- **Closes a stale-documentation item found in the same review**: this
+  file's own 2026-07-11 entry (further above) still only names the
+  script's original filename, `migrate_to_org_repo.ps1` -- it was renamed
+  to `migrate_repo.ps1` the next day (see
+  `[[project_org_drop_readiness]]` memory for the full rename history),
+  but that rename was only ever recorded in personal memory, never here.
+  Recorded here now rather than editing the original entry in place, same
+  as this file's own established convention elsewhere.
+
+2026-07-12 (same day, second pass) A follow-up external review of the EC2
+logging work above found the first pass introduced a new problem while
+fixing the original ones: it edited EC2 UserData for a fix that didn't
+need it. Every finding verified against the actual code before acting;
+`cfn-lint` and `bash -n` re-confirmed clean after every change.
+
+- **Real, severe: the first pass's UserData edits would have rebooted the
+  running instance for no benefit.** `deploy/zamboni-cfn.yaml`'s
+  `AWS::EC2::Instance.UserData` property updates with "Some interruptions"
+  on any byte change -- confirmed against AWS's own CFN property-update
+  docs -- meaning a stack update touching this string stops and starts an
+  already-running instance. Worse: cloud-init only runs user-data once per
+  instance-id, so that reboot would NOT even re-execute the changed
+  script on the same instance -- only a full replacement would. The first
+  pass's ownership-comment/chmod edit and its "why CW Agent isn't here"
+  comment were both inside the `Fn::Base64: !Sub` block, so applying that
+  version to a real stack would have forced a pointless reboot (all
+  downside, since the fix could never take effect on that instance
+  anyway). Fixed by reverting the entire UserData script body back to
+  byte-identical with HEAD (verified via a direct diff of the extracted
+  block, not just eyeballing it) and moving the explanation to a plain
+  YAML comment directly above the `UserData:` key -- outside the
+  `Fn::Base64` string, so it's stripped before the property value is ever
+  computed and causes zero diff to what CloudFormation actually compares.
+  That same comment now also documents the interruption/no-rerun trap
+  itself, so a future editor doesn't reintroduce it.
+- **Real: `logs:DescribeLogGroups` was granted on the wrong resource
+  scope.** The first pass added it to the same statement as
+  `CreateLogGroup`/`CreateLogStream`/`PutLogEvents`/`DescribeLogStreams`,
+  scoped to `ZamboniLogGroup`'s ARN -- but `DescribeLogGroups` has no
+  resource-level permissions at all (the IAM service authorization
+  reference lists no resource type for it), so a specific-ARN `Resource`
+  doesn't authorize it; AWS evaluates the action against `"*"` regardless.
+  Split into its own statement (`Sid: DescribeLogGroupsAccountWide`) with
+  `Resource: "*"`, matching how AWS's own `CloudWatchAgentServerPolicy`
+  grants it.
+- **Real: existing ec2-user-owned log files/directory were never
+  migrated.** The first pass's root-ownership fix lived only in EC2
+  UserData (which -- see above -- never reruns on an existing instance
+  anyway), so an already-bootstrapped instance would keep `ec2-user`
+  ownership forever. Moved the chown into `deploy/scripts/
+  configure_logging.sh` instead (which runs on every deploy): `chown
+  root:root /var/log/zamboni` plus a `find ... -exec chown root:root`
+  sweep over any files already inside it, so this now self-heals on the
+  very next ordinary deploy regardless of how the instance was originally
+  bootstrapped. UserData's own `mkdir`/`chown ec2-user:ec2-user` for this
+  directory is left exactly as it was (part of the byte-identical revert
+  above) -- the point is that `configure_logging.sh` corrects it
+  immediately afterward every time, so UserData's initial ownership
+  no longer matters.
+- **Real: rotation failure was only ever a warning, even though these
+  logs no longer have a journal fallback.** `zamboni-api`/
+  `-control-plane-sync`/`-control-plane-backup` switched to file-only
+  logging in the first pass (`StandardOutput=append:...`, not `journal`),
+  which means an unconfigured logrotate is a genuine unbounded-disk-growth
+  risk, not a cosmetic gap -- previously journald's own bounded retention
+  covered for it regardless of whether the file-based rotation worked.
+  `configure_logging.sh` now treats `dnf install -y logrotate`, writing
+  `/etc/logrotate.d/zamboni`, and enabling `logrotate.timer` as a fatal
+  sequence (`exit 1` on any failure); `deploy/scripts/after_install.sh`'s
+  call site had its `|| echo WARNING (non-fatal)` swallow removed, so a
+  real rotation failure now propagates and fails the whole `AfterInstall`
+  hook (and the CodeDeploy deployment with it) via the script's existing
+  `set -euo pipefail`. The CloudWatch Agent half of the same script stays
+  non-fatal by design -- shipping logs off-box is an observability
+  nice-to-have, not a disk-safety requirement.
+- **Real: `fetch-config` could silently erase an org-managed CloudWatch
+  Agent configuration.** `amazon-cloudwatch-agent-ctl -a fetch-config`
+  REPLACES the agent's entire running configuration with exactly what's
+  passed via `-c` -- if an org already runs this agent with its own
+  broader config (other log files, custom metrics) via SSM Parameter
+  Store or a separately-managed file, the first Zamboni deploy on that
+  instance would silently wipe it. Switched to `-a append-config`, which
+  merges Zamboni's `collect_list` into whatever's already configured
+  instead of replacing it.
+- **Real, minor: `.env.example`'s `ZAMBONI_LOG_GROUP=/zamboni/app` looks
+  like a real value, not an obvious placeholder.** It's only correct for
+  the CFN stack's default `NamePrefix=zamboni` -- the log group is
+  actually named `/${NamePrefix}/app`, so a customized `NamePrefix` (the
+  normal org-adaptation step per `docs/ORG_DROP.md`) means copying this
+  line verbatim points at a log group that doesn't match what the stack
+  actually created. Added an explicit comment calling this out, unlike
+  the other already-obviously-fake placeholders in this file (e.g.
+  `AWS_ACCOUNT_ID=123456789012`).
+- **Real: the manual (non-CodeDeploy) deploy path never mentioned log
+  rotation/shipping at all.** `docs/deployment/ec2_api_deploy.md`'s
+  "Manual path" section installed the systemd services but had no
+  equivalent to what `after_install.sh` does automatically on the
+  CodeDeploy path. Added a "### 6. Log rotation + CloudWatch Agent" step
+  there, plus updated the "Logging" section's own prose to reflect the
+  corrected fatal/non-fatal split (it previously said "non-fatal end to
+  end," which is no longer true for the rotation half).
+- **Checked, not fixed: `configure_logging.sh` remains untracked
+  (`git status` shows `??`).** This is a staging omission, not a code
+  defect -- resolved by `git add`ing it alongside the rest of this
+  session's changes at commit time, same as any other new file.
+- Re-verified after every change: `cfn-lint deploy/zamboni-cfn.yaml` →
+  zero errors/warnings; `bash -n` on `configure_logging.sh`/
+  `after_install.sh`/`app_start.sh` → all clean; a direct `diff` of the
+  UserData script body extracted from HEAD vs. the working tree → byte-
+  identical, confirming the stack update this session produces causes
+  zero EC2 instance interruption.
