@@ -12,8 +12,9 @@ ExecStart=/opt/zamboni/.venv/bin/python scripts/control_plane_sync.py
 Restart=on-failure
 RestartSec=10
 # 2026-07-12: file-based so the CloudWatch Agent + weekly logrotate policy
-# can pick it up -- see deploy/zamboni-cfn.yaml's UserData and
-# deploy/systemd/zamboni-api.service's comment for the full rationale.
+# can pick it up -- both configured by deploy/scripts/configure_logging.sh
+# (called from after_install.sh on every deploy, not EC2 UserData -- see
+# deploy/systemd/zamboni-api.service's comment for the full rationale).
 StandardOutput=append:/var/log/zamboni/control-plane-sync.log
 StandardError=append:/var/log/zamboni/control-plane-sync.log
 

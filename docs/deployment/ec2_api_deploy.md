@@ -252,11 +252,17 @@ the manual commands above are for orgs not using CodeDeploy at all.
 ### 6. Log rotation + CloudWatch Agent
 
 No CFN stack here, so there's no `LogGroupName` output to copy from —
-create the log group yourself (any name; the CFN path names it
-`/${NamePrefix}/app` automatically, but a manual deploy can use anything):
+create the log group yourself. Use a `/zamboni/...` name, not an arbitrary
+one: `deploy/iam_policy.json`'s `CloudWatchLogs` statement only grants
+`CreateLogGroup`/`CreateLogStream`/`PutLogEvents` under the
+`/zamboni/*` ARN prefix, so a differently-named group gets `AccessDenied`
+unless you also update that ARN. Also set a retention policy explicitly —
+a manually-created log group defaults to **never expire**, unlike the CFN
+path's `LogRetentionDays` parameter (default 30 days):
 
 ```bash
 aws logs create-log-group --log-group-name /zamboni/app
+aws logs put-retention-policy --log-group-name /zamboni/app --retention-in-days 30
 
 # ZAMBONI_LOG_GROUP must be on the SAME command as `sudo`, not exported on
 # a separate line first -- sudo starts a clean environment and drops
@@ -367,8 +373,11 @@ what actually lets the setup reach existing instances on their next
 ordinary deploy, no instance replacement required.
 
 **CloudWatch Agent**: `configure_logging.sh` installs
-`amazon-cloudwatch-agent` and writes its config
-(`/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json`) —
+`amazon-cloudwatch-agent` and writes its config to a Zamboni-specific
+filename, not the agent's default
+(`/opt/aws/amazon-cloudwatch-agent/etc/zamboni-logs.json` — deliberately
+not `amazon-cloudwatch-agent.json`, so `append-config` below can't
+collide with an org-managed fragment already using that default name) —
 tails every file above into the CloudWatch Logs group named by the `.env`
 variable `ZAMBONI_LOG_GROUP` (copy this from the stack's `LogGroupName`
 output — not auto-injected, same manual-copy convention as the bucket/SNS

@@ -147,8 +147,24 @@ if [ -z "$ZAMBONI_LOG_GROUP" ] && [ -f "$DEPLOY_DIR/.env" ]; then
     ZAMBONI_LOG_GROUP="$(grep -E '^ZAMBONI_LOG_GROUP=' "$DEPLOY_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2-)"
 fi
 
+# A dotenv value is sometimes quoted (ZAMBONI_LOG_GROUP="/zamboni/app") or
+# carries a trailing \r if .env was ever touched on Windows -- interpolated
+# raw into the JSON below, either would produce malformed JSON (an
+# embedded literal " breaks the string; a raw CR is a control character
+# JSON strings must not contain unescaped). Strip both plus surrounding
+# whitespace before using it.
+ZAMBONI_LOG_GROUP="$(printf '%s' "$ZAMBONI_LOG_GROUP" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/")"
+
 if [ -z "$ZAMBONI_LOG_GROUP" ]; then
     log "WARNING: ZAMBONI_LOG_GROUP not set (not in the environment, not in $DEPLOY_DIR/.env) -- skipping CloudWatch Agent configuration. See the LogGroupName stack output and .env.example."
+    exit 0
+fi
+
+# CloudWatch Logs group names only allow [A-Za-z0-9._/#-] -- reject
+# anything else now rather than write JSON with an embedded value that
+# could break the string (or just silently create the wrong log group).
+if ! printf '%s' "$ZAMBONI_LOG_GROUP" | grep -qE '^[A-Za-z0-9._/#-]+$'; then
+    log "WARNING: ZAMBONI_LOG_GROUP='$ZAMBONI_LOG_GROUP' contains characters CloudWatch Logs group names don't allow -- skipping CloudWatch Agent configuration rather than writing malformed config."
     exit 0
 fi
 
@@ -203,7 +219,7 @@ if /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
     # does NOT confirm log data has actually reached CloudWatch. Check
     # the log group in the console, or `aws logs tail`, to verify real
     # ingestion.
-    log "CloudWatch Agent configured and started -- shipping /var/log/zamboni/*.log and /var/log/zamboni-deploy.log to log group $ZAMBONI_LOG_GROUP."
+    log "CloudWatch Agent configured and started -- configured to ship /var/log/zamboni/*.log and /var/log/zamboni-deploy.log to log group $ZAMBONI_LOG_GROUP (not yet confirmed -- see the note above)."
 else
     log "WARNING: CloudWatch Agent append-config/start failed -- log shipping to CloudWatch will not be active. Check 'systemctl status amazon-cloudwatch-agent'."
 fi
