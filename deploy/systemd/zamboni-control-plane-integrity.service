@@ -8,5 +8,9 @@ WorkingDirectory=/opt/zamboni
 EnvironmentFile=/opt/zamboni/.env
 Environment=PYTHONPATH=/opt/zamboni
 ExecStart=/opt/zamboni/.venv/bin/python scripts/control_plane_integrity_check.py
-StandardOutput=journal
-StandardError=journal
+# 2026-07-12: file-based so the CloudWatch Agent + weekly logrotate policy
+# can pick it up -- both configured by deploy/scripts/configure_logging.sh
+# (called from after_install.sh on every deploy, not EC2 UserData -- see
+# deploy/systemd/zamboni-api.service's comment for the full rationale).
+StandardOutput=append:/var/log/zamboni/control-plane-integrity.log
+StandardError=append:/var/log/zamboni/control-plane-integrity.log

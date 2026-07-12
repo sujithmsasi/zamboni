@@ -1,6 +1,12 @@
 """
 Zamboni — Structured Logger
-Outputs JSON to stdout — captured by CloudWatch Logs Agent on EC2.
+Outputs JSON to stdout/stderr. On EC2 each entry point redirects that to a
+file under /var/log/zamboni/ (systemd's `append:` for the daemons, plain
+`>> ... 2>&1` shell redirection for the EventBridge-triggered engine
+scripts) -- the CloudWatch Agent tails those files and /etc/logrotate.d/
+zamboni rotates them weekly, both configured by
+deploy/scripts/configure_logging.sh (called from after_install.sh on
+every deploy, not EC2 UserData -- UserData only runs once, at first boot).
 Usage: log = get_logger(__name__)
 """
 import logging

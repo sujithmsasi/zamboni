@@ -273,7 +273,7 @@ td code { font-size: 12px; }
 
 <div class="callout info">
   <div class="callout-icon">&#x1F4CB;</div>
-  <div class="callout-body"><strong>Placeholders in iam_policy.json</strong><p>The file ships with <code>ACCOUNT_ID</code> in 23 places and generic bucket name placeholders. The <code>sed</code> commands above replace all of them in one shot. Check the file afterwards with <code>grep ACCOUNT_ID deploy/iam_policy.json</code> -- it should return nothing.</p></div>
+  <div class="callout-body"><strong>Placeholders in iam_policy.json</strong><p>The file ships with <code>ACCOUNT_ID</code> in 22 places (as of the 2026-07-12 removal of this file's top-level <code>_comment</code> field, which is not valid IAM policy grammar and previously accounted for one of the 23) and generic bucket name placeholders. The <code>sed</code> commands above replace all of them in one shot. Check the file afterwards with <code>grep ACCOUNT_ID deploy/iam_policy.json</code> -- it should return nothing.</p></div>
 </div>
 
 <!-- ATHENA -->

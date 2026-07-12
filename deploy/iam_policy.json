@@ -1,5 +1,4 @@
 {
-  "_comment": "Zamboni EC2 Instance Role Policy. Attach to the IAM role assigned to both dev and prod EC2 instances. Replace ACCOUNT_ID and bucket names with actual values.",
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -155,6 +154,14 @@
       "Resource": [
         "arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/zamboni/*"
       ]
+    },
+    {
+      "Sid": "CloudWatchLogsDescribeGroups",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
     },
     {
       "Sid": "CloudWatchMetrics",
