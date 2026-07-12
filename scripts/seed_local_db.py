@@ -153,6 +153,25 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 # ── Seed Data ─────────────────────────────────────────────────────────────────
 
+# 2026-07-11: which environment the seeded fleet (domains, tables, execution
+# history, audit events) simulates. In aws_local/aws_ec2 mode this is fixed
+# by which AWS account you're actually in -- one account = one environment,
+# so every real registered table naturally shares the same value. Local mode
+# has no such constraint, so it's picked via APP_ENV -- the SAME variable
+# that drives the "DEV · LOCAL" header tag (config/settings.py::APP_ENV,
+# surfaced via GET /api/system/mode). Deliberately imported from
+# config.settings rather than re-reading os.getenv("APP_ENV", ...) with a
+# different fallback here -- an independent default would silently drift
+# out of sync with the running app's own default and reintroduce exactly
+# the "header says DEV, data says PROD" mismatch this exists to prevent.
+# Set APP_ENV (e.g. `$env:APP_ENV = "dev"` in PowerShell) before running
+# this script to pick which environment the local demo simulates.
+# nonprod_registry is NOT driven by this -- it deliberately seeds a mix of
+# dev/preprod/test rows regardless, since it exists specifically to exercise
+# the Lifecycle Engine across multiple non-prod environments at once.
+from config.settings import APP_ENV as _SEED_ENV  # noqa: E402
+
+
 def _now(offset_days: int = 0, offset_hours: int = 0) -> str:
     dt = datetime.now(UTC) - timedelta(
         days=offset_days, hours=offset_hours
@@ -177,7 +196,7 @@ def seed_domains() -> list[dict]:
     return [
         {
             "domain_name":          "finance",
-            "environment":          "prod",
+            "environment":          _SEED_ENV,
             "owner_email":          "da-finance@company.com",
             "hot_retention_days":   30,
             "stale_threshold_days": 60,
@@ -199,7 +218,7 @@ def seed_domains() -> list[dict]:
         },
         {
             "domain_name":          "ers",
-            "environment":          "prod",
+            "environment":          _SEED_ENV,
             "owner_email":          "da-ers@company.com",
             "hot_retention_days":   7,
             "stale_threshold_days": 30,
@@ -221,7 +240,7 @@ def seed_domains() -> list[dict]:
         },
         {
             "domain_name":          "membership",
-            "environment":          "prod",
+            "environment":          _SEED_ENV,
             "owner_email":          "da-membership@company.com",
             "hot_retention_days":   14,
             "stale_threshold_days": 45,
@@ -243,7 +262,7 @@ def seed_domains() -> list[dict]:
         },
         {
             "domain_name":          "claims",
-            "environment":          "prod",
+            "environment":          _SEED_ENV,
             "owner_email":          "da-claims@company.com",
             "hot_retention_days":   90,
             "stale_threshold_days": 120,
@@ -265,7 +284,7 @@ def seed_domains() -> list[dict]:
         },
         {
             "domain_name":          "travel",
-            "environment":          "prod",
+            "environment":          _SEED_ENV,
             "owner_email":          "da-travel@company.com",
             "hot_retention_days":   7,
             "stale_threshold_days": 30,
@@ -371,7 +390,7 @@ def seed_stream_registry() -> list[dict]:
             "layer":                   layer,
             "tier":                    tier,
             "table_format":            "iceberg",
-            "environment":             "prod",
+            "environment":             _SEED_ENV,
             "owner_email":             f"da-{domain}@company.com",
             "ci_number":               f"CI-{10300 + i}",
             "hk_enabled":              hk_en,
@@ -389,7 +408,7 @@ def seed_stream_registry() -> list[dict]:
             "processing_cadence":      "daily" if layer == "staging" else "weekly",
             "properties_synced":       1,
             "last_execution_id":       None,
-            "registered_by":           "streamlit:admin",
+            "registered_by":           "admin",
             "registered_at":           _now(60 - i),
             "updated_at":              _now(random.randint(0, 10)),
             "database_name":           db_name,
@@ -481,7 +500,7 @@ def seed_execution_log(stream_rows: list[dict]) -> list[dict]:
                     "domain":           domain,
                     "layer":            layer,
                     "tier":             tier,
-                    "environment":      "prod",
+                    "environment":      _SEED_ENV,
                     "status":           status if op == "hk_run" else
                                         ("SUCCESS" if status == "SUCCESS" else "SKIPPED"),
                     "dry_run":          0,
@@ -533,7 +552,7 @@ def seed_rollback_demo_rows(stream_rows: list[dict]) -> list[dict]:
             "domain":                   row["domain"],
             "layer":                    row["layer"],
             "tier":                     row["tier"],
-            "environment":              "prod",
+            "environment":              _SEED_ENV,
             "status":                   "SUCCESS",
             "dry_run":                  0,
             "skip_reason":              None,
@@ -619,7 +638,7 @@ def seed_archival_demo_rows(stream_rows: list[dict]) -> list[dict]:
             "domain":           tbl["domain"],
             "layer":            tbl["layer"],
             "tier":             tbl["tier"],
-            "environment":      "prod",
+            "environment":      _SEED_ENV,
             "status":           "SUCCESS",
             "dry_run":          0,
             "skip_reason":      None,
@@ -730,7 +749,7 @@ def seed_home_snapshot(stream_rows: list[dict]) -> list[dict]:
             "hk_enabled": r["hk_enabled"],
         }
         for r in stream_rows
-        if r["hk_enabled"] and r["environment"] == "prod"
+        if r["hk_enabled"] and r["environment"] == _SEED_ENV
     ][:20]
 
     recent_failures = [
@@ -809,7 +828,7 @@ def seed_audit_log() -> list[dict]:
             "target_type":   ttype,
             "target_id":     "glue_catalog.finance_staging_db.fin_aps_payment_stg",
             "domain":        "finance",
-            "environment":   "prod",
+            "environment":   _SEED_ENV,
             "dry_run":       dry,
             "status":        status,
             "reason":        "Monthly governance review" if status != "DRY_RUN" else None,
@@ -938,9 +957,8 @@ def main():
     print("Local database ready: zamboni_local.db")
     print()
     print("To start Zamboni locally:")
-    print("  set ZAMBONI_LOCAL_MODE=true    (Windows)")
-    print("  set ZAMBONI_LOCAL_DB=zamboni_local.db")
-    print("  streamlit run app/Home.py")
+    print("  run_local_api.bat              (Windows, one step)")
+    print("  or see docs/setup/local.md for the manual steps")
     print("=" * 50)
 
 

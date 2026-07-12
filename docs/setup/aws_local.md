@@ -35,6 +35,16 @@ mode if you haven't already picked one.
    a working profile — it matches `setup_aws_local_profile.ps1`'s own
    default, so the two line up without you needing to edit anything.
 
+   **Naming convention**: since each AWS account is its own environment,
+   name the profile `zamboni-{env}` (`zamboni-dev`, `zamboni-preprod`,
+   `zamboni-prod`, ...) to match the account it points at, and set
+   `APP_ENV` in the same `.env.aws_local` file to the same `{env}` — e.g.
+   `AWS_SSO_PROFILE=zamboni-dev` alongside `APP_ENV=dev`. Nothing derives
+   `APP_ENV` from the profile name automatically, so keep the two in sync
+   by hand; a mismatch (e.g. `zamboni-dev` profile with `APP_ENV=prod`)
+   won't error, it'll just show the wrong environment tag in the header
+   while genuinely talking to the dev account.
+
 ## Setting up the AWS profile
 
 You have two ways to do this — pick whichever is more convenient, both end
@@ -123,6 +133,7 @@ if you launch the app any other way, set `$env:AWS_PROFILE` yourself first.
 | Script tries `aws sso login` against a profile that isn't SSO-based and fails confusingly | Fixed 2026-07-11 — the script now checks whether the profile exists at all *before* attempting a session check, and offers to create it interactively instead of assuming it's just an expired SSO session | Update to the current `run_aws_local.ps1`; if you still hit this, the profile exists but genuinely isn't SSO — re-run `setup_aws_local_profile.ps1` to refresh its credentials |
 | Calls silently authenticate as the wrong AWS identity/account | `AWS_SSO_PROFILE` points at a profile (e.g. a cross-team `prod-toolsgenai-sso`) that isn't actually Zamboni's own account | Run `setup_aws_local_profile.ps1` to create/point at a profile that's genuinely scoped to your Zamboni AWS account |
 | `aws_smoke_test.py` checks PASS but the running app's Athena/Glue/S3 calls fail | `AWS_PROFILE` (not just `AWS_SSO_PROFILE`) wasn't exported into the process that launched the app | Launch via `run_aws_local.ps1`/`run_ui_dev.ps1` (both export it), or set `$env:AWS_PROFILE` yourself first |
+| `aws sso login --profile zamboni-dev` succeeds, but the app still fails with `ExpiredTokenException` (e.g. on `GET /api/locks`) | **Real gotcha, fixed 2026-07-11**: boto3's default credential chain checks `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` env vars **before** the named profile's own credentials — even when `profile_name=` is passed explicitly. A stale export of these three (from an earlier paste-credentials session, an org credential-helper tool, a leftover console-copied export in your shell profile, etc.) silently wins over a fresh SSO login, and the app ends up sending AWS the *old, actually-expired* static credentials instead of the profile's live SSO session | `config/settings.py::get_boto3_session()` now clears those 3 (+`AWS_SECURITY_TOKEN`) env vars before building the `aws_local` session, so this should no longer happen. If you still hit it: run `Get-ChildItem Env: | Where-Object Name -like 'AWS_*'` in the same PowerShell session before starting the app — if `AWS_ACCESS_KEY_ID` shows up, `Remove-Item Env:AWS_ACCESS_KEY_ID` (and the other two) or open a fresh shell |
 
 ---
 
