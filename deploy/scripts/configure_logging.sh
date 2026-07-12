@@ -151,9 +151,15 @@ fi
 # carries a trailing \r if .env was ever touched on Windows -- interpolated
 # raw into the JSON below, either would produce malformed JSON (an
 # embedded literal " breaks the string; a raw CR is a control character
-# JSON strings must not contain unescaped). Strip both plus surrounding
-# whitespace before using it.
-ZAMBONI_LOG_GROUP="$(printf '%s' "$ZAMBONI_LOG_GROUP" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/")"
+# JSON strings must not contain unescaped). Strip only a TRAILING \r
+# (the CRLF line-ending case) via bash's own suffix-removal, not `tr -d
+# '\r'` -- that deletes every \r anywhere in the string, which would
+# silently turn a genuinely corrupted value like "/foo<CR>bar" into the
+# different, unexpectedly-valid-looking "/foobar" instead of leaving the
+# embedded control character in place to be rejected by the charset
+# check below.
+ZAMBONI_LOG_GROUP="${ZAMBONI_LOG_GROUP%$'\r'}"
+ZAMBONI_LOG_GROUP="$(printf '%s' "$ZAMBONI_LOG_GROUP" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/")"
 
 if [ -z "$ZAMBONI_LOG_GROUP" ]; then
     log "WARNING: ZAMBONI_LOG_GROUP not set (not in the environment, not in $DEPLOY_DIR/.env) -- skipping CloudWatch Agent configuration. See the LogGroupName stack output and .env.example."
@@ -224,7 +230,7 @@ if /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
     # does NOT confirm log data has actually reached CloudWatch. Check
     # the log group in the console, or `aws logs tail`, to verify real
     # ingestion.
-    log "CloudWatch Agent configured and started -- configured to ship /var/log/zamboni/*.log and /var/log/zamboni-deploy.log to log group $ZAMBONI_LOG_GROUP (agent startup confirmed, actual ingestion not verified -- check with: aws logs tail $ZAMBONI_LOG_GROUP --since 10m)."
+    log "CloudWatch Agent configured and started -- configured to ship /var/log/zamboni/*.log and /var/log/zamboni-deploy.log to log group $ZAMBONI_LOG_GROUP (agent startup confirmed, actual ingestion not verified -- from a session with log-read access, NOT this instance's own role, which grants no logs:FilterLogEvents: aws logs tail \"$ZAMBONI_LOG_GROUP\" --since 10m)."
 else
     log "WARNING: CloudWatch Agent append-config/start failed -- log shipping to CloudWatch will not be active. Check 'systemctl status amazon-cloudwatch-agent'."
 fi

@@ -97,7 +97,7 @@ aws iam add-role-to-instance-profile \
   --role-name zamboni-ec2-role
 ```
 
-> **Placeholders in iam_policy.json**The file ships with `ACCOUNT_ID` in 23 places and generic bucket name placeholders. The `sed` commands above replace all of them in one shot. Check the file afterwards with `grep ACCOUNT_ID deploy/iam_policy.json` -- it should return nothing.
+> **Placeholders in iam_policy.json**The file ships with `ACCOUNT_ID` in 22 places (as of the 2026-07-12 removal of this file's top-level `_comment` field, which is not valid IAM policy grammar and previously accounted for one of the 23 -- see `.claude/CLAUDE.md`) and generic bucket name placeholders. The `sed` commands above replace all of them in one shot. Check the file afterwards with `grep ACCOUNT_ID deploy/iam_policy.json` -- it should return nothing.
 
 ## Athena Workgroups
 
