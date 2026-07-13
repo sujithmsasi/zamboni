@@ -2,10 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { qs, request } from '../client';
 import type { NonprodRow, StaleHkRow, StaleOrphanRow, StaleZeroRowRow } from '../types';
 
-export function useStaleHk(domain: string | undefined, environment: string, days: number) {
+export function useStaleHk(domain: string | undefined, days: number) {
   return useQuery({
-    queryKey: ['stale', 'hk', { domain, environment, days }],
-    queryFn: () => request<StaleHkRow[]>(`/stale${qs({ kind: 'hk', domain, environment, days })}`),
+    queryKey: ['stale', 'hk', { domain, days }],
+    queryFn: () => request<StaleHkRow[]>(`/stale${qs({ kind: 'hk', domain, days })}`),
   });
 }
 

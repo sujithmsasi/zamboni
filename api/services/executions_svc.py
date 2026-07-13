@@ -441,11 +441,12 @@ def costs(group_by: str = "domain", from_days: int = 30) -> dict:
 
 def stale(
     kind: str, domain: str | None = None, days: int = 30, threshold: int = 0,
-    environment: str = "prod", prefix: str | None = None,
+    environment: str | None = None, prefix: str | None = None,
 ) -> list[dict]:
     domain_clause = f"AND domain = '{_esc(domain)}'" if domain else ""
 
     if kind == "hk":
+        env_clause = f"AND r.environment = '{_esc(environment)}'" if environment else ""
         sql = f"""
             SELECT
                 r.table_fqn, r.domain, r.layer, r.tier, r.environment, r.hk_enabled,
@@ -454,7 +455,7 @@ def stale(
             FROM {STREAM_REGISTRY_TABLE} r
             LEFT JOIN {EXECUTION_LOG_TABLE} l
                 ON r.table_fqn = l.table_fqn AND l.status = 'SUCCESS'
-            WHERE r.environment = '{_esc(environment)}' AND r.table_format = 'iceberg'
+            WHERE r.table_format = 'iceberg' {env_clause}
                 {domain_clause.replace("domain", "r.domain")}
             GROUP BY r.table_fqn, r.domain, r.layer, r.tier, r.environment, r.hk_enabled
             HAVING MAX(l.completed_at) IS NULL

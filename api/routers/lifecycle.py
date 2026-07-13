@@ -16,7 +16,7 @@ def get_config():
 
 
 @router.get("/api/nonprod")
-def list_nonprod(page_params: PageParams = Depends(), env: str = "preprod", state: str | None = None):
+def list_nonprod(page_params: PageParams = Depends(), env: str | None = None, state: str | None = None):
     rows, total = lifecycle_svc.list_nonprod(env, state, page_params.page, page_params.size)
     return envelope(rows, pagination={"page": page_params.page, "size": page_params.size, "total": total})
 
@@ -47,6 +47,6 @@ def claim(req: NonprodClaimRequest, actor: str = Depends(get_current_user)):
 
 
 @router.get("/api/nonprod/deletions")
-def list_deletions(page_params: PageParams = Depends(), env: str = "preprod"):
+def list_deletions(page_params: PageParams = Depends(), env: str | None = None):
     rows, total = lifecycle_svc.list_deletions(env, page_params.page, page_params.size)
     return envelope(rows, pagination={"page": page_params.page, "size": page_params.size, "total": total})

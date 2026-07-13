@@ -4,11 +4,12 @@ import { useState } from 'react';
 import { useStaleHk } from '../../../api/hooks/useStale';
 import type { StaleHkRow } from '../../../api/types';
 import { downloadCsv } from '../../../utils/csv';
-import { STALE_ENVIRONMENTS, useStaleResourcesData } from '../hooks';
+import { useStaleResourcesData } from '../hooks';
 
 const columns = [
   { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn', ellipsis: true },
   { title: 'Domain', dataIndex: 'domain', key: 'domain', width: 120 },
+  { title: 'Environment', dataIndex: 'environment', key: 'environment', width: 110 },
   { title: 'Layer', dataIndex: 'layer', key: 'layer', width: 100 },
   { title: 'Tier', dataIndex: 'tier', key: 'tier', width: 100 },
   {
@@ -26,11 +27,10 @@ const columns = [
  * Stale sub-section was promoted to its own tab per the phase brief's tab list). */
 export function StaleHkTab() {
   const [domain, setDomain] = useState<string | undefined>();
-  const [environment, setEnvironment] = useState('prod');
   const [days, setDays] = useState(30);
 
   const { domains } = useStaleResourcesData();
-  const stale = useStaleHk(domain, environment, days);
+  const stale = useStaleHk(domain, days);
   const rows = stale.data ?? [];
 
   const neverHk = rows.filter((r) => r.last_successful_hk == null).length;
@@ -47,7 +47,7 @@ export function StaleHkTab() {
   return (
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}>
+        <Col span={8}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Domain</div>
           <Select
             style={{ width: '100%' }} allowClear placeholder="All"
@@ -55,14 +55,7 @@ export function StaleHkTab() {
             options={(domains.data ?? []).map((d) => ({ value: d.domain_name, label: d.domain_name }))}
           />
         </Col>
-        <Col span={6}>
-          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Environment</div>
-          <Select
-            style={{ width: '100%' }} value={environment} onChange={setEnvironment}
-            options={STALE_ENVIRONMENTS.map((e) => ({ value: e, label: e }))}
-          />
-        </Col>
-        <Col span={6}>
+        <Col span={8}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Inactive for more than (days)</div>
           <InputNumber style={{ width: '100%' }} min={1} value={days} onChange={(v) => setDays(v ?? 30)} />
         </Col>

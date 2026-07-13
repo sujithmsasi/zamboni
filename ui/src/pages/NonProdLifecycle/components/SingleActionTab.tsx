@@ -8,19 +8,15 @@ import { StateBadge } from '../../../components/StateBadge';
 const MIN_REASON_LENGTH = 10;
 
 /**
- * Single Table Action tab (9_NonProd_Lifecycle.py tab3). The twin only
- * offered Claim here -- the phase brief explicitly asks for both
- * exempt/claim actions to match the Bulk tab. GET /api/nonprod has no
- * search param, so this fetches the full non-DROPPED list for the env
- * (capped at 250) and filters client-side -- the twin does the same thing
- * (a full cached_read_sql list feeding a plain st.selectbox), not a
- * server-side search.
+ * Single Table Action tab. GET /api/nonprod has no search param, so this
+ * fetches the full non-DROPPED list across every environment (capped at
+ * 250) and filters client-side, not a server-side search.
  */
-export function SingleActionTab({ env }: { env: string }) {
+export function SingleActionTab() {
   const [fqn, setFqn] = useState<string | null>(null);
   const [reason, setReason] = useState('');
 
-  const list = useNonprodList(env, undefined, 1, 250);
+  const list = useNonprodList(undefined, 1, 250);
   const rows = list.data?.data ?? [];
   const selected = rows.find((r) => r.table_fqn === fqn);
 
@@ -69,14 +65,15 @@ export function SingleActionTab({ env }: { env: string }) {
           optionFilterProp="label"
           options={rows.map((r) => ({
             value: r.table_fqn,
-            label: `${r.table_fqn} · ${r.lifecycle_state} · ${r.days_since_activity ?? '—'}d inactive`,
+            label: `${r.table_fqn} · ${r.environment} · ${r.lifecycle_state} · ${r.days_since_activity ?? '—'}d inactive`,
           }))}
         />
       </div>
 
       {selected && (
         <div style={{ marginBottom: 16, fontSize: 13 }}>
-          State: <StateBadge state={selected.lifecycle_state} /> · Days inactive:{' '}
+          Environment: <strong>{selected.environment}</strong> · State:{' '}
+          <StateBadge state={selected.lifecycle_state} /> · Days inactive:{' '}
           <strong>{selected.days_since_activity ?? '—'}</strong>
         </div>
       )}

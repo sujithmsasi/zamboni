@@ -399,6 +399,7 @@ export interface NonprodRow {
 export interface DeletionRow {
   table_fqn: string;
   domain: string;
+  environment: string;
   dropped_at: string;
   bytes_reclaimed: number | null;
   s3_cleaned: boolean | null;
