@@ -12,17 +12,27 @@ mode if you haven't already picked one.
 
 ## Prerequisites
 
-1. **An AWS account with Zamboni's infra already provisioned** — Athena
+1. **Python 3.11+, Node 20+, and AWS CLI v2 installed locally.** Python
+   runs the FastAPI backend and engine CLI; Node builds the React UI —
+   `run_aws_local.ps1` runs `npm ci`/`npm run build` for you if `ui\dist`
+   is missing, but `run_ui_dev.ps1` only runs `npm run dev` and does
+   **not** install anything, so `ui\node_modules` must already exist
+   before you use it (run `run_aws_local.ps1` once first, or `npm ci`
+   manually in `ui\`) — see "Installing Python dependencies" below for
+   the piece neither script handles; the AWS CLI is what
+   `setup_aws_local_profile.ps1`/`run_aws_local.ps1` shell out to for
+   `aws sso login` / `aws sts get-caller-identity` / `aws configure`.
+2. **An AWS account with Zamboni's infra already provisioned** — Athena
    workgroups, the Glue `zamboni_catalog` metadata tables, SNS topics, a
    DynamoDB lock table. If the target account is greenfield for Zamboni,
    that infra has to be provisioned once before any of this works. This mode does not create
    AWS infrastructure; it only points the app at an account that already
    has it.
-2. `.env.aws_local` filled in with real bucket names, Athena workgroups,
+3. `.env.aws_local` filled in with real bucket names, Athena workgroups,
    SNS topic ARNs, and account ID for your target AWS account (every value
    in `.env.aws_local.example` other than `AWS_SSO_PROFILE` is a
    placeholder — `your-athena-results-bucket`, `123456789012`, etc.).
-3. **A named AWS CLI profile pointed at that account.** You do *not* need
+4. **A named AWS CLI profile pointed at that account.** You do *not* need
    to set this up by hand first — see "Setting up the AWS profile" below,
    which walks through creating one interactively. **Never point
    `AWS_SSO_PROFILE` at `prod-toolsgenai-sso`** unless that specific
@@ -91,6 +101,23 @@ at the prompt:
 It also creates `.env.aws_local` from the `.example` template automatically
 if it doesn't exist yet, and validates the profile via
 `aws sts get-caller-identity` before finishing.
+
+## Installing Python dependencies
+
+Same as `local` mode (see `docs/setup/local.md`) — this only affects which
+AWS account the app talks to, not what needs to be installed first:
+
+```powershell
+python -m venv .venv                          # one-time: create a virtual environment
+.\.venv\Scripts\Activate.ps1                  # activate it (needed in each new shell)
+python -m pip install -r requirements.txt     # one-time: install Python dependencies
+```
+
+Neither script installs Python dependencies — activate the venv above
+before running either. `run_aws_local.ps1` also builds the React UI for
+you (`npm ci` + `npm run build`) if `ui\dist` is missing; `run_ui_dev.ps1`
+does not — run `run_aws_local.ps1` at least once (or `npm ci` by hand in
+`ui\`) before your first `run_ui_dev.ps1`, so `ui\node_modules` exists.
 
 ## Running it
 

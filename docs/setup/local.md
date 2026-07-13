@@ -9,9 +9,13 @@ default starting point for offline development.
 See `docs/SETUP_GUIDE.md` for how this fits alongside `aws_local` /
 `aws_ec2` mode if you haven't already picked one.
 
-## Quick start (recommended — one command)
+## Quick start (recommended)
 
 ```powershell
+python -m venv .venv                          # one-time: create a virtual environment
+.\.venv\Scripts\Activate.ps1                  # activate it (needed in each new shell)
+python -m pip install -r requirements.txt     # one-time: install Python dependencies
+
 python scripts\seed_local_db.py   # one-time: create + seed the local database
 .\run_local_api.bat               # builds the UI if needed, starts the API+UI on :8000
 ```
@@ -117,6 +121,7 @@ Then re-run the seed script.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `ModuleNotFoundError` (e.g. `click`, `fastapi`) running any command below | Python dependencies were never installed | `python -m pip install -r requirements.txt` (see Quick start above) — neither `run_local_api.bat` nor `seed_local_db.py` installs them for you |
 | `PermissionError` on `--reset` | A running `uvicorn` process has `zamboni_local.db` open | Kill it first (see above), then re-run |
 | `&&`-chained commands fail, or `set VAR=value` doesn't seem to do anything | That's cmd.exe/bash syntax, not PowerShell | Run each command on its own line, and use `$env:VAR = "value"` to set environment variables |
 | A page shows stale/empty data after editing `config/policy_templates.json` or similar | The running app writes some config files directly (Policy Configuration → Templates, for example) | Check `git status` for stray uncommitted diffs on those files before assuming a seeding bug |
