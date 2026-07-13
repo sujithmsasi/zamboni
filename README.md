@@ -38,7 +38,7 @@ zamboni/
 ├── glue_jobs/       ← PySpark Glue job for sort/zorder compaction
 ├── sql/             ← Athena DDL (all metadata tables)
 ├── config/          ← Settings, policy templates, domain retention, control-plane schema
-├── tests/           ← Unit + api tests
+├── tests/           ← Unit, API, integration, and load tests
 ├── deploy/          ← CI/CD, CodeDeploy hooks, CloudFormation, IAM policy
 └── docs/            ← Setup guides, deployment/operations docs
 ```
@@ -73,15 +73,24 @@ zamboni/
 See **[`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md)** for the full walkthrough
 of all three modes. Fastest path (no AWS account needed):
 
-```bash
-python scripts/seed_local_db.py   # one-time: create + seed the local database
-run_local_api.bat                 # Windows: builds the UI if needed, serves on :8000
+```powershell
+python -m venv .venv                          # one-time: create a virtual environment
+.\.venv\Scripts\Activate.ps1                  # activate it — see docs/setup/local.md for other shells
+python -m pip install -r requirements.txt     # one-time: install Python dependencies
+
+python scripts\seed_local_db.py   # one-time: create + seed the local database
+.\run_local_api.bat               # builds the UI if needed, serves on :8000
 ```
 
 To just run the tests (no AWS needed):
 ```bash
 python -m pytest tests/unit/ -v
-python -m pytest tests/api/ -v    # separate invocation — see .claude/CLAUDE.md's Phase 2 entry for why
+
+# api tests need their own process: tests/api/conftest.py sets ZAMBONI_LOCAL_MODE (and
+# friends) which config/settings.py only reads once at first import — running both suites
+# together in one pytest process would leave tests/api exercising unit's already-imported
+# (stale) settings.
+python -m pytest tests/api/ -v
 ```
 
 ---
@@ -96,13 +105,23 @@ The HK engine runs every hour but self-regulates — skipping tables outside
 their safe window or not yet due per `run_frequency`. Zero per-pipeline
 Control-M config required.
 
-### Phase 2 (optional) — Control-M + EventBridge safety net
+### Phase 2 (proposed — not provisioned by `zamboni-cfn.yaml` today)
 
 Control-M can trigger engines directly via SSH after batch jobs complete,
-using `dependent_on_controlm_job` for upstream dependency chaining.
-EventBridge continues as a safety-net (every 6h, `scope=all`).
-The engine dedupes automatically — duplicate invocations produce SKIP_NOT_DUE.
-No engine code changes required to switch trigger models.
+using `dependent_on_controlm_job` for upstream dependency chaining. The
+engine's own dedup (`run_frequency` + `SKIP_NOT_DUE` in
+`engine/engines/hk_engine.py`) already makes it safe to layer a second
+trigger on top with no engine code changes — duplicate invocations for the
+same table/window collapse to one real run.
+
+**What isn't built yet**: `deploy/zamboni-cfn.yaml` provisions exactly one
+HK EventBridge rule (the Phase 1 hourly `rate(1 hour)` rule above) — there
+is no separate, lower-frequency "safety net" rule, and `run_hk` has no
+`--scope` flag (omitting `--table`/`--domain`/`--layer`/`--tier` already
+processes every enabled table, which is the closest equivalent). Adopting
+Phase 2 means adding both the Control-M-side SSH trigger and, if a safety
+net is still wanted, a second EventBridge rule — neither exists in this
+repo yet.
 
 | Rule | Schedule | Command |
 |---|---|---|
@@ -122,11 +141,13 @@ All CLI tools are run from the project root. `--dry-run` is the default on all w
 # Discover all Iceberg tables in a Glue database → generate YAML manifest
 python -m engine.cli.register discover --db finance_db --out finance.yaml
 
-# Review and edit finance.yaml, then bulk-register
+# Review and edit finance.yaml, then preview the bulk registration
+# (--dry-run is the default on all write operations — nothing is written
+# until you pass --no-dry-run)
 python -m engine.cli.register bulk --manifest finance.yaml
 
-# Bulk register with dry-run (no writes)
-python -m engine.cli.register bulk --manifest finance.yaml --dry-run
+# Bulk register for real
+python -m engine.cli.register bulk --manifest finance.yaml --no-dry-run
 
 # Register a single table
 python -m engine.cli.register single \
@@ -273,8 +294,8 @@ python -m engine.cli.fleet_status health   --domain finance
 
 ## Logo
 
-The React app's logo assets live under `ui/src/assets/` (see
-`ui/src/components/` for where they're used — the login page and sidebar).
+The React app's logo assets live under `ui/src/assets/` — used directly in
+`ui/src/App.tsx` (sidebar) and `ui/src/pages/Login/index.tsx` (login page).
 
 ---
 
@@ -285,6 +306,7 @@ The React app's logo assets live under `ui/src/assets/` (see
 | `main` | Production only — PRs from dev with DO team approval |
 | `dev` | Active development — all feature branches merge here |
 | `feature/*` | One branch per phase/component |
+| `milestones` | Curated, squashed history of major review/migration checkpoints — not an ordinary dev branch, don't branch off it |
 
 ---
 
@@ -300,4 +322,4 @@ The React app's logo assets live under `ui/src/assets/` (see
 | 6 | Lifecycle Engine — state machine, GREENZONE, cleanup | ✅ |
 | 7 | UI — FastAPI + React 18 (replaces the original Streamlit app, since decommissioned) | ✅ |
 | 8 | CLI Tools — register, dry-run, fleet-status, enable, cost | ✅ |
-| 9 | Hardening — CloudWatch dashboards, alarms, load testing | ⏳ |
+| 9 | Hardening — CloudWatch dashboards, alarms, load testing | 🔶 Artifacts built (`deploy/cloudwatch/`, `tests/load/`), but not wired into `zamboni-cfn.yaml`'s automated deploy (`create_alarms.sh` is a manual, undocumented-elsewhere post-deploy step) and not yet run against a live AWS account |
