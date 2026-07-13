@@ -147,6 +147,37 @@ def test_glue_databases(client):
     assert isinstance(resp.json()["data"], list)
 
 
+def test_glue_tables_includes_cache_related_fields(client):
+    """list_glue_tables() now surfaces location/guessed_partition_column/
+    create_time -- fields already sitting in the cached Glue response that
+    used to be discarded. Local mode's synthetic table dicts have no
+    StorageDescriptor/CreateTime at all, so these should come back None
+    rather than raise -- this is the regression guard for that."""
+    resp = client.get("/api/glue/tables/finance_staging_db")
+    assert resp.status_code == 200
+    rows = resp.json()["data"]
+    assert rows, "expected at least one seeded table in finance_staging_db"
+    for row in rows:
+        assert "location" in row
+        assert "guessed_partition_column" in row
+        assert "create_time" in row
+
+
+def test_glue_rescan_databases(client):
+    resp = client.post("/api/glue/rescan/databases")
+    assert resp.status_code == 200
+    assert isinstance(resp.json()["data"], list)
+
+
+def test_glue_rescan_tables(client):
+    resp = client.post("/api/glue/rescan/tables/finance_staging_db")
+    assert resp.status_code == 200
+    rows = resp.json()["data"]
+    assert isinstance(rows, list)
+    assert rows, "expected at least one seeded table in finance_staging_db"
+    assert "table_fqn" in rows[0]
+
+
 def test_register_table_sets_dry_run_ramp_by_default(client):
     """register_table() seeds dry_run_until = today + default_dry_run_ramp_days
     when hk_enabled is left at its False default -- previously a freshly

@@ -225,6 +225,15 @@ ORPHAN_DEFAULT_AGE_HOURS     = int(os.getenv("ORPHAN_DEFAULT_AGE_HOURS", "96"))
 SNAPSHOT_MIN_AGE_HOURS       = int(os.getenv("SNAPSHOT_MIN_AGE_HOURS", "24"))       # never expire younger
 MAX_ORPHAN_DELETE_PCT        = int(os.getenv("MAX_ORPHAN_DELETE_PCT", "20"))        # abort above this
 CONFLICT_CACHE_TTL_HOURS     = int(os.getenv("CONFLICT_CACHE_TTL_HOURS", "24"))
+# Browse & Register's live Glue catalog scan (get_databases/get_tables) is
+# cached for this long -- GetTables/GetDatabases are account+region-wide rate
+# limited, so an interactive page with no cache risks throttling the whole
+# account, not just Zamboni. A manual rescan (POST /api/glue/rescan/...)
+# bypasses this. CLI/scheduled callers (engine.cli.register, the Lifecycle
+# Engine's weekly scan, the synthetic-table cleanup script) always pass
+# force_refresh=True and are unaffected -- they're low-frequency, deliberate
+# calls, not the source of the throttling risk.
+GLUE_CATALOG_CACHE_TTL_HOURS = int(os.getenv("GLUE_CATALOG_CACHE_TTL_HOURS", "24"))
 LOCK_TTL_MINUTES             = int(os.getenv("LOCK_TTL_MINUTES", "120"))
 LOCK_HEARTBEAT_SECONDS       = int(os.getenv("LOCK_HEARTBEAT_SECONDS", "60"))
 GATE0_OVERRIDE_MAX_HOURS     = int(os.getenv("GATE0_OVERRIDE_MAX_HOURS", "24"))

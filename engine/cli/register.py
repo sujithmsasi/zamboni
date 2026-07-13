@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from config.settings import DRY_RUN_DEFAULT, VALID_ENVIRONMENTS, VALID_LAYERS, VALID_TIERS
-from engine.utils.glue_client import get_tables, is_iceberg_table
+from engine.utils.glue_client import get_tables, guess_partition_column, is_iceberg_table
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -51,7 +51,11 @@ def discover(db, out, domain, env):
     console.print(f"\n[bold blue]🔍 Scanning:[/] [cyan]{db}[/]\n")
 
     try:
-        tables = get_tables(db)
+        # Always a fresh, live scan -- this is a deliberate, occasional CLI
+        # action (not the interactive Browse & Register page the 24h cache in
+        # glue_client.py exists to protect), and the whole point of `discover`
+        # is showing exactly what's really in Glue right now.
+        tables = get_tables(db, force_refresh=True)
     except Exception as e:
         console.print(f"[red]✗ Failed to scan database:[/] {e}")
         sys.exit(1)
@@ -83,6 +87,12 @@ def discover(db, out, domain, env):
     for table in iceberg_tables:
         name = table["Name"]
         fqn  = f"glue_catalog.{db}.{name}"
+        # Best-effort real guess from the table's own Glue columns (already
+        # fetched above, no extra call) instead of always assuming
+        # "partition_date" -- still just a starting point for the human
+        # review step this manifest exists for, not a guarantee.
+        columns = table.get("StorageDescriptor", {}).get("Columns", [])
+        guess   = guess_partition_column(columns)
         manifest["tables"].append({
             "table_fqn":             fqn,
             "domain":                inferred_domain,
@@ -96,7 +106,7 @@ def discover(db, out, domain, env):
             "archive_enabled":       False,
             "archive_retention_days": 30,
             "policy_template":       "STAGING_DEFAULT",
-            "partition_column":      "partition_date",
+            "partition_column":      guess["partition_column"] if guess else "partition_date",
             "notes":                 "",
         })
 
@@ -262,7 +272,7 @@ def status(db):
     from engine.utils.athena_client import read_sql
 
     try:
-        glue_tables = get_tables(db)
+        glue_tables = get_tables(db, force_refresh=True)
         iceberg     = [f"glue_catalog.{db}.{t['Name']}" for t in glue_tables if is_iceberg_table(t)]
         total       = len(iceberg)
 

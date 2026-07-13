@@ -76,7 +76,11 @@ class LifecycleEngine(BaseEngine):
 
         active_domains = {d["domain_name"] for d in registry.get_all_domains(active_only=True)}
 
-        databases = get_databases()
+        # force_refresh=True -- this is a deliberate, weekly scheduled scan
+        # (not the interactive Browse & Register page), and its entire job is
+        # discovering current real state, so it must never serve a stale
+        # cached catalog view.
+        databases = get_databases(force_refresh=True)
         log.info("lifecycle_engine.scan.databases", count=len(databases))
 
         for database in databases:
@@ -90,7 +94,7 @@ class LifecycleEngine(BaseEngine):
                 continue
 
             try:
-                tables = get_tables(database)
+                tables = get_tables(database, force_refresh=True)
                 for table in tables:
                     try:
                         self._upsert_nonprod_registry(table, database, environment)

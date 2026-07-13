@@ -195,7 +195,9 @@ def create_tables(database: str, s3_location: str, num_tables: int, prefix: str,
 
 
 def cleanup_tables(database: str, s3_location: str, prefix: str, dry_run: bool) -> None:
-    tables = [t for t in glue_client.get_tables(database) if t["Name"].startswith(prefix)]
+    # force_refresh=True -- a deliberate, occasional cleanup run must see
+    # real current state, not a stale 24h Browse & Register cache entry.
+    tables = [t for t in glue_client.get_tables(database, force_refresh=True) if t["Name"].startswith(prefix)]
     if not tables:
         print(f"No tables matching prefix '{prefix}' found in {database}. Nothing to do.")
         return

@@ -14,6 +14,11 @@ CONTRACT_ROUTES = [
     ("GET", "/api/tables/job-mapping/export"),
     ("GET", "/api/glue/databases"),
     ("GET", "/api/glue/tables/{db}"),
+    # > ADDED (Glue catalog cache + rescan): manual bypass for the 24h
+    # GLUE_CATALOG_CACHE_TTL_HOURS cache in engine/utils/glue_client.py --
+    # see config/settings.py's comment for why the cache exists.
+    ("POST", "/api/glue/rescan/databases"),
+    ("POST", "/api/glue/rescan/tables/{db}"),
     ("GET", "/api/policies"),
     ("GET", "/api/policies/{fqn}"),
     ("PUT", "/api/policies/{fqn}"),
@@ -93,5 +98,5 @@ def test_route_count_matches_contract():
     """Belt-and-braces: total method+path count should match the routes defined
     here (44 from contracts.md §6 + 4 domains routes added in Phase 4 + 2
     template routes added in Phase 5a + the jobs/{name}/tables drill-in +
-    lifecycle/config added in Phase 5b)."""
-    assert len(CONTRACT_ROUTES) == 52
+    lifecycle/config added in Phase 5b + 2 Glue rescan routes)."""
+    assert len(CONTRACT_ROUTES) == 54

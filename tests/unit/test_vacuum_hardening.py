@@ -546,35 +546,35 @@ class TestPartitionDiscovery:
         assert _glue_type_to_partition_type("bigint")    == "int_yyyymmdd"
         assert _glue_type_to_partition_type("string")    == "string"
 
-    def test_detect_date_column_finds_partition_date(self):
-        from engine.utils.glue_client import _detect_date_column
+    def test_guess_partition_column_finds_partition_date(self):
+        from engine.utils.glue_client import guess_partition_column
         columns = [
             {"Name": "transaction_id", "Type": "string"},
             {"Name": "amount",         "Type": "double"},
             {"Name": "partition_date", "Type": "date"},
         ]
-        result = _detect_date_column(columns)
+        result = guess_partition_column(columns)
         assert result is not None
         assert result["partition_column"] == "partition_date"
         assert result["partition_type"]   == "date"
 
-    def test_detect_date_column_returns_none_for_no_date(self):
-        from engine.utils.glue_client import _detect_date_column
+    def test_guess_partition_column_returns_none_for_no_date(self):
+        from engine.utils.glue_client import guess_partition_column
         columns = [
             {"Name": "region",   "Type": "string"},
             {"Name": "category", "Type": "string"},
         ]
-        result = _detect_date_column(columns)
+        result = guess_partition_column(columns)
         assert result is None
 
-    def test_detect_date_column_priority_order(self):
+    def test_guess_partition_column_priority_order(self):
         """partition_date is preferred over transaction_date."""
-        from engine.utils.glue_client import _detect_date_column
+        from engine.utils.glue_client import guess_partition_column
         columns = [
             {"Name": "transaction_date", "Type": "date"},
             {"Name": "partition_date",   "Type": "date"},
         ]
-        result = _detect_date_column(columns)
+        result = guess_partition_column(columns)
         assert result["partition_column"] == "partition_date"
 
     def test_hk_config_ddl_has_partition_type(self):
