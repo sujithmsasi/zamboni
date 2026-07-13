@@ -5,5 +5,3 @@ export function useStaleResourcesData() {
   const domains = useDomainsList(true);
   return { domains };
 }
-
-export const STALE_ENVIRONMENTS = ['prod', 'preprod', 'dev', 'test'];

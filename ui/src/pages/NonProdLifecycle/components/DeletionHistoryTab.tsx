@@ -9,6 +9,7 @@ import { downloadCsv } from '../../../utils/csv';
 const columns = [
   { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn', ellipsis: true },
   { title: 'Domain', dataIndex: 'domain', key: 'domain', width: 120 },
+  { title: 'Environment', dataIndex: 'environment', key: 'environment', width: 110 },
   { title: 'Dropped At', dataIndex: 'dropped_at', key: 'dropped_at', width: 170 },
   {
     title: 'Storage Reclaimed', dataIndex: 'bytes_reclaimed', key: 'bytes_reclaimed', width: 150,
@@ -25,10 +26,10 @@ const columns = [
   { title: 'Previous State', dataIndex: 'previous_state', key: 'previous_state', width: 140 },
 ];
 
-export function DeletionHistoryTab({ env }: { env: string }) {
+export function DeletionHistoryTab() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(15);
-  const deletions = useDeletionHistory(env, page, size);
+  const deletions = useDeletionHistory(page, size);
   const rows = deletions.data?.data ?? [];
   const totalReclaimed = rows.reduce((sum, r) => sum + (r.bytes_reclaimed ?? 0), 0);
 

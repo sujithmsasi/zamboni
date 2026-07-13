@@ -20,8 +20,10 @@ def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def list_nonprod(env: str, state: str | None, page: int, size: int) -> tuple[list[dict], int]:
-    conditions = [f"environment = '{_esc(env)}'", "lifecycle_state != 'DROPPED'"]
+def list_nonprod(env: str | None, state: str | None, page: int, size: int) -> tuple[list[dict], int]:
+    conditions = ["lifecycle_state != 'DROPPED'"]
+    if env:
+        conditions.append(f"environment = '{_esc(env)}'")
     if state:
         conditions.append(f"lifecycle_state = '{_esc(state)}'")
     where = "WHERE " + " AND ".join(conditions)
@@ -87,14 +89,15 @@ def get_config() -> dict:
     }
 
 
-def list_deletions(env: str, page: int, size: int) -> tuple[list[dict], int]:
-    where = f"WHERE environment = '{_esc(env)}' AND lifecycle_state = 'DROPPED'"
+def list_deletions(env: str | None, page: int, size: int) -> tuple[list[dict], int]:
+    env_clause = f"AND environment = '{_esc(env)}'" if env else ""
+    where = f"WHERE lifecycle_state = 'DROPPED' {env_clause}"
     total_df = read_sql(f"SELECT COUNT(*) AS cnt FROM {NONPROD_REGISTRY_TABLE} {where}", workgroup="app")
     total = int(total_df.iloc[0]["cnt"]) if not total_df.empty else 0
 
     offset = max(page - 1, 0) * size
     sql = f"""
-        SELECT table_fqn, domain, dropped_at, bytes_reclaimed, s3_cleaned,
+        SELECT table_fqn, domain, environment, dropped_at, bytes_reclaimed, s3_cleaned,
                catalog_dropped, previous_state
         FROM {NONPROD_REGISTRY_TABLE} {where}
         ORDER BY dropped_at DESC

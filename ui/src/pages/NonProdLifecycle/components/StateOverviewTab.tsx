@@ -55,23 +55,24 @@ function ThresholdsExplainer() {
   );
 }
 
-export function StateOverviewTab({ env }: { env: string }) {
+export function StateOverviewTab() {
   const [stateFilter, setStateFilter] = useState<string | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(15);
 
   const counts = useQueries({
     queries: STATES.map((state) => ({
-      queryKey: ['nonprod', 'count', env, state],
-      queryFn: () => requestPaged<NonprodRow[]>(`/nonprod${qs({ env, state, page: 1, size: 1 })}`),
+      queryKey: ['nonprod', 'count', state],
+      queryFn: () => requestPaged<NonprodRow[]>(`/nonprod${qs({ state, page: 1, size: 1 })}`),
     })),
   });
 
-  const list = useNonprodList(env, stateFilter, page, size);
+  const list = useNonprodList(stateFilter, page, size);
 
   const columns = [
     { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn', ellipsis: true },
     { title: 'Domain', dataIndex: 'domain', key: 'domain', width: 120 },
+    { title: 'Environment', dataIndex: 'environment', key: 'environment', width: 110 },
     {
       title: 'State', dataIndex: 'lifecycle_state', key: 'lifecycle_state', width: 140,
       render: (v: string) => <StateBadge state={v} />,
@@ -124,7 +125,7 @@ export function StateOverviewTab({ env }: { env: string }) {
         queryResult={list}
         rowKey="table_fqn"
         onPageChange={(p, s) => { setPage(p); setSize(s); }}
-        emptyText={`No tables found in ${env} with the selected state.`}
+        emptyText="No tables found with the selected state."
       />
     </div>
   );

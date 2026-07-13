@@ -18,6 +18,7 @@ const STATE_PRIORITY: Record<string, number> = { PENDING_DROP: 1, GREENZONE: 2, 
 const columns = [
   { title: 'Table', dataIndex: 'table_fqn', key: 'table_fqn', ellipsis: true },
   { title: 'Domain', dataIndex: 'domain', key: 'domain', width: 120 },
+  { title: 'Environment', dataIndex: 'environment', key: 'environment', width: 110 },
   {
     title: 'State', dataIndex: 'lifecycle_state', key: 'lifecycle_state', width: 140,
     render: (v: string) => <StateBadge state={v} />,
@@ -37,14 +38,14 @@ const columns = [
  * plain <Table> (client pagination) rather than <DataGrid> -- same
  * documented exception as CostReport/DomainManagement's bare-array grids.
  */
-export function BulkActionTab({ env }: { env: string }) {
+export function BulkActionTab() {
   const [selectedFqns, setSelectedFqns] = useState<string[]>([]);
   const [reason, setReason] = useState('');
 
   const results = useQueries({
     queries: ACTIONABLE_STATES.map((state) => ({
-      queryKey: ['nonprod', 'bulk-candidates', env, state],
-      queryFn: () => requestPaged<NonprodRow[]>(`/nonprod${qs({ env, state, page: 1, size: 250 })}`),
+      queryKey: ['nonprod', 'bulk-candidates', state],
+      queryFn: () => requestPaged<NonprodRow[]>(`/nonprod${qs({ state, page: 1, size: 250 })}`),
     })),
   });
   const isLoading = results.some((r) => r.isLoading);
@@ -79,7 +80,7 @@ export function BulkActionTab({ env }: { env: string }) {
   };
 
   if (!isLoading && rows.length === 0) {
-    return <Alert type="success" showIcon message="No tables currently require exemption or claiming in this environment." />;
+    return <Alert type="success" showIcon message="No tables currently require exemption or claiming." />;
   }
 
   return (

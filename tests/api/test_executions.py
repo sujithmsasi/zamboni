@@ -88,6 +88,16 @@ def test_stale_hk_environment_filter(client):
     assert all(row["environment"] == "dev" for row in resp.json()["data"])
 
 
+def test_stale_hk_no_environment_returns_all(client):
+    """The Environment dropdown was removed from the Stale HK tab (single-
+    AWS-account-per-environment deployments never had more than one real
+    value to switch between) -- environment is now optional, and omitting
+    it must not silently narrow to one value."""
+    unfiltered = {row["table_fqn"] for row in client.get("/api/stale?kind=hk&days=0").json()["data"]}
+    prod_only = {row["table_fqn"] for row in client.get("/api/stale?kind=hk&days=0&environment=prod").json()["data"]}
+    assert prod_only <= unfiltered
+
+
 def test_stale_zero_row(client):
     resp = client.get("/api/stale?kind=zero_row&threshold=0")
     assert resp.status_code == 200

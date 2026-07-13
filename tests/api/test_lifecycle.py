@@ -11,6 +11,19 @@ def test_list_nonprod_filtered_by_state(client):
     assert all(row["lifecycle_state"] == "ACTIVE" for row in resp.json()["data"])
 
 
+def test_list_nonprod_no_env_returns_all_environments(client):
+    """The environment dropdown was removed from the Non-Prod Lifecycle
+    page (single-AWS-account-per-environment deployments never had more
+    than one real value to switch between) -- env is now optional, and
+    omitting it must return every environment's rows, not silently fall
+    back to one. The seeded demo data spans dev/preprod/test."""
+    unfiltered = client.get("/api/nonprod?page=1&size=250").json()
+    preprod_only = client.get("/api/nonprod?env=preprod&page=1&size=250").json()
+    assert unfiltered["pagination"]["total"] >= preprod_only["pagination"]["total"]
+    environments = {row["environment"] for row in unfiltered["data"]}
+    assert len(environments) > 1
+
+
 def _first_nonprod_fqn(client, env="preprod") -> str | None:
     resp = client.get(f"/api/nonprod?env={env}&page=1&size=1")
     data = resp.json()["data"]
@@ -44,6 +57,16 @@ def test_list_deletions(client):
     resp = client.get("/api/nonprod/deletions?env=preprod&page=1&size=10")
     assert resp.status_code == 200
     assert resp.json()["pagination"]["page"] == 1
+
+
+def test_list_deletions_no_env_returns_all_environments(client):
+    """Same env-optional change as test_list_nonprod_no_env_returns_all_environments,
+    for the Deletion History tab."""
+    unfiltered = client.get("/api/nonprod/deletions?page=1&size=250").json()
+    preprod_only = client.get("/api/nonprod/deletions?env=preprod&page=1&size=250").json()
+    assert unfiltered["pagination"]["total"] >= preprod_only["pagination"]["total"]
+    for row in unfiltered["data"]:
+        assert "environment" in row
 
 
 def test_lifecycle_config(client):

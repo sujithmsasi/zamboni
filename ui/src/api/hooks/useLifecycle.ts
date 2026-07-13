@@ -10,10 +10,10 @@ export function useLifecycleConfig() {
   });
 }
 
-export function useNonprodList(env: string, state: string | undefined, page: number, size: number) {
+export function useNonprodList(state: string | undefined, page: number, size: number) {
   return useQuery({
-    queryKey: ['nonprod', 'list', { env, state, page, size }],
-    queryFn: () => requestPaged<NonprodRow[]>(`/nonprod${qs({ env, state, page, size })}`),
+    queryKey: ['nonprod', 'list', { state, page, size }],
+    queryFn: () => requestPaged<NonprodRow[]>(`/nonprod${qs({ state, page, size })}`),
   });
 }
 
@@ -35,9 +35,9 @@ export function useClaimTables() {
   });
 }
 
-export function useDeletionHistory(env: string, page: number, size: number) {
+export function useDeletionHistory(page: number, size: number) {
   return useQuery({
-    queryKey: ['nonprod', 'deletions', { env, page, size }],
-    queryFn: () => requestPaged<DeletionRow[]>(`/nonprod/deletions${qs({ env, page, size })}`),
+    queryKey: ['nonprod', 'deletions', { page, size }],
+    queryFn: () => requestPaged<DeletionRow[]>(`/nonprod/deletions${qs({ page, size })}`),
   });
 }
