@@ -51,7 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config.settings import DRY_RUN_DEFAULT, ZAMBONI_LOCAL_MODE, get_mode  # noqa: E402
+from config.settings import APP_ENV, DRY_RUN_DEFAULT, ZAMBONI_LOCAL_MODE, get_mode  # noqa: E402
 from engine.utils import glue_client, s3_client  # noqa: E402
 from engine.utils.athena_client import run_query  # noqa: E402
 from engine.utils.logger import get_logger  # noqa: E402
@@ -255,6 +255,17 @@ def main() -> None:
     parser.add_argument("--yes", action="store_true",
                          help="Skip the interactive confirmation prompt.")
     args = parser.parse_args()
+
+    # Hard, unconditional block -- no override flag, by design. This tool
+    # creates and deletes real data; dev/preprod are the user's call to
+    # manage, but production must never be reachable at all, regardless of
+    # what --database/--s3-location/--yes are passed.
+    if APP_ENV.strip().lower() in ("prod", "production"):
+        print(f"APP_ENV={APP_ENV!r} -- refusing to run against a production "
+              "environment. This script creates and deletes real S3 data and "
+              "must never touch prod, no matter what --database/--s3-location "
+              "are passed. There is no override for this check.")
+        sys.exit(1)
 
     if ZAMBONI_LOCAL_MODE:
         print("ZAMBONI_LOCAL_MODE=true -- there is no real Athena/Iceberg catalog to "
