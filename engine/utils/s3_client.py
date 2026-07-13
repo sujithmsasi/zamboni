@@ -103,6 +103,13 @@ def upload_file(bucket: str, key: str, local_path: str) -> None:
     _get_client().upload_file(local_path, bucket, key)
 
 
+def put_bytes(bucket: str, key: str, data: bytes) -> None:
+    """Write raw bytes to S3 directly (no local file needed). Used by
+    scripts/seed_synthetic_iceberg_tables.py to plant orphan files under a
+    table's data/ prefix outside Iceberg's transaction log."""
+    _get_client().put_object(Bucket=bucket, Key=key, Body=data)
+
+
 def download_file(bucket: str, key: str, local_path: str) -> None:
     """Download an S3 object to a local path. Used by
     scripts/control_plane_backup.py::restore_latest() (2026-07-10 audit
