@@ -6,6 +6,7 @@ import {
   Col,
   Form,
   Input,
+  message,
   Progress,
   Row,
   Select,
@@ -17,7 +18,14 @@ import {
 import { useMemo, useState } from 'react';
 import { request } from '../../../api/client';
 import { useDomainsList } from '../../../api/hooks/useDomains';
-import { useGlueDatabases, useGlueTables, useRegisterTable } from '../../../api/hooks/useTables';
+import {
+  GLUE_CACHE_STALE_TIME_MS,
+  useGlueDatabases,
+  useGlueTables,
+  useRegisterTable,
+  useRescanGlueDatabases,
+  useRescanGlueTables,
+} from '../../../api/hooks/useTables';
 import type { GlueTableRow } from '../../../api/types';
 import { ControlMFields } from '../../../components/ControlMFields';
 
@@ -57,6 +65,8 @@ export function BrowseRegisterTab() {
   const databases = useGlueDatabases();
   const domains = useDomainsList(true);
   const register = useRegisterTable();
+  const rescanDatabases = useRescanGlueDatabases();
+  const rescanTables = useRescanGlueTables();
 
   const singleDb = useGlueTables(selectedDb && selectedDb !== 'ALL' ? selectedDb : null, pattern, unregisteredOnly);
 
@@ -72,6 +82,9 @@ export function BrowseRegisterTab() {
           `/glue/tables/${db}?${new URLSearchParams({ pattern, unregistered_only: String(unregisteredOnly) })}`,
         ),
       enabled: selectedDb === 'ALL' && allDbList.length > 0,
+      // Matches useGlueTables' staleTime -- this is the same 24h server
+      // cache, just fanned out across every database instead of one.
+      staleTime: GLUE_CACHE_STALE_TIME_MS,
     })),
   });
 
@@ -136,6 +149,29 @@ export function BrowseRegisterTab() {
     form.resetFields();
   };
 
+  // Bypasses the 24h server cache (GLUE_CATALOG_CACHE_TTL_HOURS) for exactly
+  // what's currently on screen -- one database, or every database if "All
+  // Databases" is selected (same fan-out shape the initial load already
+  // uses, just forced instead of cached). Reads the fresh database list off
+  // the mutation's own return value, not the `databases` closure, since
+  // setQueryData()'s re-render isn't guaranteed to have landed yet by the
+  // time the next line runs.
+  const handleRescan = async () => {
+    try {
+      const freshDatabases = await rescanDatabases.mutateAsync();
+      if (selectedDb === 'ALL') {
+        await Promise.all(
+          freshDatabases.map((db) => rescanTables.mutateAsync({ db, pattern, unregisteredOnly })),
+        );
+      } else if (selectedDb) {
+        await rescanTables.mutateAsync({ db: selectedDb, pattern, unregisteredOnly });
+      }
+      message.success('Rescanned the Glue catalog.');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Rescan failed.');
+    }
+  };
+
   const columns = [
     { title: 'Table Name', dataIndex: 'name', key: 'name' },
     { title: 'Database', dataIndex: 'database', key: 'database' },
@@ -144,12 +180,21 @@ export function BrowseRegisterTab() {
       title: 'Registered', dataIndex: 'registered', key: 'registered', width: 100,
       render: (v: boolean) => (v ? <Tag color="green">✅</Tag> : <Tag>—</Tag>),
     },
+    {
+      title: 'Partition Column (guess)', dataIndex: 'guessed_partition_column', key: 'guessed_partition_column',
+      width: 170,
+      render: (v: string | null) => v || <span style={{ color: '#98A2B3' }}>—</span>,
+    },
+    {
+      title: 'S3 Location', dataIndex: 'location', key: 'location', ellipsis: true,
+      render: (v: string | null) => v || '—',
+    },
   ];
 
   return (
     <div>
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={8}>
+        <Col span={6}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Glue Database</div>
           <Select
             style={{ width: '100%' }}
@@ -163,7 +208,7 @@ export function BrowseRegisterTab() {
             loading={databases.isLoading}
           />
         </Col>
-        <Col span={8}>
+        <Col span={6}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Filter by name pattern</div>
           <Input
             placeholder="aps_%  or  %_staging  or  fin_aps"
@@ -171,13 +216,24 @@ export function BrowseRegisterTab() {
             onChange={(e) => setPattern(e.target.value)}
           />
         </Col>
-        <Col span={8}>
+        <Col span={6}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>&nbsp;</div>
           <Switch
             checked={unregisteredOnly}
             onChange={setUnregisteredOnly}
             checkedChildren="Unregistered only" unCheckedChildren="Show all tables"
           />
+        </Col>
+        <Col span={6}>
+          <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>
+            Catalog data is cached up to 24h
+          </div>
+          <Button
+            onClick={handleRescan}
+            loading={rescanDatabases.isPending || rescanTables.isPending}
+          >
+            🔄 Rescan
+          </Button>
         </Col>
       </Row>
 

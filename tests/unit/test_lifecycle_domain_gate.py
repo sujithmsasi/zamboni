@@ -138,9 +138,9 @@ def test_scan_skips_database_whose_domain_was_never_registered(monkeypatch, cont
 
     get_tables_calls = []
     monkeypatch.setattr(lifecycle_engine_mod, "get_databases",
-                         lambda: ["finance_preprod_db", "membership_preprod_db"])
+                         lambda force_refresh=False: ["finance_preprod_db", "membership_preprod_db"])
     monkeypatch.setattr(lifecycle_engine_mod, "get_tables",
-                         lambda db: get_tables_calls.append(db) or [])
+                         lambda db, force_refresh=False: get_tables_calls.append(db) or [])
 
     engine = LifecycleEngine(dry_run=True)
     result = engine.run_scan(environment="preprod")
@@ -156,9 +156,9 @@ def test_scan_skips_database_whose_domain_is_explicitly_inactive(monkeypatch, co
 
     get_tables_calls = []
     monkeypatch.setattr(lifecycle_engine_mod, "get_databases",
-                         lambda: ["finance_preprod_db", "membership_preprod_db"])
+                         lambda force_refresh=False: ["finance_preprod_db", "membership_preprod_db"])
     monkeypatch.setattr(lifecycle_engine_mod, "get_tables",
-                         lambda db: get_tables_calls.append(db) or [])
+                         lambda db, force_refresh=False: get_tables_calls.append(db) or [])
 
     engine = LifecycleEngine(dry_run=True)
     result = engine.run_scan(environment="preprod")
@@ -170,10 +170,10 @@ def test_scan_skips_database_whose_domain_is_explicitly_inactive(monkeypatch, co
 def test_scan_processes_database_whose_domain_is_active(monkeypatch, control_plane_db):
     _insert_domain(control_plane_db, "finance", is_active=True)
 
-    monkeypatch.setattr(lifecycle_engine_mod, "get_databases", lambda: ["finance_preprod_db"])
+    monkeypatch.setattr(lifecycle_engine_mod, "get_databases", lambda force_refresh=False: ["finance_preprod_db"])
     monkeypatch.setattr(
         lifecycle_engine_mod, "get_tables",
-        lambda db: [{"Name": "fin_reconcile", "CreateTime": datetime(2026, 1, 1, tzinfo=UTC)}],
+        lambda db, force_refresh=False: [{"Name": "fin_reconcile", "CreateTime": datetime(2026, 1, 1, tzinfo=UTC)}],
     )
     monkeypatch.setattr(lifecycle_engine_mod, "is_iceberg_table", lambda t: True)
     monkeypatch.setattr(lifecycle_engine_mod, "is_backup_pattern", lambda n: (False, ""))

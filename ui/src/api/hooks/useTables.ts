@@ -90,11 +90,20 @@ export function useBulkControlM() {
   });
 }
 
+// Matches GLUE_CATALOG_CACHE_TTL_HOURS (config/settings.py, default 24h) --
+// the server already caches this for a day, so there's no reason for the
+// browser to ask again sooner on its own. useRescanGlueDatabases/
+// useRescanGlueTables are the explicit bypass (the "Rescan" button).
+// Exported so BrowseRegisterTab's "All Databases" useQueries fan-out (which
+// can't go through the hooks above, since its query count is dynamic) can
+// use the same value.
+export const GLUE_CACHE_STALE_TIME_MS = 24 * 60 * 60 * 1000;
+
 export function useGlueDatabases() {
   return useQuery({
     queryKey: ['glue', 'databases'],
     queryFn: () => request<string[]>('/glue/databases'),
-    staleTime: 10 * 60 * 1000,
+    staleTime: GLUE_CACHE_STALE_TIME_MS,
   });
 }
 
@@ -103,6 +112,32 @@ export function useGlueTables(db: string | null, pattern: string, unregisteredOn
     queryKey: ['glue', 'tables', db, pattern, unregisteredOnly],
     queryFn: () => request<GlueTableRow[]>(`/glue/tables/${db}${qs({ pattern, unregistered_only: unregisteredOnly })}`),
     enabled: !!db,
+    staleTime: GLUE_CACHE_STALE_TIME_MS,
+  });
+}
+
+export function useRescanGlueDatabases() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => request<string[]>('/glue/rescan/databases', { method: 'POST' }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['glue', 'databases'], data);
+      queryClient.invalidateQueries({ queryKey: ['glue', 'tables'] });
+    },
+  });
+}
+
+export function useRescanGlueTables() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ db, pattern, unregisteredOnly }: { db: string; pattern: string; unregisteredOnly: boolean }) =>
+      request<GlueTableRow[]>(
+        `/glue/rescan/tables/${db}${qs({ pattern, unregistered_only: unregisteredOnly })}`,
+        { method: 'POST' },
+      ),
+    onSuccess: (data, { db, pattern, unregisteredOnly }) => {
+      queryClient.setQueryData(['glue', 'tables', db, pattern, unregisteredOnly], data);
+    },
   });
 }
 

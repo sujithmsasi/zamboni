@@ -86,6 +86,18 @@ def list_glue_tables(db: str, pattern: str | None = None, unregistered_only: boo
     return envelope(tables_svc.list_glue_tables(db, pattern=pattern, unregistered_only=unregistered_only))
 
 
+@router.post("/api/glue/rescan/databases")
+def rescan_glue_databases():
+    """Force-bypass the 24h Glue catalog cache for the database list."""
+    return envelope(tables_svc.rescan_glue_databases())
+
+
+@router.post("/api/glue/rescan/tables/{db}")
+def rescan_glue_tables(db: str, pattern: str | None = None, unregistered_only: bool = False):
+    """Force-bypass the 24h Glue catalog cache for one database's tables."""
+    return envelope(tables_svc.rescan_glue_tables(db, pattern=pattern, unregistered_only=unregistered_only))
+
+
 # NOTE: the {fqn:path} catch-all routes below MUST be registered last -- they
 # would otherwise shadow the literal routes above (e.g. GET
 # /api/tables/job-mapping/export) since FastAPI matches GET routes in

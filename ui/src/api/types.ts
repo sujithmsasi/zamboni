@@ -268,6 +268,9 @@ export interface GlueTableRow {
   table_fqn: string;
   format: string;
   registered: boolean;
+  location: string | null;
+  guessed_partition_column: string | null;
+  create_time: string | null;
 }
 
 export interface JobRow {

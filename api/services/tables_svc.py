@@ -17,7 +17,8 @@ from config.settings import STREAM_REGISTRY_TABLE
 from engine.core import registry
 from engine.core.config import apply_template, infer_template
 from engine.core.control_plane import read_sql, run_query, update_row
-from engine.utils.glue_client import get_databases, get_tables, is_iceberg_table
+from engine.utils.glue_client import get_databases, get_tables, guess_partition_column, is_iceberg_table
+from engine.utils.partition_utils import parse_table_fqn
 
 
 def _esc(value: str) -> str:
@@ -101,8 +102,40 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
     )
     template = infer_template(req["layer"], req["tier"])
     if ok:
-        apply_template(table_fqn=req["table_fqn"], template_name=template, dry_run=dry_run)
+        apply_template(
+            table_fqn=req["table_fqn"], template_name=template,
+            partition_column=_guess_partition_column_for_registration(req),
+            dry_run=dry_run,
+        )
     return {"success": ok, "template": template}
+
+
+def _guess_partition_column_for_registration(req: dict) -> str:
+    """
+    Best-effort real partition-column guess from the table's actual Glue
+    schema, instead of apply_template()'s hardcoded "partition_date" default
+    -- register_table() previously never passed partition_column at all, so
+    every table registered through Browse & Register silently got
+    "partition_date" regardless of what it's really partitioned by.
+
+    Reuses get_tables(database) -- a cache hit, not a new Glue call, since
+    the table almost always just came from the cached Browse & Register list
+    the caller was looking at. Falls back to "partition_date" (today's
+    behavior) for non-Iceberg tables, a cache-miss lookup failure, or a
+    schema with no plausibly-named date column -- never raises.
+    """
+    if req.get("table_format", "iceberg") != "iceberg":
+        return "partition_date"
+    try:
+        _, database, name = parse_table_fqn(req["table_fqn"])
+        for t in get_tables(database):
+            if t.get("Name") == name:
+                columns = t.get("StorageDescriptor", {}).get("Columns", [])
+                guess = guess_partition_column(columns)
+                return guess["partition_column"] if guess else "partition_date"
+    except Exception:
+        pass
+    return "partition_date"
 
 
 _UPDATABLE_FIELDS = {
@@ -318,13 +351,25 @@ def export_job_mapping() -> str:
 
 
 # ── Glue catalog browse ───────────────────────────────────────────────────────
+#
+# list_glue_databases()/list_glue_tables() read through glue_client's
+# GLUE_CATALOG_CACHE_TTL_HOURS cache (default 24h, force_refresh=False) --
+# this is the interactive Browse & Register path the cache exists to
+# protect, unlike the CLI/scheduled callers elsewhere in the codebase that
+# always pass force_refresh=True. rescan_glue_databases()/rescan_glue_tables()
+# are the explicit, user-triggered bypass (POST /api/glue/rescan/...).
 
 def list_glue_databases() -> list[str]:
     return sorted(get_databases())
 
 
-def list_glue_tables(database: str, pattern: str | None = None, unregistered_only: bool = False) -> list[dict]:
-    tables = get_tables(database)
+def rescan_glue_databases() -> list[str]:
+    return sorted(get_databases(force_refresh=True))
+
+
+def _build_table_rows(
+    tables: list[dict], database: str, pattern: str | None, unregistered_only: bool,
+) -> list[dict]:
     reg_df = read_sql(
         f"SELECT table_fqn FROM {STREAM_REGISTRY_TABLE} WHERE table_fqn LIKE '%.{_esc(database)}.%'",
         workgroup="app",
@@ -343,10 +388,30 @@ def list_glue_tables(database: str, pattern: str | None = None, unregistered_onl
         is_registered = fqn in registered
         if unregistered_only and is_registered:
             continue
+
+        is_iceberg = is_iceberg_table(t)
+        storage    = t.get("StorageDescriptor", {}) or {}
+        # Free fields -- already in the cached Glue response, no extra call.
+        guess = guess_partition_column(storage.get("Columns", [])) if is_iceberg else None
+        create_time = t.get("CreateTime")
+
         result.append({
             "name": name,
             "table_fqn": fqn,
-            "format": "iceberg" if is_iceberg_table(t) else "hive",
+            "format": "iceberg" if is_iceberg else "hive",
             "registered": is_registered,
+            "location": storage.get("Location"),
+            "guessed_partition_column": guess["partition_column"] if guess else None,
+            "create_time": str(create_time) if create_time else None,
         })
     return result
+
+
+def list_glue_tables(database: str, pattern: str | None = None, unregistered_only: bool = False) -> list[dict]:
+    tables = get_tables(database)
+    return _build_table_rows(tables, database, pattern, unregistered_only)
+
+
+def rescan_glue_tables(database: str, pattern: str | None = None, unregistered_only: bool = False) -> list[dict]:
+    tables = get_tables(database, force_refresh=True)
+    return _build_table_rows(tables, database, pattern, unregistered_only)

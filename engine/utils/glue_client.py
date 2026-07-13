@@ -4,14 +4,34 @@ Catalog reads, table discovery, job status checks (Gate 1).
 """
 from __future__ import annotations
 
+import threading
+import time
+
 import boto3
 
-from config.settings import AWS_REGION, ZAMBONI_LOCAL_MODE
+from config.settings import AWS_REGION, GLUE_CATALOG_CACHE_TTL_HOURS, ZAMBONI_LOCAL_MODE
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
 _client: boto3.client | None = None
+
+# In-process TTL cache for get_databases()/get_tables() -- see
+# GLUE_CATALOG_CACHE_TTL_HOURS's comment in config/settings.py for why this
+# exists (account-wide Glue API throttling risk from an uncached browse UI).
+# Per-worker, not shared across zamboni-api's 2 uvicorn workers -- at a
+# 24-hour TTL that's at most a 2x-worse-case duplication, not worth the
+# complexity of a shared/persisted cache for what is fundamentally a
+# convenience browse feature.
+_cache_lock = threading.Lock()
+_databases_cache: dict | None = None          # {"fetched_at": float, "data": list[str]}
+_tables_cache: dict[str, dict] = {}           # database -> {"fetched_at": float, "data": list[dict]}
+
+
+def _cache_fresh(entry: dict | None) -> bool:
+    if entry is None:
+        return False
+    return (time.monotonic() - entry["fetched_at"]) < GLUE_CATALOG_CACHE_TTL_HOURS * 3600
 
 # Databases shown in local mode (seeded by seed_local_db.py)
 _LOCAL_DATABASES = [
@@ -32,8 +52,16 @@ def _get_client():
 
 # ── Catalog ───────────────────────────────────────────────────────────────────
 
-def get_databases() -> list[str]:
-    """Return all Glue database names."""
+def get_databases(force_refresh: bool = False) -> list[str]:
+    """
+    Return all Glue database names.
+
+    Cached for GLUE_CATALOG_CACHE_TTL_HOURS (default 24h) unless
+    force_refresh=True. Callers that are low-frequency/deliberate (CLI
+    register.py, the Lifecycle Engine's weekly scan) should pass
+    force_refresh=True to always see real, current state -- only the
+    interactive Browse & Register UI path should rely on the cache.
+    """
     if ZAMBONI_LOCAL_MODE:
         from engine.utils.local_db import read_sql_local
         df = read_sql_local(
@@ -56,16 +84,31 @@ def get_databases() -> list[str]:
             if len(parts) >= 2:
                 dbs.add(parts[-2])
         return sorted(dbs) or _LOCAL_DATABASES
+
+    global _databases_cache
+    with _cache_lock:
+        if not force_refresh and _cache_fresh(_databases_cache):
+            return _databases_cache["data"]
+
     paginator = _get_client().get_paginator("get_databases")
     names = []
     for page in paginator.paginate():
         for db in page.get("DatabaseList", []):
             names.append(db["Name"])
+
+    with _cache_lock:
+        _databases_cache = {"fetched_at": time.monotonic(), "data": names}
     return names
 
 
-def get_tables(database: str, table_format: str | None = None) -> list[dict]:
-    """Return all tables in a Glue database (paginated)."""
+def get_tables(database: str, table_format: str | None = None, force_refresh: bool = False) -> list[dict]:
+    """
+    Return all tables in a Glue database (paginated).
+
+    Cached per-database for GLUE_CATALOG_CACHE_TTL_HOURS (default 24h) unless
+    force_refresh=True -- see get_databases()'s docstring for the same
+    convention and why it exists.
+    """
     if ZAMBONI_LOCAL_MODE:
         from engine.utils.local_db import read_sql_local
         sql = (f"SELECT table_fqn, table_format FROM stream_registry "
@@ -82,10 +125,18 @@ def get_tables(database: str, table_format: str | None = None) -> list[dict]:
             result.append({"Name": name, "DatabaseName": database,
                            "Parameters": {"table_type": fmt.upper()}})
         return result
+
+    with _cache_lock:
+        if not force_refresh and _cache_fresh(_tables_cache.get(database)):
+            return _tables_cache[database]["data"]
+
     paginator = _get_client().get_paginator("get_tables")
     tables = []
     for page in paginator.paginate(DatabaseName=database):
         tables.extend(page.get("TableList", []))
+
+    with _cache_lock:
+        _tables_cache[database] = {"fetched_at": time.monotonic(), "data": tables}
     return tables
 
 
@@ -188,7 +239,7 @@ def discover_partition_spec(
             return {"partition_type": "none", "discovered": False}
 
         columns = table.get("StorageDescriptor", {}).get("Columns", [])
-        result  = _detect_date_column(columns)
+        result  = guess_partition_column(columns)
         if result:
             return {**result, "discovered": True, "source": "glue_columns_heuristic"}
     except Exception:
@@ -224,7 +275,7 @@ def _glue_type_to_partition_type(glue_type: str) -> str:
     return "date"  # fallback
 
 
-def _detect_date_column(columns: list[dict]) -> dict | None:
+def guess_partition_column(columns: list[dict]) -> dict | None:
     """
     Heuristic: find a date-named column in the table schema.
     Prefers columns named partition_date, load_date, process_date,
