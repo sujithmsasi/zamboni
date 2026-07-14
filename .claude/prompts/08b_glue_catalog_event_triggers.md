@@ -66,7 +66,10 @@ Behavior:
 - Least-privilege EventBridge rule (matching only the 6 detail-types above,
   not every `aws.glue` catalog event), its own SQS queue + DLQ + queue
   policy scoped to this rule, EC2 IAM limited to receive/delete/change-
-  visibility on this queue.
+  visibility on this queue. Same as 8a: no SNS relay — the rule targets
+  this SQS queue directly (native EventBridge target type), separate from
+  8a's own queue so a catalog-event backlog can never delay job-event
+  processing or vice versa.
 - A testable event parser and consumer, structured the same way as 8a's
   `engine/events/` modules (e.g. `engine/events/glue_catalog_event.py`,
   `engine/events/glue_catalog_event_consumer.py`,

@@ -41,14 +41,19 @@ runs on the org laptop via Bedrock Sonnet.
 | Jul 17  | **Showcase**                      | 🎤 |
 | TBD (post-showcase, opt-in) | 8a (Glue Job State Change triggers) | Targeted HK dispatch shortly after a mapped upstream Glue job SUCCEEDED, hourly rule untouched |
 | TBD (post-showcase, opt-in) | 8b (Glue Data Catalog event triggers) | Narrowed discovery/HK scans from Database/Table/Partition catalog events, no auto-register/delete |
+| TBD (post-showcase, opt-in) | 8c (Partition-targeted compaction) | Upgrades 8b's partition events into an event-verified `OPTIMIZE ... WHERE` predicate instead of `compaction.py`'s existing date-lookback heuristic; VACUUM stays table-level, unaffected |
 
-Phase 8 (a and b) is proposed, not scheduled against the Jul 17 showcase —
-both are opt-in, default-`DISABLED` enhancements layered on top of the
+Phase 8 (a/b/c) is proposed, not scheduled against the Jul 17 showcase —
+all three are opt-in, default-`DISABLED` enhancements layered on top of the
 already-complete hourly EventBridge reconciliation rule (see the
 2026-07-09 "EventBridge engine scheduling" entry in `.claude/CLAUDE.md`).
 Run 8a and 8b independently or in either order; they share the SQS/consumer
-pattern but must not share a queue or rule. See
-`08a_glue_job_event_triggers.md` / `08b_glue_catalog_event_triggers.md`.
+*pattern* but must not share a queue or rule. 8c is a strict follow-on to
+8b — it changes what 8b's catalog-event consumer does with partition
+events, it does not add a new event source, and its idempotency-key fix
+(task 4 in its own doc) is a blocking prerequisite before enabling it. See
+`08a_glue_job_event_triggers.md` / `08b_glue_catalog_event_triggers.md` /
+`08c_partition_targeted_compaction.md`.
 
 Engine phases (0–1c) land first ON PURPOSE: worst case, you still demo the
 incident fix + Dual-Optimizer Risk Report from the Streamlit stopgap panel.
@@ -77,6 +82,7 @@ SHARED_CONTRACTS.md                     → becomes .claude/contracts.md (Phase 
 07_org_drop.md                          → run on ORG laptop (Bedrock) — the clean drop
 08a_glue_job_event_triggers.md          → proposed, opt-in — Glue Job State Change → targeted HK
 08b_glue_catalog_event_triggers.md      → proposed, opt-in — Glue Catalog events → discovery/HK
+08c_partition_targeted_compaction.md    → proposed, opt-in — follow-on to 8b, event-derived OPTIMIZE predicate
 ORG_DROP.md                             → the delivery protocol (Phase 0 commits it)
 PHASE_EXECUTION_PROMPTS.md              → per-session kickoff/retry/escalation blocks
 ```
