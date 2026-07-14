@@ -128,10 +128,16 @@ if ($mode -eq "2") {
     }
     $sessionTokenSecure = Read-Host "AWS Session Token (leave blank if this is a permanent IAM user, not an assumed role)" -AsSecureString
     $sessionToken = ConvertFrom-SecureStringPlain $sessionTokenSecure
+    # Captured now, before $sessionToken is nulled below -- [string]::
+    # IsNullOrWhiteSpace($sessionTokenSecure) further down would NOT work as
+    # a substitute: a SecureString always stringifies to the literal type
+    # name "System.Security.SecureString" (never empty), so that check was
+    # always False regardless of whether a token was actually entered.
+    $hadSessionToken = -not [string]::IsNullOrWhiteSpace($sessionToken)
 
     aws configure set aws_access_key_id $accessKeyId --profile $profileName
     aws configure set aws_secret_access_key $secretKey --profile $profileName
-    if (-not [string]::IsNullOrWhiteSpace($sessionToken)) {
+    if ($hadSessionToken) {
         aws configure set aws_session_token $sessionToken --profile $profileName
     } else {
         # Clear any stale session token from a previous run of this script.
@@ -144,7 +150,7 @@ if ($mode -eq "2") {
 
     Write-Host ""
     Write-Host "Configured '$profileName' with the provided credentials." -ForegroundColor Green
-    if (-not [string]::IsNullOrWhiteSpace($sessionTokenSecure)) {
+    if ($hadSessionToken) {
         Write-Host "Note: session tokens expire (often ~1h) -- re-run this script with fresh values when it does." -ForegroundColor Yellow
     }
 }
