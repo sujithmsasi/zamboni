@@ -39,6 +39,16 @@ runs on the org laptop via Bedrock Sonnet.
 | Jul 14–15| Real-AWS hardening (escalation window) | Break it, fix it — aws_local |
 | Jul 16  | Demo polish + 2 rehearsals        | Click-path locked |
 | Jul 17  | **Showcase**                      | 🎤 |
+| TBD (post-showcase, opt-in) | 8a (Glue Job State Change triggers) | Targeted HK dispatch shortly after a mapped upstream Glue job SUCCEEDED, hourly rule untouched |
+| TBD (post-showcase, opt-in) | 8b (Glue Data Catalog event triggers) | Narrowed discovery/HK scans from Database/Table/Partition catalog events, no auto-register/delete |
+
+Phase 8 (a and b) is proposed, not scheduled against the Jul 17 showcase —
+both are opt-in, default-`DISABLED` enhancements layered on top of the
+already-complete hourly EventBridge reconciliation rule (see the
+2026-07-09 "EventBridge engine scheduling" entry in `.claude/CLAUDE.md`).
+Run 8a and 8b independently or in either order; they share the SQS/consumer
+pattern but must not share a queue or rule. See
+`08a_glue_job_event_triggers.md` / `08b_glue_catalog_event_triggers.md`.
 
 Engine phases (0–1c) land first ON PURPOSE: worst case, you still demo the
 incident fix + Dual-Optimizer Risk Report from the Streamlit stopgap panel.
@@ -65,6 +75,8 @@ SHARED_CONTRACTS.md                     → becomes .claude/contracts.md (Phase 
 05b_pages_wave2_lifecycle_settings.md
 06_deploy_cutover.md
 07_org_drop.md                          → run on ORG laptop (Bedrock) — the clean drop
+08a_glue_job_event_triggers.md          → proposed, opt-in — Glue Job State Change → targeted HK
+08b_glue_catalog_event_triggers.md      → proposed, opt-in — Glue Catalog events → discovery/HK
 ORG_DROP.md                             → the delivery protocol (Phase 0 commits it)
 PHASE_EXECUTION_PROMPTS.md              → per-session kickoff/retry/escalation blocks
 ```
