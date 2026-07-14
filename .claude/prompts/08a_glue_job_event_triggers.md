@@ -79,11 +79,17 @@ Also consult (do not guess AWS field names or semantics from memory):
 
 4. Buffered design, EventBridge rule → SQS processing queue → a Zamboni
    Glue-event consumer daemon on the EC2 instance → existing HKEngine for
-   mapped tables. Add retry/redrive handling and a DLQ (EventBridge target
-   retry policy + delivery DLQ if delivery and processing failures need
-   separate handling — justify the split or the single-DLQ choice in the
-   doc). Do not introduce Lambda merely as glue code unless a concrete,
-   documented limitation makes the EC2/SQS approach unsuitable.
+   mapped tables. **No SNS relay** — Glue publishes these events onto the
+   account's default EventBridge event bus automatically (no explicit
+   subscribe step on the Glue side), and the rule's target is the SQS
+   queue directly; SQS is a native EventBridge target type, so SNS is only
+   relevant if a future need arises for fan-out to multiple independent
+   subscribers, which this single-consumer design doesn't have. Add
+   retry/redrive handling and a DLQ (EventBridge target retry policy +
+   delivery DLQ if delivery and processing failures need separate
+   handling — justify the split or the single-DLQ choice in the doc). Do
+   not introduce Lambda merely as glue code unless a concrete, documented
+   limitation makes the EC2/SQS approach unsuitable.
 
 5. New, independently testable modules — parsing must not live inside
    HKEngine:
