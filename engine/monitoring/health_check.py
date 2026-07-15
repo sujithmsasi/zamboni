@@ -12,14 +12,13 @@ Checks:
 """
 from dataclasses import dataclass, field
 
-import boto3
-
 from config.settings import (
     ATHENA_RESULTS_BUCKET,
     AWS_REGION,
     SNS_ALERT_TOPIC_ARN,
     STREAM_REGISTRY_TABLE,
     ZAMBONI_METADATA_BUCKET,
+    get_boto3_session,
 )
 from engine.utils.logger import get_logger
 
@@ -54,7 +53,7 @@ def run_health_check(verbose: bool = False) -> HealthCheckResult:
 
     # ── 1. Athena connectivity ─────────────────────────────────────────────────
     try:
-        client   = boto3.client("athena", region_name=AWS_REGION)
+        client   = get_boto3_session().client("athena", region_name=AWS_REGION)
         query_id = client.start_query_execution(
             QueryString="SELECT 1",
             WorkGroup="zamboni-standard",
@@ -78,7 +77,7 @@ def run_health_check(verbose: bool = False) -> HealthCheckResult:
 
     # ── 2. S3 — metadata bucket ────────────────────────────────────────────────
     try:
-        s3 = boto3.client("s3", region_name=AWS_REGION)
+        s3 = get_boto3_session().client("s3", region_name=AWS_REGION)
         bucket, prefix = _parse_s3(ZAMBONI_METADATA_BUCKET)
         s3.head_bucket(Bucket=bucket)
         result.add("S3 Metadata Bucket", True, bucket)
@@ -88,14 +87,14 @@ def run_health_check(verbose: bool = False) -> HealthCheckResult:
     # ── 3. S3 — Athena results bucket ─────────────────────────────────────────
     try:
         bucket, _ = _parse_s3(ATHENA_RESULTS_BUCKET)
-        boto3.client("s3", region_name=AWS_REGION).head_bucket(Bucket=bucket)
+        get_boto3_session().client("s3", region_name=AWS_REGION).head_bucket(Bucket=bucket)
         result.add("S3 Athena Results Bucket", True, bucket)
     except Exception as e:
         result.add("S3 Athena Results Bucket", False, str(e))
 
     # ── 4. Glue catalog ───────────────────────────────────────────────────────
     try:
-        glue = boto3.client("glue", region_name=AWS_REGION)
+        glue = get_boto3_session().client("glue", region_name=AWS_REGION)
         glue.get_databases(MaxResults=1)
         result.add("Glue Catalog", True, "Reachable")
     except Exception as e:
@@ -115,7 +114,7 @@ def run_health_check(verbose: bool = False) -> HealthCheckResult:
 
     # ── 6. SNS topic ──────────────────────────────────────────────────────────
     try:
-        sns = boto3.client("sns", region_name=AWS_REGION)
+        sns = get_boto3_session().client("sns", region_name=AWS_REGION)
         sns.get_topic_attributes(TopicArn=SNS_ALERT_TOPIC_ARN)
         result.add("SNS Alert Topic", True, SNS_ALERT_TOPIC_ARN.split(":")[-1])
     except Exception as e:

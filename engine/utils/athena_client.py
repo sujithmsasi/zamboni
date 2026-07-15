@@ -24,6 +24,7 @@ from config.settings import (  # noqa: F401
     AWS_REGION,
     ZAMBONI_LOCAL_DB,
     ZAMBONI_LOCAL_MODE,
+    get_boto3_session,
 )
 from engine.utils.logger import get_logger
 
@@ -71,7 +72,7 @@ class AthenaQueryCancelledLeaseLost(RuntimeError):
 def _get_client() -> boto3.client:
     global _client
     if _client is None:
-        _client = boto3.client("athena", region_name=AWS_REGION)
+        _client = get_boto3_session().client("athena", region_name=AWS_REGION)
     return _client
 
 
@@ -320,5 +321,5 @@ def read_sql(
 
     return wr.athena.get_query_results(
         query_execution_id=query_id,
-        boto3_session=boto3.Session(region_name=AWS_REGION),
+        boto3_session=get_boto3_session(),
     )

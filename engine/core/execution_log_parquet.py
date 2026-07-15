@@ -22,6 +22,7 @@ from config.settings import (
     EXECUTION_LOG_MODE,
     EXECUTION_LOG_TABLE,
     ZAMBONI_METADATA_BUCKET,
+    get_boto3_session,
 )
 from engine.core.execution_log import LogEntry
 from engine.utils.logger import get_logger
@@ -128,8 +129,7 @@ class ParquetLogBuffer:
         buf.seek(0)
 
         # Upload to S3
-        import boto3
-        s3 = boto3.client("s3", region_name=AWS_REGION)
+        s3 = get_boto3_session().client("s3", region_name=AWS_REGION)
         bucket, key = self._parse_s3_path(s3_path)
         s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue())
 

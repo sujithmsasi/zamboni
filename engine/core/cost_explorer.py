@@ -22,7 +22,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from config.settings import AWS_REGION, ZAMBONI_METADATA_BUCKET
+from config.settings import AWS_REGION, ZAMBONI_METADATA_BUCKET, get_boto3_session
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -104,9 +104,7 @@ def get_cost_summary_for_settings() -> dict[str, Any]:
 
 def _fetch_from_ce(days: int, use_tag: bool) -> dict[str, Any]:
     """Call ce:GetCostAndUsage and return structured results."""
-    import boto3
-
-    client = boto3.client("ce", region_name="us-east-1")  # CE API is global
+    client = get_boto3_session().client("ce", region_name="us-east-1")  # CE API is global
 
     end_dt   = datetime.now(UTC).date()
     start_dt = end_dt - timedelta(days=days)
@@ -202,10 +200,9 @@ def _cache_key(days: int) -> str:
 def _read_cache(days: int) -> dict | None:
     """Read cached result from S3. Returns None on miss or expiry."""
     try:
-        import boto3
         s3_uri = _cache_key(days)
         bucket, key = _parse_s3(s3_uri)
-        s3   = boto3.client("s3", region_name=AWS_REGION)
+        s3   = get_boto3_session().client("s3", region_name=AWS_REGION)
         resp = s3.get_object(Bucket=bucket, Key=key)
         data = json.loads(resp["Body"].read().decode("utf-8"))
         # Validate TTL
@@ -224,10 +221,9 @@ def _read_cache(days: int) -> dict | None:
 def _write_cache(days: int, data: dict) -> None:
     """Write result to S3 cache. Best-effort."""
     try:
-        import boto3
         s3_uri = _cache_key(days)
         bucket, key = _parse_s3(s3_uri)
-        s3 = boto3.client("s3", region_name=AWS_REGION)
+        s3 = get_boto3_session().client("s3", region_name=AWS_REGION)
         s3.put_object(
             Bucket=bucket, Key=key,
             Body=json.dumps(data).encode("utf-8"),

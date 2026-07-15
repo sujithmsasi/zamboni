@@ -9,7 +9,7 @@ import time
 
 import boto3
 
-from config.settings import AWS_REGION, GLUE_CATALOG_CACHE_TTL_HOURS, ZAMBONI_LOCAL_MODE
+from config.settings import AWS_REGION, GLUE_CATALOG_CACHE_TTL_HOURS, ZAMBONI_LOCAL_MODE, get_boto3_session
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -46,7 +46,7 @@ _LOCAL_DATABASES = [
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("glue", region_name=AWS_REGION)
+        _client = get_boto3_session().client("glue", region_name=AWS_REGION)
     return _client
 
 

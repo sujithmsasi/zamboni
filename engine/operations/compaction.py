@@ -10,9 +10,7 @@ from __future__ import annotations
 import os
 import time
 
-import boto3
-
-from config.settings import AWS_REGION, GLUE_JOB_TIMEOUT_SECONDS
+from config.settings import AWS_REGION, GLUE_JOB_TIMEOUT_SECONDS, get_boto3_session
 from engine.core.health_checker import HealthResult
 from engine.operations.dynamic_router import RoutingDecision, route
 from engine.strategies import binpack, sort, zorder
@@ -204,7 +202,7 @@ def _run_glue_compaction(
         return result
 
     # Submit Glue job
-    glue    = boto3.client("glue", region_name=AWS_REGION)
+    glue    = get_boto3_session().client("glue", region_name=AWS_REGION)
     response = glue.start_job_run(
         JobName=COMPACTION_GLUE_JOB,
         Arguments=job_args,
