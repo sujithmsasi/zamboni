@@ -13,8 +13,20 @@ EXECUTION_LOG_MODE values:
 
 This module is independent of execution_log.write() — engines call into a
 ParquetLogBuffer instance, populate it during the run, and flush at end.
+
+2026-07-16 perf fix (audit pipeline batching): also home to AuditBuffer, a
+generic buffered-writer used by anything that wants ParquetLogBuffer's
+"append rows, flush as one multi-row INSERT" shape without its
+Parquet/add_files machinery -- vacuum_audit (engine/core/maintenance_ops.py)
+and per-table execution_log writes in the Lifecycle Engine (governance:
+non-prod table lifecycle) both used to issue one synchronous Athena INSERT
+per table during a fleet run; both now buffer via AuditBuffer for the
+duration of the run and flush once at the end.
 """
 import io
+import threading
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from config.settings import (
@@ -28,6 +40,150 @@ from engine.core.execution_log import LogEntry
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# Shared by every AuditBuffer instance (audit_log, vacuum_audit, lifecycle's
+# execution_log rows, ...) -- ONE background worker for all end-of-run audit
+# flushing across every engine, not one pool per buffer. Bounded (Athena
+# calls made from here still honor ATHENA_QUERY_TIMEOUT_SECONDS, see
+# athena_client.py), so a slow/hung flush can't grow threads unboundedly --
+# it just queues behind the worker, which the caller never waits on.
+_BACKGROUND_FLUSH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="zamboni-audit-flush",
+)
+
+
+def submit_background_flush(flush_fn: Callable[[], int], label: str) -> Future:
+    """
+    Submit a zero-arg flush callable to the shared single-worker background
+    executor so the caller's thread does not block waiting on an Athena
+    write. flush_fn itself must never raise (AuditBuffer.flush() already
+    catches internally and logs a warning) -- this wrapper additionally
+    guards the submit() call itself (e.g. executor shutdown) so a
+    background-flush failure can never surface as an exception on the
+    engine's main thread. Falls back to a synchronous flush on submission
+    failure so buffered rows are never silently dropped.
+    """
+    def _run() -> int:
+        try:
+            return flush_fn()
+        except Exception as e:
+            log.warning("execution_log_parquet.background_flush_failed", label=label, error=str(e))
+            return 0
+
+    try:
+        return _BACKGROUND_FLUSH_EXECUTOR.submit(_run)
+    except Exception as e:
+        log.warning("execution_log_parquet.background_flush_submit_failed", label=label, error=str(e))
+        result = flush_fn()
+        done: Future = Future()
+        done.set_result(result)
+        return done
+
+
+class AuditBuffer:
+    """
+    Generic buffered writer for Athena audit-style tables (audit_log,
+    execution_log, vacuum_audit) -- buffers rows in memory and flushes as
+    ONE multi-row INSERT instead of one INSERT per row. The engine-agnostic
+    counterpart to ParquetLogBuffer: ParquetLogBuffer is execution_log-
+    specific and additionally supports the Parquet+add_files fast path;
+    AuditBuffer is the simple case -- no Parquet, just "hold rows, then one
+    batched INSERT" -- for callers that don't need (or don't have) that
+    fast path (vacuum_audit has no Parquet equivalent at all; audit_log and
+    the Lifecycle Engine's execution_log rows don't need one).
+
+    A caller supplies write_many_fn -- a callable taking the buffered rows
+    and performing exactly one Athena round trip (e.g.
+    engine.core.audit.persist_many for audit_log,
+    engine.core.maintenance_ops.write_vacuum_audit_many for vacuum_audit,
+    or a lambda wrapping engine.core.execution_log.write_many for a
+    governance engine's own execution_log rows). AuditBuffer itself has no
+    opinion about row shape or destination table -- each write_many_fn
+    implementation already knows how to render its own multi-row VALUES
+    clause and how to fall back to a per-row write if the batch itself
+    fails (matching ParquetLogBuffer._write_via_insert()'s fallback shape).
+
+    Critical / security-sensitive events (permission escalation, kill
+    switch, Gate 0 overrides, ...) should bypass this buffer entirely and
+    call the module's own immediate single-row write function (audit(),
+    execution_log.write(), write_vacuum_audit() with no buffer=...)
+    directly -- append() trades a short persistence delay for far fewer
+    Athena round trips, which is the wrong trade for anything that must be
+    durable/visible the instant it happens.
+
+    Thread-safe: append()/flush() are guarded by an internal lock so
+    concurrent callers (e.g. a ThreadPoolExecutor processing multiple
+    tables per tier, as HKEngine.run() already does) can share one buffer
+    safely.
+
+    Usage:
+        buffer = AuditBuffer(write_many_fn=persist_many, label="governance")
+        buffer.append(event_1)
+        buffer.append(event_2)
+        buffer.flush()          # synchronous -- one multi-row INSERT
+        buffer.flush_async()    # non-blocking -- same, off the caller's thread
+    """
+
+    DEFAULT_MAX_SIZE = 50
+
+    def __init__(
+        self,
+        write_many_fn: Callable[[list], int],
+        label: str = "audit",
+        max_size: int = DEFAULT_MAX_SIZE,
+    ):
+        self._write_many_fn = write_many_fn
+        self.label = label
+        self.max_size = max_size
+        self._rows: list = []
+        self._lock = threading.Lock()
+
+    def append(self, row) -> None:
+        """
+        Append one row to the buffer. Auto-flushes synchronously once
+        max_size is reached so the buffer can never grow unbounded during
+        a very large fleet run.
+        """
+        with self._lock:
+            self._rows.append(row)
+            should_flush = len(self._rows) >= self.max_size
+        if should_flush:
+            self.flush()
+
+    def flush(self) -> int:
+        """
+        Synchronous flush -- one multi-row write for everything currently
+        buffered. Never raises: audit persistence failures must never
+        crash the engine run that triggered them (matches audit()'s own
+        never-raises contract) -- logs a warning and returns 0 instead.
+        """
+        with self._lock:
+            rows, self._rows = self._rows, []
+        if not rows:
+            return 0
+        try:
+            n = self._write_many_fn(rows)
+            log.info("audit_buffer.flushed", label=self.label, count=n)
+            return n
+        except Exception as e:
+            log.warning(
+                "audit_buffer.flush_failed", label=self.label,
+                count=len(rows), error=str(e),
+            )
+            return 0
+
+    def flush_async(self) -> Future:
+        """
+        Non-blocking flush -- submits flush() to the shared single-worker
+        background executor so the caller's thread (typically the very end
+        of an engine's run()) does not block waiting on the Athena write.
+        """
+        with self._lock:
+            if not self._rows:
+                done: Future = Future()
+                done.set_result(0)
+                return done
+        return submit_background_flush(self.flush, self.label)
 
 
 class ParquetLogBuffer:

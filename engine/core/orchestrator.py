@@ -85,8 +85,22 @@ class RunResult:
     steps:       list[StepResult] = field(default_factory=list)
 
 
-def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = None) -> RunResult:
-    """contracts.md §5 -- the sequence below is LOCKED. See module docstring."""
+def run_table_maintenance(
+    fqn: str, dry_run: bool = True, run_id: str | None = None,
+    vacuum_audit_buffer=None,
+) -> RunResult:
+    """contracts.md §5 -- the sequence below is LOCKED. See module docstring.
+
+    vacuum_audit_buffer (2026-07-16 perf fix): optional
+    engine.core.execution_log_parquet.AuditBuffer. When given, threaded
+    through to _run_safe_vacuum_step() -> maintenance_ops.write_vacuum_audit()
+    so this table's vacuum_audit row is appended to the caller's fleet-wide
+    buffer instead of writing immediately -- HKEngine.run() creates one such
+    buffer per fleet run and flushes it once at the end, regardless of how
+    many tables ran vacuum. Omit (the default) for the original
+    immediate-write behavior when calling this for a single table on its
+    own (tests, ad-hoc scripts).
+    """
     run_id = run_id or execution_log.new_run_id()
 
     table_row = registry.get_table(fqn)
@@ -255,6 +269,7 @@ def run_table_maintenance(fqn: str, dry_run: bool = True, run_id: str | None = N
         if health.needs_vacuum or health.needs_orphan_cleanup:
             step, log_status, log_kwargs = _run_safe_vacuum_step(
                 fqn, hk_config, health, tier, workgroup, dry_run, lock_id, run_id, heartbeat,
+                vacuum_audit_buffer=vacuum_audit_buffer,
             )
             _write("vacuum", log_status, **log_kwargs)
             result.steps.append(step)
@@ -362,7 +377,7 @@ def _run_optimize_step(
 def _run_safe_vacuum_step(
     fqn: str, hk_config: dict, health: HealthResult, tier: str,
     workgroup: str, dry_run: bool, lock_id: str, run_id: str,
-    heartbeat: LockHeartbeat,
+    heartbeat: LockHeartbeat, vacuum_audit_buffer=None,
 ) -> tuple[StepResult, str, dict]:
     """Returns (StepResult, execution_log status, execution_log kwargs)."""
     started = datetime.now(UTC)
@@ -401,6 +416,7 @@ def _run_safe_vacuum_step(
             sanity_pct=vac_result.sanity_pct,
             aborted=True, aborted_reason=vac_result.aborted_reason,
             started_at=started, completed_at=completed,
+            buffer=vacuum_audit_buffer,
         )
         return (
             StepResult("vacuum", "FAILURE", "FAILED", vac_result.aborted_reason), "FAILURE",
@@ -427,6 +443,7 @@ def _run_safe_vacuum_step(
         bytes_reclaimed=vac_result.bytes_reclaimed, older_than_hours_used=vac_result.older_than_hours_used,
         sanity_pct=vac_result.sanity_pct, aborted=False,
         started_at=started, completed_at=completed,
+        buffer=vacuum_audit_buffer,
     )
 
     log_kwargs = {

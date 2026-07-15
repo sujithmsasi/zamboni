@@ -225,23 +225,18 @@ def diff_json(before: dict, after: dict) -> tuple[str, str]:
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 
-def _persist(event: AuditEvent) -> None:
-    """
-    Write the audit event to Athena via INSERT INTO.
-    Phase 2: swap this for ParquetLogBuffer.append() + flush() pattern.
-    """
-    from engine.utils.athena_client import run_query
+def _esc(s: str) -> str:
+    return str(s or "").replace("'", "''")
 
+
+def _values_tuple(event: AuditEvent) -> str:
+    """Render one AuditEvent as a positional SQL VALUES tuple -- shared by
+    _persist() (single-row) and persist_many() (multi-row) so both stay in
+    sync with the audit_log column order. Same pattern as
+    execution_log.py::_values_tuple()."""
     d = event.to_dict()
-
-    def _esc(s: str) -> str:
-        return str(s or "").replace("'", "''")
-
     dry_run_val = "true" if d["dry_run"] else "false"
-
-    sql = f"""
-        INSERT INTO {AUDIT_LOG_TABLE}
-        VALUES (
+    return f"""(
             '{_esc(d["audit_id"])}',
             TIMESTAMP '{_esc(d["timestamp"])}',
             '{_esc(d["actor"])}',
@@ -259,9 +254,61 @@ def _persist(event: AuditEvent) -> None:
             '{_esc(d["after_value"])}',
             '{_esc(d["error_message"])}',
             DATE '{_esc(d["audit_date"])}'
-        )
+        )"""
+
+
+def _persist(event: AuditEvent) -> None:
     """
+    Write the audit event to Athena via INSERT INTO.
+    """
+    from engine.utils.athena_client import run_query
+
+    sql = f"INSERT INTO {AUDIT_LOG_TABLE} VALUES {_values_tuple(event)}"
     run_query(sql, workgroup="app")
+
+
+def persist_many(events: list[AuditEvent]) -> int:
+    """
+    Batched counterpart to _persist()/audit() -- one multi-row Athena
+    INSERT for every event instead of one INSERT per event. Used by
+    AuditBuffer (execution_log_parquet.py) so a fleet-wide governance run
+    doesn't issue one Athena round trip per table. audit_log rows are
+    always persisted regardless of an individual event's dry_run field
+    (that field only records whether the underlying *action* was a dry
+    run -- the audit trail itself is not conditional on it, matching
+    _persist()'s existing unconditional run_query() call with no dry_run
+    kwarg).
+
+    Falls back to the existing per-event audit() path if the batched
+    INSERT itself fails, so one malformed event can't silently drop every
+    other event in the batch -- same fallback shape as
+    execution_log.write_many()'s ParquetLogBuffer counterpart. The
+    fallback intentionally reuses audit() (not a bare _persist() loop) so
+    a degraded batch still gets normal logging + the Teams-notification
+    side effect per event.
+    """
+    if not events:
+        return 0
+
+    from engine.utils.athena_client import run_query
+
+    try:
+        values_sql = ",\n            ".join(_values_tuple(e) for e in events)
+        sql = f"INSERT INTO {AUDIT_LOG_TABLE} VALUES {values_sql}"
+        run_query(sql, workgroup="app")
+        log.info("audit.persist_many", count=len(events))
+        return len(events)
+    except Exception as e:
+        log.warning(
+            "audit.persist_many_failed_falling_back_per_event",
+            count=len(events), error=str(e),
+        )
+
+    written = 0
+    for event in events:
+        if audit(event):
+            written += 1
+    return written
 
 
 # ── Query helpers (for audit viewer page) ────────────────────────────────────

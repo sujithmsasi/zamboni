@@ -25,6 +25,7 @@ from config.settings import NONPROD_REGISTRY_TABLE
 from engine.core import execution_log, notifier, registry
 from engine.core.control_plane import read_sql, run_query
 from engine.core.execution_log import LogEntry
+from engine.core.execution_log_parquet import AuditBuffer
 from engine.core.lock_service import LockHeartbeat, LockService
 from engine.engines.base import BaseEngine
 from engine.monitoring.activity_scanner import get_activity_signals
@@ -131,6 +132,20 @@ class LifecycleEngine(BaseEngine):
         """
         self._log_start(scope="lifecycle", environment=environment)
 
+        # 2026-07-16 perf fix: _write_log() (-> execution_log.write()) used
+        # to issue one immediate Athena INSERT per table transitioned or
+        # notified during this governance run (non-prod table lifecycle
+        # state-machine evaluation across the whole fleet). Buffered for
+        # the duration of this run, flushed once (in the background) at
+        # the end -- same "one round trip instead of one per table" fix
+        # HK's own execution_log writes already got via orchestrator.py's
+        # ParquetLogBuffer, just using the simpler generic AuditBuffer
+        # since these rows have no Parquet/add_files fast path of their own.
+        self._audit_buffer = AuditBuffer(
+            write_many_fn=lambda entries: execution_log.write_many(entries, dry_run=self.dry_run),
+            label="lifecycle.run",
+        )
+
         transitioned  = 0
         notified      = 0
         skipped       = 0
@@ -166,6 +181,7 @@ class LifecycleEngine(BaseEngine):
             notify_failed=notify_failed,
         )
         self._log_complete(result)
+        self._audit_buffer.flush_async()
         return result
 
     # ── Job 3: CLEANUP ────────────────────────────────────────────────────────
@@ -582,6 +598,19 @@ class LifecycleEngine(BaseEngine):
         error_message: str | None = None,
         bytes_reclaimed: int = 0,
     ) -> None:
+        """
+        Routes through self._audit_buffer (AuditBuffer) when one is set --
+        run() sets it for the fleet-wide state-evaluation pass (2026-07-16
+        perf fix). run_cleanup() deliberately does NOT set it: a
+        catalog_cleanup row documents an irreversible Glue DROP + S3 sweep,
+        which is exactly the "critical / security-sensitive event" carve-
+        out AuditBuffer's own docstring calls out for staying synchronous
+        -- and cleanup runs are bounded by how many tables are actually
+        PENDING_DROP and expired, not fleet-wide scale, so there's no real
+        perf win to trade that immediacy for. No buffer set (or called
+        directly, e.g. from a test) falls back to the original
+        immediate-write behavior.
+        """
         entry = LogEntry(
             run_id=self.run_id,
             engine="lifecycle",
@@ -596,7 +625,11 @@ class LifecycleEngine(BaseEngine):
             error_message=error_message,
             bytes_archived=bytes_reclaimed,
         )
-        execution_log.write(entry, dry_run=self.dry_run)
+        buffer = getattr(self, "_audit_buffer", None)
+        if buffer is not None:
+            buffer.append(entry)
+        else:
+            execution_log.write(entry, dry_run=self.dry_run)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

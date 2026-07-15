@@ -327,3 +327,91 @@ def test_gate0_lock_held_skips_without_touching_operations(monkeypatch):
     assert result.skip_reason == "SKIP_LOCK_HELD"
     assert optimize_calls == []
     lock_service.release.assert_not_called()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  vacuum_audit_buffer threading (2026-07-16 audit-batching perf fix)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_vacuum_audit_buffer_receives_row_instead_of_immediate_write(monkeypatch):
+    """When a fleet-wide vacuum_audit_buffer is passed in, the successful
+    vacuum path must append to it (via maintenance_ops.write_vacuum_audit's
+    real buffer= handling) instead of writing to Athena immediately."""
+    health = _health(needs_compaction=False, needs_vacuum=True, needs_orphan_cleanup=False, snapshot_count=100)
+    _base_patches(monkeypatch, health)
+
+    vac_result = SafeVacuumResult(vacuum_result={"athena_query_id": "q1"})
+    monkeypatch.setattr(orch.maintenance_ops, "run_safe_vacuum", lambda *a, **k: vac_result)
+
+    queries = []
+    monkeypatch.setattr(orch.maintenance_ops, "run_query", lambda sql, **k: queries.append(sql))
+
+    states = iter([_state("s3://v2", 101), _state("s3://v3", 40, datetime.now(UTC))])
+    monkeypatch.setattr(orch, "capture_state", lambda fqn: next(states))
+
+    from engine.core.execution_log_parquet import AuditBuffer
+    buffer = AuditBuffer(write_many_fn=orch.maintenance_ops.write_vacuum_audit_many)
+
+    result = orch.run_table_maintenance(
+        TABLE_ROW["table_fqn"], dry_run=False, run_id="run-buffered",
+        vacuum_audit_buffer=buffer,
+    )
+
+    assert result.status == "SUCCESS"
+    assert queries == [], "vacuum_audit must not write to Athena immediately when a buffer is given"
+    assert len(buffer._rows) == 1
+    assert buffer._rows[0]["table_fqn"] == TABLE_ROW["table_fqn"]
+
+    n = buffer.flush()
+    assert n == 1
+    assert len(queries) == 1, "the buffered row must land in exactly one Athena write once flushed"
+
+
+def test_vacuum_audit_buffer_receives_aborted_row_too(monkeypatch):
+    """Both the aborted and successful vacuum paths append to the same
+    buffer -- the aborted branch must not bypass it and write immediately."""
+    health = _health(needs_compaction=False, needs_vacuum=True, needs_orphan_cleanup=False, snapshot_count=100)
+    _base_patches(monkeypatch, health)
+
+    aborted_result = SafeVacuumResult(aborted=True, aborted_reason="ORPHAN_SANITY_ABORT")
+    monkeypatch.setattr(orch.maintenance_ops, "run_safe_vacuum", lambda *a, **k: aborted_result)
+    monkeypatch.setattr(orch.circuit_breaker, "trip", lambda fqn, count, dry_run=False: None)
+    monkeypatch.setattr(orch.notifier, "send_alert", lambda **k: None)
+
+    queries = []
+    monkeypatch.setattr(orch.maintenance_ops, "run_query", lambda sql, **k: queries.append(sql))
+    monkeypatch.setattr(orch, "capture_state", lambda fqn: _state("s3://v1", 100))
+
+    from engine.core.execution_log_parquet import AuditBuffer
+    buffer = AuditBuffer(write_many_fn=orch.maintenance_ops.write_vacuum_audit_many)
+
+    result = orch.run_table_maintenance(
+        TABLE_ROW["table_fqn"], dry_run=False, run_id="run-aborted-buffered",
+        vacuum_audit_buffer=buffer,
+    )
+
+    assert result.status == "FAILURE"
+    assert queries == [], "an aborted vacuum row must also be buffered, not written immediately"
+    assert len(buffer._rows) == 1
+    assert buffer._rows[0]["aborted"] is True
+
+
+def test_no_vacuum_audit_buffer_preserves_immediate_write(monkeypatch):
+    """Omitting vacuum_audit_buffer (the default, e.g. a single ad-hoc
+    table run) must preserve the original immediate-write behavior --
+    exact regression guard for the pre-existing single-table callers."""
+    health = _health(needs_compaction=False, needs_vacuum=True, needs_orphan_cleanup=False, snapshot_count=100)
+    _base_patches(monkeypatch, health)
+
+    vac_result = SafeVacuumResult(vacuum_result={"athena_query_id": "q1"})
+    monkeypatch.setattr(orch.maintenance_ops, "run_safe_vacuum", lambda *a, **k: vac_result)
+
+    queries = []
+    monkeypatch.setattr(orch.maintenance_ops, "run_query", lambda sql, **k: queries.append(sql))
+    states = iter([_state("s3://v2", 101), _state("s3://v3", 40, datetime.now(UTC))])
+    monkeypatch.setattr(orch, "capture_state", lambda fqn: next(states))
+
+    result = orch.run_table_maintenance(TABLE_ROW["table_fqn"], dry_run=False, run_id="run-unbuffered")
+
+    assert result.status == "SUCCESS"
+    assert len(queries) == 1, "no buffer given -- vacuum_audit must write immediately, exactly as before"

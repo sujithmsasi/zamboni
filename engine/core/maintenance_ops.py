@@ -34,6 +34,7 @@ from config.settings import (
     VACUUM_AUDIT_TABLE,
     ZAMBONI_LOCAL_MODE,
 )
+from engine.core.execution_log_parquet import AuditBuffer
 from engine.core.health_checker import HealthResult
 from engine.operations import compaction, vacuum
 from engine.utils.athena_client import read_sql, run_query
@@ -372,6 +373,48 @@ def _files_metrics(table_fqn: str, required: bool = False) -> dict:
 
 # ── vacuum_audit (contracts.md §3.3) ──────────────────────────────────────────
 
+def _vacuum_audit_values_tuple(row: dict) -> str:
+    """Render one vacuum_audit row (dict, same keys as write_vacuum_audit()'s
+    kwargs) as a positional SQL VALUES tuple -- shared by write_vacuum_audit()
+    (single-row immediate write) and write_vacuum_audit_many() (multi-row
+    batched write) so both stay in sync with the vacuum_audit column order.
+    Same pattern as execution_log.py's _values_tuple()."""
+
+    def _s(v) -> str:
+        return f"'{str(v).replace(chr(39), chr(39) * 2)}'" if v is not None else "NULL"
+
+    def _n(v) -> str:
+        return str(int(v)) if v is not None else "NULL"
+
+    def _f(v) -> str:
+        return str(float(v)) if v is not None else "NULL"
+
+    def _b(v) -> str:
+        return str(bool(v)).lower()
+
+    def _ts(v: datetime) -> str:
+        return f"TIMESTAMP '{v.strftime('%Y-%m-%d %H:%M:%S')}'"
+
+    return f"""(
+            {_s(row.get("run_id"))},
+            {_s(row.get("table_fqn"))},
+            {_s(row.get("operation"))},
+            {_n(row.get("snapshots_before"))},
+            {_n(row.get("snapshots_after"))},
+            {_n(row.get("files_estimated"))},
+            {_n(row.get("files_deleted"))},
+            {_n(row.get("bytes_reclaimed"))},
+            {_n(row.get("older_than_hours_used"))},
+            {_f(row.get("sanity_pct"))},
+            {_b(row.get("aborted"))},
+            {_s(row.get("aborted_reason"))},
+            {_s(row.get("lock_id"))},
+            {_b(row.get("dry_run"))},
+            {_ts(row.get("started_at"))},
+            {_ts(row.get("completed_at"))}
+        )"""
+
+
 def write_vacuum_audit(
     run_id:                str,
     table_fqn:              str,
@@ -389,58 +432,106 @@ def write_vacuum_audit(
     aborted_reason:         str | None = None,
     started_at:             datetime | None = None,
     completed_at:           datetime | None = None,
+    buffer:                 AuditBuffer | None = None,
 ) -> None:
     """
     Every SAFE-VACUUM run (including sanity-aborts) writes one row here —
     this is the VP-reportable audit trail (contracts.md §3.3). Always
     persisted, even for dry runs (dry_run column records that fact) so the
     acceptance dry-run demo has a real row to show.
+
+    buffer (2026-07-16 perf fix): when given, the row is appended to the
+    caller's fleet-wide AuditBuffer instead of writing immediately — both
+    the aborted and successful vacuum paths in
+    orchestrator.py::_run_safe_vacuum_step() pass the same buffer, so a
+    whole HK fleet run produces exactly one Athena write for vacuum_audit
+    regardless of how many tables ran vacuum, instead of one write per
+    table. Omit buffer (the default) to preserve the original immediate-
+    write behavior for standalone/single-table callers (tests, ad-hoc
+    scripts).
     """
     now = datetime.now(UTC)
-    started_at   = started_at or now
-    completed_at = completed_at or now
-
-    def _s(v) -> str:
-        return f"'{str(v).replace(chr(39), chr(39) * 2)}'" if v is not None else "NULL"
-
-    def _n(v) -> str:
-        return str(int(v)) if v is not None else "NULL"
-
-    def _f(v) -> str:
-        return str(float(v)) if v is not None else "NULL"
-
-    def _b(v) -> str:
-        return str(bool(v)).lower()
-
-    def _ts(v: datetime) -> str:
-        return f"TIMESTAMP '{v.strftime('%Y-%m-%d %H:%M:%S')}'"
-
-    sql = f"""
-        INSERT INTO {VACUUM_AUDIT_TABLE} VALUES (
-            {_s(run_id)},
-            {_s(table_fqn)},
-            {_s(operation)},
-            {_n(snapshots_before)},
-            {_n(snapshots_after)},
-            {_n(files_estimated)},
-            {_n(files_deleted)},
-            {_n(bytes_reclaimed)},
-            {_n(older_than_hours_used)},
-            {_f(sanity_pct)},
-            {_b(aborted)},
-            {_s(aborted_reason)},
-            {_s(lock_id)},
-            {_b(dry_run)},
-            {_ts(started_at)},
-            {_ts(completed_at)}
-        )
-    """
+    row = {
+        "run_id": run_id, "table_fqn": table_fqn, "operation": operation,
+        "lock_id": lock_id, "dry_run": dry_run,
+        "snapshots_before": snapshots_before, "snapshots_after": snapshots_after,
+        "files_estimated": files_estimated, "files_deleted": files_deleted,
+        "bytes_reclaimed": bytes_reclaimed, "older_than_hours_used": older_than_hours_used,
+        "sanity_pct": sanity_pct, "aborted": aborted, "aborted_reason": aborted_reason,
+        "started_at": started_at or now, "completed_at": completed_at or now,
+    }
     log.info(
         "maintenance_ops.vacuum_audit_write",
         run_id=run_id, table_fqn=table_fqn, aborted=aborted, dry_run=dry_run,
+        buffered=buffer is not None,
     )
+
+    if buffer is not None:
+        buffer.append(row)
+        return
+
+    sql = f"INSERT INTO {VACUUM_AUDIT_TABLE} VALUES {_vacuum_audit_values_tuple(row)}"
     # Same dry_run convention as execution_log.write(): in ZAMBONI_LOCAL_MODE,
     # run_query() short-circuits to SQLite before the dry_run check, so local
     # dry runs still produce a real, queryable row (contracts.md acceptance
     # criteria). Against real Athena, dry_run=True logs the SQL only.
     run_query(sql, workgroup="app", dry_run=dry_run)
+
+
+def write_vacuum_audit_many(rows: list[dict]) -> int:
+    """
+    Batched counterpart to write_vacuum_audit() -- one multi-row INSERT for
+    every buffered row instead of one INSERT per row. Used as an
+    AuditBuffer's write_many_fn when a fleet-wide vacuum-audit buffer is in
+    play (see hk_engine.py::HKEngine.run()).
+
+    dry_run must stay per-row correct even inside one batch: a table can be
+    individually mid dry-run-ramp-up (is_in_dry_run_ramp()) while the rest
+    of the fleet run is not, so rows collected across a whole HK run can
+    have mixed dry_run values -- and run_query(dry_run=True) skips the
+    write entirely against real Athena (only ZAMBONI_LOCAL_MODE ignores the
+    flag). Splitting into at most two batched INSERTs (one per dry_run
+    value) preserves that per-row semantic exactly, instead of forcing one
+    flag onto every row in the buffer. The common case (a whole run is or
+    isn't dry_run) still produces exactly one real Athena write.
+
+    Falls back to a per-row immediate write only if a group's batched
+    INSERT itself fails, so one malformed row can't silently drop every
+    other table's audit row for the run -- same fallback shape as
+    execution_log.write_many()'s ParquetLogBuffer counterpart.
+    """
+    if not rows:
+        return 0
+
+    groups: dict[bool, list[dict]] = {False: [], True: []}
+    for row in rows:
+        groups[bool(row.get("dry_run", False))].append(row)
+
+    written = 0
+    for dry_run_flag, group in groups.items():
+        if not group:
+            continue
+        try:
+            values_sql = ",\n        ".join(_vacuum_audit_values_tuple(r) for r in group)
+            sql = f"INSERT INTO {VACUUM_AUDIT_TABLE} VALUES {values_sql}"
+            run_query(sql, workgroup="app", dry_run=dry_run_flag)
+            written += len(group)
+            log.info("maintenance_ops.vacuum_audit_write_many", count=len(group), dry_run=dry_run_flag)
+            continue
+        except Exception as e:
+            log.warning(
+                "maintenance_ops.vacuum_audit_write_many_failed_falling_back_per_row",
+                count=len(group), dry_run=dry_run_flag, error=str(e),
+            )
+
+        for row in group:
+            try:
+                row_sql = f"INSERT INTO {VACUUM_AUDIT_TABLE} VALUES {_vacuum_audit_values_tuple(row)}"
+                run_query(row_sql, workgroup="app", dry_run=dry_run_flag)
+                written += 1
+            except Exception as row_e:
+                log.error(
+                    "maintenance_ops.vacuum_audit_row_write_failed",
+                    table_fqn=row.get("table_fqn"), error=str(row_e),
+                )
+    return written
