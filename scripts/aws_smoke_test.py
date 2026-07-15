@@ -192,10 +192,19 @@ def _check_dynamodb_lock_table(session, create_if_missing: bool) -> CheckResult:
 
 def _check_get_table_optimizer(session) -> CheckResult:
     from engine.utils.athena_client import read_sql
+    from engine.utils.partition_utils import parse_table_fqn
 
+    # stream_registry has no database_name/table_name columns -- only a
+    # single table_fqn ('catalog.database.table'), per its own DDL comment
+    # in sql/create_stream_registry.sql. A prior version of this check
+    # queried the two split-out column names directly, which never existed
+    # in the real Athena schema -- confirmed via a real run once the
+    # underlying credential issue this check was actually failing on
+    # (UnrecognizedClientException) was fixed and this query could finally
+    # reach Athena at all.
     try:
         df = read_sql(
-            f"SELECT database_name, table_name FROM {STREAM_REGISTRY_TABLE} LIMIT 1",
+            f"SELECT table_fqn FROM {STREAM_REGISTRY_TABLE} LIMIT 1",
             workgroup="app",
         )
     except Exception as e:
@@ -204,7 +213,10 @@ def _check_get_table_optimizer(session) -> CheckResult:
     if df.empty:
         return CheckResult("glue_get_table_optimizer", SKIP, f"no rows in {STREAM_REGISTRY_TABLE} to probe")
 
-    database, table = df.iloc[0]["database_name"], df.iloc[0]["table_name"]
+    try:
+        _catalog, database, table = parse_table_fqn(str(df.iloc[0]["table_fqn"]))
+    except ValueError as e:
+        return CheckResult("glue_get_table_optimizer", FAIL, f"unparseable table_fqn: {e}")
     client = session.client("glue", region_name=AWS_REGION)
     for optimizer_type in ("compaction", "retention", "orphan_file_deletion"):
         try:

@@ -503,10 +503,9 @@ def stale(
         try:
             from engine.utils.s3_client import parse_s3_uri
             bucket, s3_prefix = parse_s3_uri(prefix)
-            import boto3
 
-            from config.settings import AWS_REGION
-            s3 = boto3.client("s3", region_name=AWS_REGION)
+            from config.settings import AWS_REGION, get_boto3_session
+            s3 = get_boto3_session().client("s3", region_name=AWS_REGION)
             res = s3.list_objects_v2(Bucket=bucket, Prefix=s3_prefix, Delimiter="/")
         except Exception as e:
             raise ValueError(f"S3 scan failed: {e}") from e

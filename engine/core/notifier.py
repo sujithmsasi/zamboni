@@ -9,7 +9,7 @@ from datetime import date
 
 import boto3
 
-from config.settings import AWS_REGION, SNS_ALERT_TOPIC_ARN, SNS_GREENZONE_TOPIC_ARN
+from config.settings import AWS_REGION, SNS_ALERT_TOPIC_ARN, SNS_GREENZONE_TOPIC_ARN, get_boto3_session
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -20,7 +20,7 @@ _client: boto3.client | None = None
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("sns", region_name=AWS_REGION)
+        _client = get_boto3_session().client("sns", region_name=AWS_REGION)
     return _client
 
 

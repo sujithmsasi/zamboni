@@ -13,10 +13,9 @@ If any step fails, the partition is left intact in staging and an SNS alert is s
 from datetime import date
 
 import awswrangler as wr
-import boto3
 import pandas as pd
 
-from config.settings import ARCHIVE_BUCKET, AWS_REGION
+from config.settings import ARCHIVE_BUCKET, get_boto3_session
 from engine.utils.athena_client import read_sql
 from engine.utils.logger import get_logger
 from engine.utils.partition_utils import (
@@ -306,7 +305,7 @@ def _post_validate(
       - Row count must match source exactly
     """
     try:
-        session = boto3.Session(region_name=AWS_REGION)
+        session = get_boto3_session()
         df      = wr.s3.read_parquet(path=archive_path, boto3_session=session)
         archived_count = len(df)
     except Exception as e:
@@ -390,7 +389,7 @@ def _export_partition(
     log.info("archival.exporting", table_fqn=table_fqn,
              partition_date=str(partition_date), archive_path=archive_path)
 
-    session = boto3.Session(region_name=AWS_REGION)
+    session = get_boto3_session()
     df      = wr.athena.read_sql_query(
         sql=sql,
         database=database,

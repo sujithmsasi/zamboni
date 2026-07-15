@@ -12,7 +12,7 @@ from __future__ import annotations
 import random
 import time
 
-from config.settings import AWS_REGION
+from config.settings import AWS_REGION, get_boto3_session
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -34,8 +34,7 @@ def get_running_query_count(workgroup: str) -> int | None:
     Returns None on failure — caller treats as 'unknown, allow dispatch'.
     """
     try:
-        import boto3
-        client = boto3.client("athena", region_name=AWS_REGION)
+        client = get_boto3_session().client("athena", region_name=AWS_REGION)
 
         # list_query_executions returns IDs across all workgroups.
         # Athena does NOT provide a direct workgroup filter — we list recent

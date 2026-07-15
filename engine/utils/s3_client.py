@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import boto3
 
-from config.settings import AWS_REGION
+from config.settings import AWS_REGION, get_boto3_session
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -17,7 +17,7 @@ _client: boto3.client | None = None
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("s3", region_name=AWS_REGION)
+        _client = get_boto3_session().client("s3", region_name=AWS_REGION)
     return _client
 
 

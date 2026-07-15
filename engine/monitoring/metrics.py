@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 
 import boto3
 
-from config.settings import AWS_REGION
+from config.settings import AWS_REGION, get_boto3_session
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -33,7 +33,7 @@ _client: boto3.client | None = None
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("cloudwatch", region_name=AWS_REGION)
+        _client = get_boto3_session().client("cloudwatch", region_name=AWS_REGION)
     return _client
 
 
