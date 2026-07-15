@@ -53,7 +53,15 @@ $defaultProfile = "zamboni-dev"
 $profileName = Read-Host "Profile name to create/update [$defaultProfile]"
 if ([string]::IsNullOrWhiteSpace($profileName)) { $profileName = $defaultProfile }
 
+# PS 5.1 gotcha: redirecting a native command's stderr -- even to $null --
+# still wraps each stderr line in an ErrorRecord, which becomes a
+# TERMINATING exception under $ErrorActionPreference = "Stop" (set at the
+# top of this script). "Continue" around just this call lets a missing
+# profile's stderr output flow through harmlessly to $LASTEXITCODE instead
+# of crashing the whole script.
+$ErrorActionPreference = "Continue"
 $existing = aws configure list --profile $profileName 2>$null
+$ErrorActionPreference = "Stop"
 if ($LASTEXITCODE -eq 0 -and $existing) {
     Write-Host ""
     Write-Host "Profile '$profileName' already exists. Continuing will overwrite its credentials/config." -ForegroundColor Yellow
@@ -90,7 +98,22 @@ if ($mode -eq "2") {
     $sourceProfile = Read-Host "Source profile that can assume the target role [sub_dataengineer]"
     if ([string]::IsNullOrWhiteSpace($sourceProfile)) { $sourceProfile = "sub_dataengineer" }
 
+    # SSO sessions expire (often ~1h) -- without this, the very next check
+    # fails immediately with a confusing token error any time the session
+    # happened to lapse since the last login, reading like the profile
+    # itself is broken rather than just needing a fresh login.
+    $doSsoLogin = Read-Host "Run 'aws sso login --profile $sourceProfile' first, in case the session has expired? [Y/n]"
+    if ($doSsoLogin -notmatch '^[Nn]') {
+        aws sso login --profile $sourceProfile
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "aws sso login --profile $sourceProfile failed."
+            exit 1
+        }
+    }
+
+    $ErrorActionPreference = "Continue"
     $sourceCheck = aws sts get-caller-identity --profile $sourceProfile 2>$null
+    $ErrorActionPreference = "Stop"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Source profile '$sourceProfile' isn't valid/logged in right now (aws sts get-caller-identity failed). Log it in first (e.g. 'aws sso login --profile $sourceProfile' if it's SSO-based), then re-run this script."
         exit 1
@@ -135,7 +158,9 @@ if ($mode -eq "2") {
         aws configure set aws_session_token $sessionToken --profile $profileName
     } else {
         # Clear any stale session token from a previous run of this script.
+        $ErrorActionPreference = "Continue"
         aws configure set aws_session_token "" --profile $profileName 2>$null | Out-Null
+        $ErrorActionPreference = "Stop"
     }
     aws configure set region $region --profile $profileName
 
@@ -151,8 +176,27 @@ if ($mode -eq "2") {
 
 # ── 3. Validate ─────────────────────────────────────────────────────────────────
 Write-Host ""
+if ($mode -ne "2") {
+    # Mode 2 already offered an SSO login for its source profile above --
+    # that's what mode 2's identity actually depends on. Mode 1 pastes
+    # static/session credentials directly, but the profile name entered
+    # could still be one an SSO login also manages (e.g. re-running this
+    # script later against the same name with a real SSO setup) -- default
+    # No, since the common case is genuinely static keys with nothing to
+    # log into.
+    $doSsoLoginFinal = Read-Host "Run 'aws sso login --profile $profileName' before validating? (only needed if this profile is itself SSO-based) [y/N]"
+    if ($doSsoLoginFinal -match '^[Yy]') {
+        aws sso login --profile $profileName
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "aws sso login --profile $profileName failed."
+            exit 1
+        }
+    }
+}
 Write-Host "Validating profile '$profileName'..." -ForegroundColor Yellow
+$ErrorActionPreference = "Continue"
 $identity = aws sts get-caller-identity --profile $profileName --output json 2>$null
+$ErrorActionPreference = "Stop"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "aws sts get-caller-identity failed for profile '$profileName'. Check the values entered above and re-run."
     exit 1
