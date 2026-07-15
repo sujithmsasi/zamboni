@@ -95,3 +95,88 @@ def test_get_tables_refetches_once_ttl_expires(fake_client):
     glue_client._tables_cache["db_a"]["fetched_at"] -= (glue_client.GLUE_CATALOG_CACHE_TTL_HOURS * 3600 + 1)
     glue_client.get_tables("db_a")
     assert fake_client.paginator_calls.count("get_tables") == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  resolve_catalog_id() / GetTableOptimizer's required "CatalogId" (2026-07-16)
+#
+#  Real bug found via a live aws_local smoke test run: GetTableOptimizer
+#  requires "CatalogId" explicitly -- unlike GetTable/GetTables/GetDatabases,
+#  it has no server-side default to the caller's own account (confirmed
+#  against botocore's own Glue service model). Neither the real production
+#  call site (get_table_optimizer() below, what Gate 0's conflict detector
+#  actually calls) nor the smoke test passed it -- and the production call
+#  site's broad `except Exception: return False` silently swallowed the
+#  resulting ParamValidationError as "optimizer not enabled" the whole time,
+#  since no existing test exercised this function's real boto3 call shape
+#  (every conflict_detector test mocks check_table()/get_table_optimizer()
+#  at a higher level).
+# ══════════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(autouse=True)
+def _reset_account_id_cache():
+    glue_client._account_id_cache = None
+    yield
+    glue_client._account_id_cache = None
+
+
+def test_resolve_catalog_id_prefers_configured_account_id(monkeypatch):
+    monkeypatch.setattr(glue_client, "AWS_ACCOUNT_ID", "111111111111")
+
+    def _fail(*a, **k):
+        raise AssertionError("should not call STS when AWS_ACCOUNT_ID is set")
+    monkeypatch.setattr(glue_client, "get_boto3_session", _fail)
+
+    assert glue_client.resolve_catalog_id() == "111111111111"
+
+
+def test_resolve_catalog_id_falls_back_to_sts_and_caches(monkeypatch):
+    monkeypatch.setattr(glue_client, "AWS_ACCOUNT_ID", "")
+    calls = []
+
+    class _FakeStsClient:
+        def get_caller_identity(self):
+            calls.append(1)
+            return {"Account": "222222222222"}
+
+    class _FakeSession:
+        def client(self, service, region_name=None):
+            assert service == "sts"
+            return _FakeStsClient()
+
+    monkeypatch.setattr(glue_client, "get_boto3_session", lambda: _FakeSession())
+
+    first = glue_client.resolve_catalog_id()
+    second = glue_client.resolve_catalog_id()
+
+    assert first == "222222222222"
+    assert second == "222222222222"
+    assert len(calls) == 1  # cached after the first resolution
+
+
+def test_get_table_optimizer_passes_catalog_id(monkeypatch):
+    monkeypatch.setattr(glue_client, "ZAMBONI_LOCAL_MODE", False)
+    monkeypatch.setattr(glue_client, "resolve_catalog_id", lambda: "333333333333")
+
+    captured = {}
+
+    class _FakeGlueClient:
+        class exceptions:
+            class EntityNotFoundException(Exception):
+                pass
+
+        def get_table_optimizer(self, **kwargs):
+            captured.update(kwargs)
+            return {"TableOptimizer": {"configuration": {"enabled": True}}}
+
+    monkeypatch.setattr(glue_client, "_get_client", lambda: _FakeGlueClient())
+
+    result = glue_client.get_table_optimizer("finance_db", "fin_payment", "compaction")
+
+    assert result is True
+    assert captured == {
+        "CatalogId": "333333333333",
+        "DatabaseName": "finance_db",
+        "TableName": "fin_payment",
+        "Type": "compaction",
+    }

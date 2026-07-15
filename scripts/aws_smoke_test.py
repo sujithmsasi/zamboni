@@ -281,9 +281,21 @@ def _check_get_table_optimizer(session) -> CheckResult:
     except ValueError as e:
         return CheckResult("glue_get_table_optimizer", FAIL, f"unparseable table_fqn: {e}")
     client = session.client("glue", region_name=AWS_REGION)
+    # 2026-07-16 fix: GetTableOptimizer requires "CatalogId" explicitly --
+    # unlike GetTable/GetTables/GetDatabases, it has no server-side default
+    # to the caller's own account. Confirmed against botocore's own Glue
+    # service model (a real, permanent API fact, not a version mismatch).
+    # Reuses glue_client.resolve_catalog_id() so this check and the real
+    # production call site (engine/utils/glue_client.py::get_table_optimizer(),
+    # what Gate 0's conflict detector actually calls) can never drift apart
+    # on how CatalogId gets resolved.
+    from engine.utils.glue_client import resolve_catalog_id
+    catalog_id = resolve_catalog_id()
     for optimizer_type in ("compaction", "retention", "orphan_file_deletion"):
         try:
-            client.get_table_optimizer(DatabaseName=database, TableName=table, Type=optimizer_type)
+            client.get_table_optimizer(
+                CatalogId=catalog_id, DatabaseName=database, TableName=table, Type=optimizer_type,
+            )
         except client.exceptions.EntityNotFoundException:
             pass  # optimizer not configured -- API call itself succeeded
         except Exception as e:
@@ -291,7 +303,9 @@ def _check_get_table_optimizer(session) -> CheckResult:
                 "glue_get_table_optimizer", FAIL,
                 f"{database}.{table} type={optimizer_type}: {e}",
             )
-    return CheckResult("glue_get_table_optimizer", PASS, f"probed {database}.{table}")
+    return CheckResult(
+        "glue_get_table_optimizer", PASS, f"probed {database}.{table} (CatalogId={catalog_id})",
+    )
 
 
 _CONTROL_PLANE_TABLES = {"stream_registry", "hk_config", "domain_registry", "nonprod_registry", "controlm_jobs"}

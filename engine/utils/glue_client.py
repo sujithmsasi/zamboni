@@ -9,12 +9,49 @@ import time
 
 import boto3
 
-from config.settings import AWS_REGION, GLUE_CATALOG_CACHE_TTL_HOURS, ZAMBONI_LOCAL_MODE, get_boto3_session
+from config.settings import (
+    AWS_ACCOUNT_ID,
+    AWS_REGION,
+    GLUE_CATALOG_CACHE_TTL_HOURS,
+    ZAMBONI_LOCAL_MODE,
+    get_boto3_session,
+)
 from engine.utils.logger import get_logger
 
 log = get_logger(__name__)
 
 _client: boto3.client | None = None
+_account_id_cache: str | None = None
+
+
+def resolve_catalog_id() -> str:
+    """
+    Glue's Table Optimizer API family (GetTableOptimizer,
+    CreateTableOptimizer, ListTableOptimizerRuns) requires "CatalogId"
+    explicitly -- unlike GetTable/GetTables/GetDatabases, which default it
+    to the caller's own account server-side when omitted. Confirmed against
+    the installed botocore's own Glue service model
+    (op.input_shape.required_members includes "CatalogId" for the
+    Table Optimizer family, not for the classic catalog-browse APIs) --
+    this is a real AWS API design fact, not a version mismatch.
+
+    Prefers the AWS_ACCOUNT_ID setting when explicitly configured (the
+    escape hatch for a genuine cross-account Lake Formation setup, where
+    the Glue Data Catalog being queried belongs to a different account than
+    the caller); otherwise resolves the caller's own account via STS once
+    and caches it for the process -- hand-maintaining an account-ID env var
+    is exactly the kind of value that silently goes stale or is left as a
+    placeholder, which is what happened to AWS_ACCOUNT_ID before this fix
+    (defined in config/settings.py, never consumed anywhere).
+    """
+    global _account_id_cache
+    if AWS_ACCOUNT_ID:
+        return AWS_ACCOUNT_ID
+    if _account_id_cache is None:
+        _account_id_cache = (
+            get_boto3_session().client("sts", region_name=AWS_REGION).get_caller_identity()["Account"]
+        )
+    return _account_id_cache
 
 # In-process TTL cache for get_databases()/get_tables() -- see
 # GLUE_CATALOG_CACHE_TTL_HOURS's comment in config/settings.py for why this
@@ -330,6 +367,7 @@ def get_table_optimizer(database: str, table_name: str, optimizer_type: str) -> 
         return False
     try:
         resp = _get_client().get_table_optimizer(
+            CatalogId=resolve_catalog_id(),
             DatabaseName=database,
             TableName=table_name,
             Type=optimizer_type,
