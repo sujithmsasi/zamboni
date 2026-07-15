@@ -4129,3 +4129,211 @@ need it. Every finding verified against the actual code before acting;
   UserData script body extracted from HEAD vs. the working tree → byte-
   identical, confirming the stack update this session produces causes
   zero EC2 instance interruption.
+
+2026-07-15 First-run failure triage on a new `aws_local` deployment (org-
+drop): `CATALOG_NOT_FOUND` on real Athena queries, an empty/schema-stale
+`zamboni_control.db`, and `POST /api/tables/register` 500ing on a missing
+`stream_registry.controlm_job_start_time` column. All three traced to real,
+fixable gaps rather than AWS-account misconfiguration alone -- root causes
+confirmed by tracing code paths and, for the control-plane piece, by a real
+migration dry-run against a throwaway SQLite file (not guessed). 91
+`tests/unit` (smoke/control-plane/settings subset) passing, full local-mode
+smoke-test run clean; `run_aws_local.ps1`/`run_ui_dev.ps1` syntax-validated
+via `Parser::ParseFile` (no live AWS session in this environment).
+
+- **Root cause 1 (`CATALOG_NOT_FOUND`)**: `ATHENA_CATALOG` (`glue_catalog`
+  by default, `config/settings.py`) is passed as `QueryExecutionContext.
+  Catalog` on every real Athena call (`engine/utils/athena_client.py:137,316`)
+  -- this is genuinely different from AWS's own built-in default catalog,
+  which is always literally `AwsDataCatalog`. `glue_catalog` only exists if
+  the target AWS account/region has an Athena **Data Source** registered
+  under that exact name (a cross-account/central Glue Catalog pattern) --
+  provisioning the Glue *database* `zamboni_catalog` and its tables does
+  NOT by itself register that. This explains all three Athena-backed 500s
+  at once: `GET /api/executions`, `GET /api/health/kpis` (both plain
+  `athena_client.read_sql` per the 2026-07-09 control-plane migration), and
+  `GET /api/glue/tables/{db}` -- the last one was assumed Glue-native-only
+  at first, but `api/services/tables_svc.py::_build_table_rows()` also
+  joins against `stream_registry` via a real Athena `read_sql()` call to
+  mark rows as registered, so it hits the identical `CATALOG_NOT_FOUND`.
+  `POST /api/tables/register` is unrelated to this root cause -- it writes
+  through the SQLite control plane (root cause 2), not Athena.
+  - **Real, separate bug found in the diagnostic tooling itself**:
+    `scripts/aws_smoke_test.py::_check_athena_select_1()` omitted `Catalog`
+    from its own `QueryExecutionContext` entirely, so it silently ran
+    against `AwsDataCatalog` -- NOT `ATHENA_CATALOG` -- meaning it could
+    report a false PASS in exactly the broken-catalog scenario this
+    incident hit, while every real app query still failed. Fixed to match
+    `athena_client.py` exactly. Also added two new, clearly-named checks
+    ahead of it -- `athena_data_catalog` (`get_data_catalog(Name=
+    ATHENA_CATALOG)`) and `athena_workgroup` (`get_work_group`) -- so a
+    missing catalog/workgroup produces a plain-language diagnostic instead
+    of being buried in a raw Athena `StateChangeReason` string on an
+    unrelated-looking check (the pre-existing `glue_get_table_optimizer`
+    check, which also does a real `stream_registry` Athena read).
+- **Root cause 2 (empty control plane / missing column)**: neither
+  `run_aws_local.ps1` nor `run_ui_dev.ps1 -Mode aws_local` ever called
+  `scripts/init_control_plane_db.py` -- confirmed by reading both scripts
+  end to end, not assumed. The CodeDeploy path (`deploy/scripts/
+  after_install.sh:98`) already runs it on every deploy, so `aws_ec2`
+  environments were never exposed to this; both laptop launchers were.
+  Without it, a fresh `zamboni_control.db` never gets its 5 tables created,
+  and an existing-but-older one never picks up a migration added after it
+  was last touched (`config/control_plane_schema.py::
+  CONTROL_PLANE_MIGRATIONS` already had a `controlm_job_start_time` entry
+  -- the migration logic itself was never broken, it just never ran).
+  Proved with a real test: built a throwaway SQLite file via the actual
+  base DDL (pre-migration state, one seeded row), ran the real
+  `_apply_migrations()`/`_verify_schema()` from `scripts/
+  init_control_plane_db.py` against it, and confirmed the column was added
+  (backfilled to its `'02:00'` default) with the pre-existing row's other
+  data untouched. Fixed by adding an idempotent
+  `python scripts/init_control_plane_db.py` call (with a clear
+  `ZAMBONI_CONTROL_PLANE_FIRST_INSTALL` hint on failure) to both launchers,
+  immediately after the AWS session is confirmed valid and before the app
+  starts -- mirrors what `after_install.sh` already does for EC2.
+  - **`python scripts/seed_local_db.py --reset` is definitively the wrong
+    tool for this** -- confirmed by reading `engine/utils/local_db.py::
+    get_connection()`: every `seed_local_db.py` call site passes no
+    `db_path`, so it always resolves to `ZAMBONI_LOCAL_DB`
+    (`zamboni_local.db`, the fabricated local/demo fixture), never
+    `ZAMBONI_CONTROL_PLANE_DB` (`zamboni_control.db`). Running it against a
+    real `aws_local`/`aws_ec2` deployment touches the wrong file and, even
+    if it somehow touched the right one, would inject 5 fabricated demo
+    domains and fake tables into a real environment. The correct answer to
+    the ticket's either/or question is `scripts/init_control_plane_db.py`,
+    with `ZAMBONI_CONTROL_PLANE_FIRST_INSTALL=true` in `.env` reserved for
+    a genuine first-ever deployment with no S3 backup to auto-restore from.
+- `docs/setup/aws_local.md` (prerequisites, "Running it", Verifying it",
+  Troubleshooting table) and `docs/deployment/ec2_api_deploy.md`
+  (post-deploy validation) updated to match -- including a new prerequisite
+  note explicitly distinguishing `glue_catalog` (the Athena data catalog)
+  from `zamboni_catalog` (the Glue database inside it), since the near-
+  identical naming is an easy source of exactly this confusion.
+- **Remaining risk, not verified in this environment**: no real AWS
+  credentials are available here, so `athena_data_catalog`/
+  `athena_workgroup` were validated by construction (correct botocore
+  exception class confirmed via `dir(client.exceptions)`) and via the
+  local-mode SKIP path, not against a real broken/fixed account. Whether
+  `glue_catalog` should be newly registered in the target account or
+  `ATHENA_CATALOG` should instead point at whatever catalog name that
+  account's Athena setup actually uses is an AWS-side decision for whoever
+  owns that account -- `aws_smoke_test.py` now surfaces which one it is,
+  it doesn't decide it. `AWS_ACCOUNT_ID` (`config/settings.py`) is defined
+  but not consumed as a Glue `CatalogId` anywhere in `engine/utils/
+  glue_client.py` -- if this account's Glue Data Catalog is itself
+  cross-account (consistent with a *named*, non-default Athena catalog
+  existing at all), direct Glue API calls may need an explicit `CatalogId`
+  too; not wired in this pass since it's unconfirmed and changes behavior
+  for every Glue call site -- flagged for Sujith's call, not guessed at.
+- No changes to `vacuum.py`, orchestrator, Gate 0-3 logic, or the lock
+  service this session -- purely launcher-script, smoke-test-diagnostic,
+  and docs fixes.
+
+2026-07-15 (same day, correction) `CATALOG_NOT_FOUND` root cause reversed --
+Sujith's own call, not a guess: "we need only to append glue_catalog when a
+glue job is triggered. all athena queries can run with db_name.table_name."
+The entry above assumed `glue_catalog` needed to be a registered Athena
+Data Catalog in the target account and added smoke-test checks
+(`athena_data_catalog`, `get_data_catalog`) to verify that -- wrong
+premise, now removed. The real fix: `glue_catalog` is not an Athena
+concept in this app at all. It's the Spark/Iceberg catalog name used
+*only* inside AWS Glue ETL jobs (`compaction_engine='glue'` triggering a
+real `start_job_run`, see `engine/strategies/sort.py`/`zorder.py::
+build_glue_params()`'s `--catalog` argument, sourced from a registered
+table's own `table_fqn` -- unchanged, still 3-part, this is the one place
+`glue_catalog` legitimately belongs). Every Athena SQL query in this app
+should address tables as plain `database.table` (2-part) against Athena's
+own default catalog, full stop. 671 unit + 106 api tests passing
+(re-run as two separate invocations per this repo's own documented
+convention -- combining them in one `pytest` call, which this session
+briefly did by mistake, reproduces spurious Windows file-lock `PermissionError`s
+unrelated to this change), plus a live proof against the real seeded DB
+(not just tests) confirming both `engine.core.control_plane.read_sql()`
+and `engine.utils.athena_client.read_sql()` return real rows through the
+new 2-part addressing.
+- `engine/utils/athena_client.py`: removed `"Catalog": ATHENA_CATALOG`
+  from both `QueryExecutionContext` dicts (`run_query()`/`read_sql()`) --
+  now just `{"Database": db}`. This was the actual bug: it forced every
+  single Athena call in the app into a catalog that was never meant to be
+  an Athena-facing identifier, failing with `CATALOG_NOT_FOUND` on any
+  account without that specific (unnecessary) registration.
+- `config/settings.py`: all 9 Zamboni metadata-table constants
+  (`DOMAIN_REGISTRY_TABLE`, `STREAM_REGISTRY_TABLE`, `HK_CONFIG_TABLE`,
+  `EXECUTION_LOG_TABLE`, `HOME_SNAPSHOT_TABLE`, `NONPROD_REGISTRY_TABLE`,
+  `AUDIT_LOG_TABLE`, `CONTROLM_JOBS_TABLE`, `VACUUM_AUDIT_TABLE`) changed
+  from `glue_catalog.zamboni_catalog.<table>` (3-part) to plain
+  `zamboni_catalog.<table>` (2-part). `ATHENA_CATALOG` itself is
+  unchanged (`glue_catalog`, still consumed by the Glue-job path only).
+  `CLOUDTRAIL_TABLE`'s format comment updated to match (operator-supplied,
+  same 2-part convention now expected).
+- **Business-table Athena SQL also fixed, not just metadata tables** --
+  found by grepping for every remaining `"glue_catalog"` structural
+  reference after the settings.py change: `engine/core/
+  integrity_checker.py` (2 sites, `"$snapshots"`), `maintenance_ops.py`
+  (2 sites, `"$snapshots"`/`"$files"`), `health_checker.py` (3 sites,
+  `"$snapshots"`/`"$files"`), `commit_frequency.py` (1 site,
+  `"$snapshots"`), `engine/utils/glue_client.py` (1 site, `"$partitions"`
+  -- this one genuinely is a real Athena query via `athena_client.read_sql`,
+  not a Glue boto3 call, despite living in `glue_client.py`), and
+  `engine/operations/archival.py` (5 sites: 3 `SELECT`, 1 `DELETE`, all
+  against a registered table's own partition data). All dropped their
+  `"glue_catalog".`/`glue_catalog.` prefix, now plain
+  `"{database}"."{table}$snapshots"` / `{database}.{table}`.
+  **Deliberately NOT changed**: how a registered table's `table_fqn` is
+  *constructed* or *stored* (`engine/cli/register.py`,
+  `api/services/tables_svc.py::_build_table_rows()`,
+  `engine/engines/lifecycle_engine.py`, `scripts/seed_local_db.py`,
+  `scripts/seed_scale_test.py`) -- these still produce
+  `glue_catalog.<db>.<table>` (3-part), on purpose. That's the value
+  `engine/strategies/sort.py`/`zorder.py::build_glue_params()` parses via
+  `parse_table_fqn()` to get the `--catalog` Glue job argument right --
+  this path already worked correctly before this session and needed zero
+  changes, confirming the "append glue_catalog when a glue job is
+  triggered" behavior already existed exactly where it should.
+- **`engine/utils/local_db.py::_translate()` -- the load-bearing fix,
+  not a side note**: this SQL-rewriting function isn't just for
+  `ZAMBONI_LOCAL_MODE` demo convenience -- `engine/core/control_plane.py`'s
+  real (`aws_local`/`aws_ec2`) SQLite reads/writes for the 5
+  control-plane tables route through the exact same function (confirmed
+  by reading `control_plane.py`'s own docstring and `read_sql()`/
+  `run_query()` bodies). Changing the metadata-table constants to 2-part
+  without updating this would have broken every control-plane query in
+  *production*, not just local demo mode. Added a new regex pair
+  (quoted `"zamboni_catalog"."table"` and unquoted `zamboni_catalog.table`,
+  same string-literal protection via negative lookbehind the existing
+  `glue_catalog` regexes already used) stripping the new 2-part prefix
+  down to a bare SQLite table name. The old `glue_catalog` regexes were
+  left in place (now effectively dead -- nothing emits that pattern
+  anymore -- but harmless, and the negative-lookbehind protection they
+  share still matters for a stored `table_fqn` value compared inside a
+  `WHERE ... = 'glue_catalog.db.t'` string literal, which must never be
+  stripped).
+- **`sql/*.sql` (11 files) and `.env`/`.env.example`/
+  `.env.aws_local.example`**: same 2-part fix applied for consistency --
+  these are the DDL an operator runs directly against real Athena to set
+  up the schema, and the config values that override `config/settings.py`'s
+  Python defaults at runtime. Found the hard way: this machine's own
+  (gitignored) `.env` still had the old 3-part values, which silently
+  overrode every settings.py default and defeated the fix until caught by
+  the live-data proof returning the pre-fix SQL shape. `sql/
+  create_stream_registry.sql`/`create_nonprod_registry.sql`'s
+  `COMMENT 'Fully qualified: glue_catalog.database.table'` column
+  comments (describing the *business* `table_fqn` convention, not
+  Zamboni's own tables) deliberately left untouched.
+- `scripts/aws_smoke_test.py`: removed the `athena_data_catalog` check
+  and its `get_data_catalog` call entirely (wrong premise, see above);
+  `athena_workgroup` (`get_work_group`) kept -- still a valid, useful,
+  independent check. `athena_select_1` no longer passes `Catalog` in its
+  `QueryExecutionContext`, matching the corrected `athena_client.py`
+  exactly.
+- `docs/setup/aws_local.md`, `docs/deployment/ec2_api_deploy.md`: the
+  sections written for the earlier (wrong) theory corrected in place --
+  not appended around, since those are living operator-facing docs, not
+  a historical record like this file. Both now state the real mechanism
+  and explicitly flag the "check your `.env` for stale 3-part `*_TABLE=`
+  values" gotcha this session hit on itself.
+- No changes to `vacuum.py`'s Iceberg-syntax/gap logic, orchestrator, Gate
+  0-3 logic, or the lock service this correction pass either -- every
+  change is SQL-addressing/config only, verified by the full test suite
+  and a live round-trip against real seeded data both before and after.
