@@ -197,6 +197,8 @@ export function BrowseRegisterTab() {
         <Col span={6}>
           <div style={{ fontSize: 12, color: '#667085', marginBottom: 4 }}>Glue Database</div>
           <Select
+            showSearch
+            optionFilterProp="label"
             style={{ width: '100%' }}
             placeholder="Select a database"
             value={selectedDb}

@@ -67,6 +67,8 @@ export function RegisteredTablesTab() {
         </Col>
         <Col span={6}>
           <Select
+            showSearch
+            optionFilterProp="label"
             style={{ width: '100%' }} allowClear placeholder="Filter by Domain"
             value={domain} onChange={(v) => { setDomain(v); setPage(1); }}
             options={(domains.data ?? []).map((d) => ({ value: d.domain_name, label: d.domain_name }))}
