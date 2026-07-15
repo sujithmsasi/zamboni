@@ -27,6 +27,7 @@ from engine.core import (
     circuit_breaker,
     execution_log,
     health_checker,
+    maintenance_ops,
     notifier,
     registry,
 )
@@ -34,7 +35,7 @@ from engine.core.backpressure import wait_for_capacity
 from engine.core.config import get_hk_config
 from engine.core.conflict_detector import check_with_cache
 from engine.core.execution_log import LogEntry
-from engine.core.execution_log_parquet import ParquetLogBuffer
+from engine.core.execution_log_parquet import AuditBuffer, ParquetLogBuffer
 from engine.core.health_checker import is_healthy
 from engine.core.idempotency import (
     build_execution_id,
@@ -262,6 +263,18 @@ class HKEngine(BaseEngine):
         self._log_buffer = ParquetLogBuffer(run_id=self.run_id, engine="hk")
         log_buffer = self._log_buffer  # local alias for flush call below
 
+        # 2026-07-16 perf fix: write_vacuum_audit() used to issue one
+        # immediate Athena INSERT per table that ran vacuum -- one
+        # fleet-wide buffer here, threaded through every
+        # orchestrator.run_table_maintenance() call in _process_table(),
+        # produces exactly one Athena write for vacuum_audit for the whole
+        # run regardless of fleet size. Flushed (in the background) at the
+        # end of run(), alongside self._log_buffer.
+        self._vacuum_audit_buffer = AuditBuffer(
+            write_many_fn=maintenance_ops.write_vacuum_audit_many,
+            label="hk.vacuum_audit",
+        )
+
         # Gate 0 lock backend -- one per run, stateless factory (each acquire()
         # call produces its own Lock; safe to share across the tier thread pools).
         self._lock_service = LockService()
@@ -343,6 +356,13 @@ class HKEngine(BaseEngine):
             run_id=self.run_id,
         )
 
+        # Non-blocking: vacuum_audit is a reporting/audit trail, not
+        # something any gate or dedupe check reads synchronously, so this
+        # run() call doesn't need to wait on the Athena write. A failed
+        # background flush logs a warning (execution_log_parquet.py) and
+        # never raises here.
+        self._vacuum_audit_buffer.flush_async()
+
         publish_engine_run(
             engine="hk", run_id=self.run_id,
             succeeded=succeeded, failed=failed, skipped=skipped,
@@ -373,7 +393,10 @@ class HKEngine(BaseEngine):
         # fall back to this file's pre-orchestrator per-op flow untouched.
         if ORCHESTRATED_MAINTENANCE:
             from engine.core.orchestrator import run_table_maintenance
-            run_result = run_table_maintenance(fqn, dry_run=table_dry_run, run_id=self.run_id)
+            run_result = run_table_maintenance(
+                fqn, dry_run=table_dry_run, run_id=self.run_id,
+                vacuum_audit_buffer=self._vacuum_audit_buffer,
+            )
             if run_result.status == "SKIPPED":
                 return "skipped"
             return "succeeded" if run_result.status == "SUCCESS" else "failed"
