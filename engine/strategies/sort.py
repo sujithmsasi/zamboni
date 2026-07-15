@@ -36,6 +36,14 @@ def build_glue_params(
 
     Returns:
         Dict of Glue job arguments
+
+    2026-07-15 note: "--catalog" here is deliberately still sourced from
+    table_fqn's own catalog segment (always "glue_catalog" for a registered
+    table) -- this is the ONE place that name should flow through. It's the
+    Spark/Iceberg catalog name the zamboni_compaction Glue job's own Spark
+    session is configured with (spark.sql.catalog.glue_catalog=...), not an
+    Athena Data Catalog concept -- Athena SQL never needs it (see
+    config/settings.py / engine/utils/athena_client.py).
     """
     catalog, database, table = parse_table_fqn(table_fqn)
 

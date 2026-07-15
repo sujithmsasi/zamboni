@@ -19,7 +19,7 @@
 -- ALTER TABLE DROP COLUMN is not safely portable across Iceberg/Athena
 -- versions) but is no longer written by any code path; use
 -- controlm_pipeline_job/controlm_hk_job instead.
-ALTER TABLE glue_catalog.zamboni_catalog.stream_registry ADD COLUMNS (
+ALTER TABLE zamboni_catalog.stream_registry ADD COLUMNS (
     controlm_pipeline_job           STRING,
     controlm_hk_job                 STRING,
     controlm_job_start_time         STRING,
@@ -33,7 +33,7 @@ ALTER TABLE glue_catalog.zamboni_catalog.stream_registry ADD COLUMNS (
 -- sort_order_cols -- a plain comma-separated STRING (see engine/core/
 -- config.py::_to_sql_array()), superseding the old sort_columns
 -- ARRAY<STRING> column (sql/create_hk_config.sql), which no code writes.
-ALTER TABLE glue_catalog.zamboni_catalog.hk_config ADD COLUMNS (
+ALTER TABLE zamboni_catalog.hk_config ADD COLUMNS (
     gate1_enabled                INT,
     gate2_enabled                INT,
     gate3_enabled                INT,
@@ -43,7 +43,7 @@ ALTER TABLE glue_catalog.zamboni_catalog.hk_config ADD COLUMNS (
 
 -- nonprod_registry: fields the code actually uses beyond the original DDL
 -- (sql/create_nonprod_registry.sql).
-ALTER TABLE glue_catalog.zamboni_catalog.nonprod_registry ADD COLUMNS (
+ALTER TABLE zamboni_catalog.nonprod_registry ADD COLUMNS (
     stale_threshold_days  INT,
     is_backup             BOOLEAN,
     owner_email           STRING,

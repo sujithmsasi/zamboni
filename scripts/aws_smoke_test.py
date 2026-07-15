@@ -2,19 +2,37 @@
 Zamboni — AWS Connectivity Smoke Test (Phase 6, closes the backlog item)
 
 Exercises every AWS service Zamboni touches in aws_local/aws_ec2 mode --
-STS identity, Glue catalog read, Athena query, S3 read/write, SNS, the
-DynamoDB lock table, one live Glue GetTableOptimizer call, and the
-SQLite control-plane DB (engine/core/control_plane.py) -- so a demo
-laptop or a freshly-deployed EC2 instance can be checked in one command
-before relying on it. In ZAMBONI_MODE=local every check reports SKIPPED
-(no AWS calls happen at all); this is the expected, not-broken, result
-when running against the local SQLite fallback.
+STS identity, Glue catalog read, the Athena app workgroup's registration, an
+actual Athena query, S3 read/write, SNS, the DynamoDB lock table, one live
+Glue GetTableOptimizer call, and the SQLite control-plane DB
+(engine/core/control_plane.py) -- so a demo laptop or a freshly-deployed EC2
+instance can be checked in one command before relying on it. In
+ZAMBONI_MODE=local every check reports SKIPPED (no AWS calls happen at all);
+this is the expected, not-broken, result when running against the local
+SQLite fallback.
 
 The control-plane check is the one most worth paying attention to on a
 fresh EC2 deploy: in aws_ec2 mode it FAILs if ZAMBONI_CONTROL_PLANE_DB
 resolves inside /opt/zamboni, since CodeDeploy wipes that directory on
 every revision -- catching the exact silent-data-loss trap this check
 was added for, not just "is the file there right now."
+
+athena_workgroup (2026-07-15) confirms ATHENA_WG_APP is actually registered
+and ENABLED in this account/region, independently of running a real query --
+a missing/misnamed workgroup otherwise surfaces as an opaque
+InvalidRequestException on the first real query instead of a clear,
+dedicated diagnostic.
+
+Note: earlier revisions of this script also checked ATHENA_CATALOG
+('glue_catalog') as if it needed to be a registered Athena Data Catalog --
+that assumption was wrong and has been removed (2026-07-15). "glue_catalog"
+is the Spark/Iceberg catalog name used only inside AWS Glue ETL jobs when
+compaction_engine='glue' triggers a real Glue job (see
+engine/strategies/sort.py/zorder.py); it has nothing to do with Athena.
+Every Athena query this app issues (including athena_select_1 below) uses
+Athena's own default catalog with plain database.table addressing -- see
+config/settings.py's Metadata Tables section and
+engine/utils/athena_client.py.
 
 Usage:
     python scripts/aws_smoke_test.py                       # uses get_mode()
@@ -69,6 +87,7 @@ def _run_checks(mode: str, create_lock_table: bool, init_control_plane_db: bool)
         return [
             _skip("sts_identity", reason),
             _skip("glue_list_databases", reason),
+            _skip("athena_workgroup", reason),
             _skip("athena_select_1", reason),
             _skip("s3_put_delete", reason),
             _skip("sns_get_topic_attributes", reason),
@@ -82,6 +101,11 @@ def _run_checks(mode: str, create_lock_table: bool, init_control_plane_db: bool)
 
     results.append(_check_sts(session))
     results.append(_check_glue_databases(session))
+    # Ordered ahead of athena_select_1 deliberately: a missing/misnamed
+    # workgroup gives a crisp, dedicated diagnostic before a raw query
+    # failure buries the same root cause in a generic StateChangeReason
+    # string.
+    results.append(_check_athena_workgroup(session))
     results.append(_check_athena_select_1(session))
     results.append(_check_s3_put_delete(session))
     results.append(_check_sns(session))
@@ -89,6 +113,37 @@ def _run_checks(mode: str, create_lock_table: bool, init_control_plane_db: bool)
     results.append(_check_get_table_optimizer(session))
     results.append(_check_control_plane_db(mode, init_control_plane_db))
     return results
+
+
+def _check_athena_workgroup(session) -> CheckResult:
+    """
+    2026-07-15 fix: confirms the configured app workgroup (ATHENA_WG_APP,
+    default 'zamboni-app') exists and is ENABLED, independent of whether the
+    data catalog is reachable -- so a missing/misnamed workgroup (e.g. an
+    env-specific override like 'zamboni-app-dev' that was never created in
+    this account) surfaces as its own distinct, clearly-named failure instead
+    of being indistinguishable from a catalog problem in a raw query error.
+    """
+    client = session.client("athena", region_name=AWS_REGION)
+    workgroup = ATHENA_WORKGROUPS["app"]
+    try:
+        resp = client.get_work_group(WorkGroup=workgroup)
+        state = resp.get("WorkGroup", {}).get("State", "unknown")
+        if state != "ENABLED":
+            return CheckResult(
+                "athena_workgroup", FAIL,
+                f"workgroup='{workgroup}' exists but State={state} (expected ENABLED)",
+            )
+        return CheckResult("athena_workgroup", PASS, f"workgroup='{workgroup}' State=ENABLED")
+    except client.exceptions.InvalidRequestException as e:
+        return CheckResult(
+            "athena_workgroup", FAIL,
+            f"workgroup '{workgroup}' does not exist in this AWS account/region "
+            f"({AWS_REGION}) -- check ATHENA_WG_APP in .env, or create the "
+            f"workgroup. Detail: {e}",
+        )
+    except Exception as e:
+        return CheckResult("athena_workgroup", FAIL, str(e))
 
 
 def _check_sts(session) -> CheckResult:
@@ -115,6 +170,14 @@ def _check_glue_databases(session) -> CheckResult:
 
 
 def _check_athena_select_1(session) -> CheckResult:
+    """
+    Matches engine/utils/athena_client.py's QueryExecutionContext exactly --
+    Database only, no "Catalog" key (2026-07-15: removed after confirming
+    "glue_catalog" is a Glue-ETL-job-internal Spark catalog name, not an
+    Athena Data Catalog registration -- forcing it here previously failed
+    this check with CATALOG_NOT_FOUND for a reason unrelated to whether the
+    app's real queries would actually work).
+    """
     import time
 
     client = session.client("athena", region_name=AWS_REGION)

@@ -102,7 +102,7 @@ def get_commit_stats(
                 COUNT(*) AS commits_in_window,
                 MIN(made_current_at) AS oldest_in_window,
                 MAX(made_current_at) AS newest_in_window
-            FROM "glue_catalog"."{database}"."{table}$snapshots"
+            FROM "{database}"."{table}$snapshots"
             WHERE made_current_at >= NOW() - INTERVAL '{lookback_days}' DAY
         """
 

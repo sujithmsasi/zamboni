@@ -110,7 +110,7 @@ def capture_state(fqn: str) -> TableState:
     try:
         latest_sql = f"""
             SELECT snapshot_id, committed_at
-            FROM "glue_catalog"."{database}"."{table}$snapshots"
+            FROM "{database}"."{table}$snapshots"
             ORDER BY committed_at DESC
             LIMIT 1
         """
@@ -121,7 +121,7 @@ def capture_state(fqn: str) -> TableState:
 
         count_sql = f"""
             SELECT COUNT(*) AS cnt
-            FROM "glue_catalog"."{database}"."{table}$snapshots"
+            FROM "{database}"."{table}$snapshots"
         """
         count_df = read_sql(count_sql, workgroup="app", database=database)
         if not count_df.empty:

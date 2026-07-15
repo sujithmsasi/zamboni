@@ -86,8 +86,32 @@ if ($Mode -eq "aws_local") {
     aws sts get-caller-identity --profile $ssoProfile 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "No valid SSO session -- running: aws sso login --profile $ssoProfile" -ForegroundColor Yellow
+        Write-Host "(If this profile uses static/session keys or role_arn chaining instead" -ForegroundColor Gray
+        Write-Host " of SSO, this will fail -- run setup_aws_local_profile.ps1 to refresh it.)" -ForegroundColor Gray
         aws sso login --profile $ssoProfile
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Could not establish a valid session for profile '$ssoProfile'. If it uses pasted/static credentials instead of SSO, run setup_aws_local_profile.ps1 to refresh them. Aborting."
+            exit 1
+        }
     }
+
+    # 2026-07-15 fix: same gap as run_aws_local.ps1 -- this launcher never
+    # initialized/migrated the control-plane SQLite DB either, so a fresh or
+    # schema-stale zamboni_control.db (missing a column added by a later
+    # migration, e.g. controlm_job_start_time) was never caught before the
+    # app started against it. Idempotent, safe on every launch.
+    Write-Host "Initializing control-plane DB ($($env:ZAMBONI_CONTROL_PLANE_DB))..." -ForegroundColor Yellow
+    python scripts\init_control_plane_db.py
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "Control-plane DB init/migration failed." -ForegroundColor Red
+        Write-Host "If this is a genuinely first-ever run against an empty account, add" -ForegroundColor Yellow
+        Write-Host "ZAMBONI_CONTROL_PLANE_FIRST_INSTALL=true to .env (not .env.aws_local) and" -ForegroundColor Yellow
+        Write-Host "re-run. Do not use scripts/seed_local_db.py for this -- it seeds a" -ForegroundColor Yellow
+        Write-Host "different file (ZAMBONI_LOCAL_DB, the fabricated demo fixture)." -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "Control-plane DB ready." -ForegroundColor Green
 } else {
     $env:ZAMBONI_MODE       = "local"
     $env:ZAMBONI_LOCAL_MODE = "true"

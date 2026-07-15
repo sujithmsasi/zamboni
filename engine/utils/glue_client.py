@@ -211,7 +211,7 @@ def discover_partition_spec(
         from engine.utils.athena_client import read_sql
         sql = f"""
             SELECT partition
-            FROM "glue_catalog"."{database}"."{table_name}$partitions"
+            FROM "{database}"."{table_name}$partitions"
             LIMIT 1
         """
         df = read_sql(sql, workgroup=workgroup, database=database)

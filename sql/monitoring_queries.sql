@@ -1,7 +1,8 @@
 -- =============================================================================
 -- Zamboni — Monitoring Queries
--- Run in Athena against glue_catalog.zamboni_catalog
--- Used by the Streamlit app and for ad-hoc investigation
+-- Run in Athena against zamboni_catalog (Athena's default catalog -- no
+-- "glue_catalog" prefix needed; see config/settings.py's Metadata Tables note)
+-- Used for ad-hoc investigation
 -- =============================================================================
 
 
@@ -17,7 +18,7 @@ SELECT
     ROUND(
         SUM(CASE WHEN hk_enabled = true THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1
     )                                                                   AS pct_enabled
-FROM glue_catalog.zamboni_catalog.stream_registry
+FROM zamboni_catalog.stream_registry
 GROUP BY domain, layer
 ORDER BY domain, layer;
 
@@ -33,7 +34,7 @@ SELECT
     ROUND(SUM(bytes_rewritten) / 1e9, 2)AS gb_rewritten,
     ROUND(AVG(duration_seconds), 0)     AS avg_duration_sec,
     ROUND(SUM(bytes_scanned) / 1e9, 2)  AS gb_scanned
-FROM glue_catalog.zamboni_catalog.execution_log
+FROM zamboni_catalog.execution_log
 WHERE execution_date >= CURRENT_DATE - INTERVAL '7' DAY
 GROUP BY engine, operation, status
 ORDER BY engine, operation;
@@ -47,8 +48,8 @@ SELECT
     r.layer,
     r.tier,
     MAX(l.completed_at) AS last_successful_hk
-FROM glue_catalog.zamboni_catalog.stream_registry r
-LEFT JOIN glue_catalog.zamboni_catalog.execution_log l
+FROM zamboni_catalog.stream_registry r
+LEFT JOIN zamboni_catalog.execution_log l
     ON  r.table_fqn = l.table_fqn
     AND l.status = 'SUCCESS'
     AND l.execution_date >= CURRENT_DATE - INTERVAL '14' DAY
@@ -67,7 +68,7 @@ SELECT
     COUNT(*)            AS failure_count,
     MAX(started_at)     AS last_failure_at,
     MAX(error_message)  AS last_error
-FROM glue_catalog.zamboni_catalog.execution_log
+FROM zamboni_catalog.execution_log
 WHERE status = 'FAILURE'
   AND execution_date >= CURRENT_DATE - INTERVAL '30' DAY
 GROUP BY table_fqn, domain
@@ -84,7 +85,7 @@ SELECT
     ROUND(SUM(bytes_archived) / 1e9, 2)    AS gb_archived,
     MIN(partition_date)                     AS oldest_partition,
     MAX(partition_date)                     AS newest_partition
-FROM glue_catalog.zamboni_catalog.execution_log
+FROM zamboni_catalog.execution_log
 WHERE engine    = 'archival'
   AND status    = 'SUCCESS'
   AND execution_date >= CURRENT_DATE - INTERVAL '30' DAY
@@ -99,7 +100,7 @@ SELECT
     COUNT(*)                                AS tables,
     ROUND(AVG(days_since_activity), 0)      AS avg_days_inactive,
     ROUND(SUM(bytes_reclaimed) / 1e9, 2)   AS gb_reclaimed
-FROM glue_catalog.zamboni_catalog.nonprod_registry
+FROM zamboni_catalog.nonprod_registry
 GROUP BY environment, lifecycle_state
 ORDER BY environment, lifecycle_state;
 
@@ -110,7 +111,7 @@ SELECT
     DATE_TRUNC('month', execution_date)     AS month,
     ROUND(SUM(bytes_scanned) / 1e9, 2)     AS gb_scanned,
     ROUND(SUM(bytes_scanned) / 1e12 * 5, 4) AS estimated_athena_cost_usd
-FROM glue_catalog.zamboni_catalog.execution_log
+FROM zamboni_catalog.execution_log
 WHERE execution_date >= CURRENT_DATE - INTERVAL '90' DAY
 GROUP BY domain, DATE_TRUNC('month', execution_date)
 ORDER BY month DESC, gb_scanned DESC;
@@ -129,8 +130,8 @@ SELECT
     SUM(CASE WHEN s.layer = 'datalake' THEN 1 ELSE 0 END)          AS datalake_tables,
     SUM(CASE WHEN s.layer = 'base' THEN 1 ELSE 0 END)              AS base_tables,
     SUM(CASE WHEN s.layer = 'master' THEN 1 ELSE 0 END)            AS master_tables
-FROM glue_catalog.zamboni_catalog.domain_registry d
-LEFT JOIN glue_catalog.zamboni_catalog.stream_registry s
+FROM zamboni_catalog.domain_registry d
+LEFT JOIN zamboni_catalog.stream_registry s
     ON d.domain_name = s.domain
 WHERE d.is_active = true
 GROUP BY d.domain_name, d.display_name, d.owner_email, d.archive_enabled, d.hot_retention_days

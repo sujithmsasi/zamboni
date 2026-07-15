@@ -3,7 +3,7 @@
 -- Iceberg table storing all significant user/system actions.
 -- Partitioned by audit_date for efficient time-range queries.
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.audit_log (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.audit_log (
 
     -- ── Identity ──────────────────────────────────────────────────────────────
     audit_id            STRING  COMMENT 'Unique audit event ID (uuid)',

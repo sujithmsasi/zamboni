@@ -16,7 +16,6 @@ import time
 import boto3
 
 from config.settings import (  # noqa: F401
-    ATHENA_CATALOG,
     ATHENA_DATABASE,
     ATHENA_QUERY_TIMEOUT_SECONDS,
     ATHENA_RESULTS_BUCKET,
@@ -134,7 +133,15 @@ def run_query(
         QueryString=sql,
         WorkGroup=wg,
         ResultConfiguration={"OutputLocation": ATHENA_RESULTS_BUCKET},
-        QueryExecutionContext={"Catalog": ATHENA_CATALOG, "Database": db},
+        # 2026-07-15 fix: no "Catalog" key -- "glue_catalog" is not an Athena
+        # Data Catalog registration in this app, it is the Spark/Iceberg
+        # catalog name used only inside Glue ETL jobs (see
+        # config/settings.py's Metadata Tables section). Every query here
+        # runs against Athena's own default catalog with plain
+        # database.table addressing; forcing an explicit, unregistered
+        # Catalog here previously failed every real query with
+        # CATALOG_NOT_FOUND.
+        QueryExecutionContext={"Database": db},
     )
     query_id = response["QueryExecutionId"]
     log.info("athena.submitted", query_id=query_id, workgroup=wg,
@@ -313,7 +320,15 @@ def read_sql(
         QueryString=sql,
         WorkGroup=wg,
         ResultConfiguration={"OutputLocation": ATHENA_RESULTS_BUCKET},
-        QueryExecutionContext={"Catalog": ATHENA_CATALOG, "Database": db},
+        # 2026-07-15 fix: no "Catalog" key -- "glue_catalog" is not an Athena
+        # Data Catalog registration in this app, it is the Spark/Iceberg
+        # catalog name used only inside Glue ETL jobs (see
+        # config/settings.py's Metadata Tables section). Every query here
+        # runs against Athena's own default catalog with plain
+        # database.table addressing; forcing an explicit, unregistered
+        # Catalog here previously failed every real query with
+        # CATALOG_NOT_FOUND.
+        QueryExecutionContext={"Database": db},
     )
     query_id = response["QueryExecutionId"]
 

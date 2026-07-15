@@ -316,7 +316,7 @@ def _preflight_sanity(table_fqn: str, floor_hours: float) -> dict:
             COUNT(*) AS total_snapshots,
             SUM(CASE WHEN committed_at < NOW() - INTERVAL '{int(floor_hours)}' HOUR
                      THEN 1 ELSE 0 END) AS would_expire
-        FROM "glue_catalog"."{database}"."{table}$snapshots"
+        FROM "{database}"."{table}$snapshots"
     """
     try:
         df = read_sql(sql, workgroup="app", database=database)
@@ -353,7 +353,7 @@ def _files_metrics(table_fqn: str, required: bool = False) -> dict:
     try:
         sql = f"""
             SELECT COUNT(*) AS total_files, SUM(file_size_in_bytes) AS total_bytes
-            FROM "glue_catalog"."{database}"."{table}$files"
+            FROM "{database}"."{table}$files"
         """
         df = read_sql(sql, workgroup="app", database=database)
         if not df.empty and df.iloc[0]["total_files"] is not None:

@@ -6,7 +6,7 @@
 -- Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.home_snapshot (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.home_snapshot (
 
     snapshot_date           DATE        COMMENT 'Date this snapshot covers',
     generated_at            TIMESTAMP   COMMENT 'When this snapshot was generated',
