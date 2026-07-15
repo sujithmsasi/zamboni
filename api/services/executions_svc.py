@@ -8,6 +8,8 @@ Lifts query logic from app/pages/7_Execution_Log.py (list/drill-in),
 """
 from __future__ import annotations
 
+import pandas as pd
+
 from config.settings import (
     EXECUTION_LOG_TABLE,
     HK_CONFIG_TABLE,
@@ -21,8 +23,11 @@ from engine.core.cost_explorer import is_enabled as cost_explorer_enabled
 from engine.core.governance import fleet_conflict_summary
 from engine.core.window_evaluator import EXECUTE, evaluate
 from engine.strategies.binpack import build_optimize_sql
-from engine.utils.athena_client import read_sql
+from engine.utils.athena_client import AthenaQueryFailed, read_sql
+from engine.utils.logger import get_logger
 from engine.utils.partition_utils import build_hot_partition_filter
+
+log = get_logger(__name__)
 
 
 def _esc(value: str) -> str:
@@ -46,21 +51,36 @@ def list_executions(
     if integrity_status:
         conditions.append(f"integrity_status = '{_esc(integrity_status)}'")
     if from_date:
-        conditions.append(f"execution_date >= '{_esc(from_date)}'")
+        # execution_date is a DATE column -- Athena/Trino's engine does not
+        # implicitly coerce a VARCHAR literal to DATE for comparison
+        # operators (TYPE_MISMATCH). DATE '...' is the ANSI literal form;
+        # local_db.py::_translate() already has a dedicated rewrite for it
+        # (-> a plain string literal SQLite compares fine), so this is safe
+        # in local mode too.
+        conditions.append(f"execution_date >= DATE '{_esc(from_date)}'")
     if to_date:
-        conditions.append(f"execution_date <= '{_esc(to_date)}'")
+        conditions.append(f"execution_date <= DATE '{_esc(to_date)}'")
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     total_df = read_sql(f"SELECT COUNT(*) AS cnt FROM {EXECUTION_LOG_TABLE} {where}", workgroup="app")
     total = int(total_df.iloc[0]["cnt"]) if not total_df.empty else 0
 
-    offset = max(page - 1, 0) * size
+    # Athena's engine has no OFFSET support -- windowed pagination via
+    # ROW_NUMBER() is the standard workaround. Works unchanged in SQLite/
+    # local mode too (window functions are native there).
+    start_rn = max(page - 1, 0) * size + 1
+    end_rn = start_rn + size - 1
     sql = f"""
-        SELECT * FROM {EXECUTION_LOG_TABLE} {where}
-        ORDER BY started_at DESC
-        LIMIT {int(size)} OFFSET {int(offset)}
+        SELECT * FROM (
+            SELECT *, ROW_NUMBER() OVER (ORDER BY started_at DESC) AS rn
+            FROM {EXECUTION_LOG_TABLE} {where}
+        ) ranked
+        WHERE rn BETWEEN {start_rn} AND {end_rn}
+        ORDER BY rn
     """
     df = read_sql(sql, workgroup="app")
+    if "rn" in df.columns:
+        df = df.drop(columns=["rn"])
     return df.to_dict(orient="records"), total
 
 
@@ -198,6 +218,25 @@ def health_kpis(env: str = "prod", domain: str | None = None) -> dict:
 # contracts.md §6 documents GET /api/health/kpis as serving both Home and the
 # Health Dashboard from one shared source of truth.
 
+def _safe_vacuum_read(sql: str) -> pd.DataFrame:
+    """
+    vacuum_audit may not exist yet -- a fresh aws_local/aws_ec2 deployment
+    where sql/create_vacuum_audit.sql hasn't been run against real Athena
+    yet, or a local/dev environment without it seeded. A missing table
+    must not fail the whole GET /api/health/kpis response -- every caller
+    here treats "no vacuum_audit data" the same as "nothing reclaimed
+    yet" rather than a hard error.
+    """
+    try:
+        return read_sql(sql, workgroup="app")
+    except AthenaQueryFailed as e:
+        log.info("executions_svc.vacuum_audit_query_failed", error=str(e))
+        return pd.DataFrame()
+    except Exception as e:
+        log.warning("executions_svc.vacuum_audit_query_failed", error=str(e))
+        return pd.DataFrame()
+
+
 def _reclaimed_storage_trend(days: int = 30) -> list[dict]:
     """
     Daily GB genuinely freed (not just rewritten): vacuum's orphan/snapshot
@@ -220,7 +259,7 @@ def _reclaimed_storage_trend(days: int = 30) -> list[dict]:
           AND execution_date >= CURRENT_DATE - INTERVAL '{int(days)}' DAY
         GROUP BY execution_date
     """
-    vacuum_df = read_sql(vacuum_sql, workgroup="app")
+    vacuum_df = _safe_vacuum_read(vacuum_sql)
     archive_df = read_sql(archive_sql, workgroup="app")
 
     by_day: dict[str, dict] = {}
@@ -252,7 +291,7 @@ def _top_tables_by_reclaim(days: int = 30, limit: int = 10) -> list[dict]:
           AND execution_date >= CURRENT_DATE - INTERVAL '{int(days)}' DAY
         GROUP BY table_fqn, domain
     """
-    vacuum_df = read_sql(vacuum_sql, workgroup="app")
+    vacuum_df = _safe_vacuum_read(vacuum_sql)
     archive_df = read_sql(archive_sql, workgroup="app")
 
     by_table: dict[str, dict] = {}
@@ -290,7 +329,7 @@ def _storage_savings_estimate() -> dict:
     """
     vacuum_sql = f"SELECT SUM(bytes_reclaimed) AS b FROM {VACUUM_AUDIT_TABLE} WHERE aborted = false AND dry_run = false"
     archive_sql = f"SELECT SUM(bytes_archived) AS b FROM {EXECUTION_LOG_TABLE} WHERE engine = 'archival' AND status = 'SUCCESS'"
-    vacuum_df = read_sql(vacuum_sql, workgroup="app")
+    vacuum_df = _safe_vacuum_read(vacuum_sql)
     archive_df = read_sql(archive_sql, workgroup="app")
     vacuum_bytes = int((vacuum_df.iloc[0]["b"] or 0) if not vacuum_df.empty else 0)
     archive_bytes = int((archive_df.iloc[0]["b"] or 0) if not archive_df.empty else 0)
@@ -312,19 +351,31 @@ def _fleet_health_summary() -> dict:
     NEEDS_ATTENTION: at least one failure in 7d but otherwise fine.
     HEALTHY: everything else.
     """
-    sql = f"""
-        SELECT
-            r.table_fqn, r.domain, r.layer, r.tier,
-            r.aws_opt_compaction, r.aws_opt_retention, r.aws_opt_orphan,
-            SUM(CASE WHEN l.status = 'FAILURE' AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS failures_7d,
-            SUM(CASE WHEN l.integrity_status = 'FAILED' AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS integrity_failures_7d,
-            SUM(CASE WHEN l.status = 'SUCCESS' AND l.execution_date >= CURRENT_DATE - INTERVAL '14' DAY THEN 1 ELSE 0 END) AS housekept_recently
-        FROM {STREAM_REGISTRY_TABLE} r
-        LEFT JOIN {EXECUTION_LOG_TABLE} l ON r.table_fqn = l.table_fqn
-        WHERE r.hk_enabled = true AND r.table_format = 'iceberg' AND r.environment = 'prod'
-        GROUP BY r.table_fqn, r.domain, r.layer, r.tier, r.aws_opt_compaction, r.aws_opt_retention, r.aws_opt_orphan
-    """
-    df = read_sql(sql, workgroup="app")
+    def _sql(include_opt_cols: bool) -> str:
+        # aws_opt_* (sql/alter_safety_core.sql) may not have been applied
+        # yet on a fresh deployment -- engine/core/governance.py's own
+        # queries against these same columns already degrade gracefully
+        # on a missing-column failure; this mirrors that here since it's
+        # the one other call site selecting them directly.
+        opt_select = "r.aws_opt_compaction, r.aws_opt_retention, r.aws_opt_orphan," if include_opt_cols else ""
+        opt_group = ", r.aws_opt_compaction, r.aws_opt_retention, r.aws_opt_orphan" if include_opt_cols else ""
+        return f"""
+            SELECT
+                r.table_fqn, r.domain, r.layer, r.tier, {opt_select}
+                SUM(CASE WHEN l.status = 'FAILURE' AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS failures_7d,
+                SUM(CASE WHEN l.integrity_status = 'FAILED' AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS integrity_failures_7d,
+                SUM(CASE WHEN l.status = 'SUCCESS' AND l.execution_date >= CURRENT_DATE - INTERVAL '14' DAY THEN 1 ELSE 0 END) AS housekept_recently
+            FROM {STREAM_REGISTRY_TABLE} r
+            LEFT JOIN {EXECUTION_LOG_TABLE} l ON r.table_fqn = l.table_fqn
+            WHERE r.hk_enabled = true AND r.table_format = 'iceberg' AND r.environment = 'prod'
+            GROUP BY r.table_fqn, r.domain, r.layer, r.tier{opt_group}
+        """
+
+    try:
+        df = read_sql(_sql(True), workgroup="app")
+    except Exception as e:
+        log.warning("executions_svc.fleet_health_aws_opt_columns_missing", error=str(e))
+        df = read_sql(_sql(False), workgroup="app")
 
     healthy = needs_attention = at_risk = 0
     flagged: list[dict] = []
