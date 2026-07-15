@@ -202,7 +202,7 @@ export function BrowseRegisterTab() {
             style={{ width: '100%' }}
             placeholder="Select a database"
             value={selectedDb}
-            onChange={(v) => { setSelectedDb(v); setSelectedFqns([]); }}
+            onChange={(v) => { setSelectedDb(v); setSelectedFqns([]); setResults(null); }}
             options={[
               { value: 'ALL', label: '-- All Databases --' },
               ...(databases.data ?? []).map((d) => ({ value: d, label: d })),
@@ -253,7 +253,19 @@ export function BrowseRegisterTab() {
             columns={columns}
             dataSource={tables}
             rowKey="table_fqn"
-            rowSelection={{ selectedRowKeys: selectedFqns, onChange: (keys) => setSelectedFqns(keys as string[]) }}
+            rowSelection={{
+              selectedRowKeys: selectedFqns,
+              onChange: (keys) => {
+                setSelectedFqns(keys as string[]);
+                // A fresh selection means the prior batch's results are no
+                // longer relevant context -- without this, the "Registration
+                // results" panel below stays visible indefinitely (until the
+                // *next* submit clears it at handleSubmit()'s own
+                // setResults(null)), reading as if the old success/error
+                // tags still apply to whatever is newly selected.
+                setResults(null);
+              },
+            }}
             pagination={tables.length > 15 ? { pageSize: 15 } : false}
             style={{ marginBottom: 16 }}
           />
