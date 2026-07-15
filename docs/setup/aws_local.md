@@ -144,14 +144,38 @@ python scripts/aws_smoke_test.py --create-lock-table
 ```
 
 Every check should PASS (not SKIPPED — SKIPPED means it's actually still
-running in local mode; check your env vars). Note this specifically forces
-the profile via `get_boto3_session()` to validate it — passing proves the
-*profile* itself works, not that the rest of the app (Athena/Glue/S3/SNS
-calls, which build plain `boto3` clients relying on the ambient default
-credential chain rather than this profile explicitly) is actually using it.
-`run_aws_local.ps1`/`run_ui_dev.ps1` close that gap by also exporting
-`AWS_PROFILE` (not just `AWS_SSO_PROFILE`) into the process environment —
-if you launch the app any other way, set `$env:AWS_PROFILE` yourself first.
+running in local mode; check your env vars), and `control_plane_db` will
+FAIL on a genuinely first-ever run against an empty account — see the
+`ZAMBONI_CONTROL_PLANE_FIRST_INSTALL` note below before re-running with
+`--init-control-plane-db`.
+
+2026-07-15 fix: every AWS-touching module (`athena_client.py`,
+`glue_client.py`, `s3_client.py`, `notifier.py`, `metrics.py`,
+`archival.py`, `compaction.py`, `cost_explorer.py`,
+`execution_log_parquet.py`, `health_check.py`, `backpressure.py`, plus the
+Stale Resources API's S3 scan) now routes through `get_boto3_session()`
+explicitly, instead of a bare `boto3.client(...)` relying on the ambient
+default credential chain — found via a real run where
+`glue_get_table_optimizer` failed with `UnrecognizedClientException` while
+every other check in the same session passed. So a passing smoke test now
+is much stronger evidence the rest of the app will actually use the right
+profile too. `run_aws_local.ps1`/`run_ui_dev.ps1` still export
+`AWS_PROFILE` as well, and it's still worth launching that way (or setting
+`$env:AWS_PROFILE` yourself first) as defense in depth for any
+third-party-library call this codebase's own wrappers don't sit in front
+of — but it's no longer the load-bearing fix it used to be for code that
+goes through these modules.
+
+**First-ever run against a genuinely empty account**: `--init-control-plane-db`
+will refuse to proceed with `ControlPlaneEmptyAndNoBackupError` unless you
+add `ZAMBONI_CONTROL_PLANE_FIRST_INSTALL=true` to `.env` first (not just
+`.env.aws_local` — `config/settings.py` loads `.env` via `dotenv`, so that's
+the file that actually needs it if you ever run a script directly rather
+than through `run_aws_local.ps1`). This is deliberate — it's the same
+safety gate that stops a real EC2 instance replacement from silently
+starting with a blank production control plane — but it means a fresh
+account's first `--init-control-plane-db` run needs that flag set, not just
+the flag alone.
 
 ## Troubleshooting
 
