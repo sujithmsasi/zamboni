@@ -40,10 +40,10 @@ no profile, no infra. Start here if you're new to the repo.
 
 Runs from your own machine but talks to a real AWS account via a named
 profile — no EC2 instance needed. Requires Zamboni's AWS infra to already
-exist in the target account (see `docs/ORG_DROP.md` if it doesn't yet).
-The profile itself is set up interactively — `run_aws_local.ps1` now
-detects a missing profile and offers to create one for you on the spot
-(paste keys from the AWS Console, or chain to an existing profile).
+exist in the target account (see `docs/ORG_DROP.md` if it doesn't yet). Six
+steps end to end: AWS profile → both env files (`.env.aws_local` and
+`.env` — yes, both matter, the guide explains why) → dependencies → smoke
+test (with a description of every check) → start the app.
 
 **→ Full guide: [`docs/setup/aws_local.md`](setup/aws_local.md)**
 
@@ -70,7 +70,7 @@ reference, not just a first-deploy shortcut)
 | Doc | What it covers |
 |---|---|
 | `docs/setup/local.md` | Local mode: quick start, dev mode, reset/troubleshooting |
-| `docs/setup/aws_local.md` | aws_local mode: profile bootstrap (interactive, no manual AWS CLI config needed), running, verifying, troubleshooting |
+| `docs/setup/aws_local.md` | aws_local mode: profile → both env files → dependencies → smoke test (per-check descriptions) → start app, troubleshooting |
 | `docs/setup/aws_ec2.md` | aws_ec2 mode: shortest path to a first deployed instance |
 | `docs/deployment/data_operations_guide.md` | End-to-end: infra deploy → EventBridge engine scheduling → registering domains/tables → policy config → dry-run validation → going live → monitoring → incident response |
 | `docs/deployment/ec2_api_deploy.md` | Full EC2/CFN deploy detail, IAM specifics, the control plane's systemd services |
