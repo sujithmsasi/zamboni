@@ -12,7 +12,7 @@
 -- Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.controlm_jobs (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.controlm_jobs (
 
     job_name              STRING    COMMENT 'Control-M job name, unique',
     job_type               STRING    COMMENT 'AWS service type for the Gate 1 upstream completion check',

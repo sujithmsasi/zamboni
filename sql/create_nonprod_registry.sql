@@ -4,7 +4,7 @@
 -- Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.nonprod_registry (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.nonprod_registry (
 
     -- ── Identity ──────────────────────────────────────────────────────────────
     table_fqn           STRING    COMMENT 'Fully qualified: glue_catalog.database.table',

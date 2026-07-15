@@ -5,7 +5,7 @@
 -- Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.execution_log (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.execution_log (
 
     -- ── Run Identity ──────────────────────────────────────────────────────────
     execution_id        STRING    COMMENT 'UUID — unique per operation',

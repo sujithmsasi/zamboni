@@ -51,34 +51,45 @@ ATHENA_WORKGROUPS = {
 }
 
 # ── Metadata Tables ───────────────────────────────────────────────────────────
+# 2026-07-15 fix: these are Zamboni's own metadata tables, always addressed
+# via Athena's default catalog -- 2-part (database.table), never catalog-
+# qualified. "glue_catalog" is not an Athena Data Catalog concept at all in
+# this app; it is the Spark/Iceberg catalog name used ONLY inside AWS Glue
+# ETL jobs when compaction_engine='glue' triggers a real Glue job (see
+# engine/strategies/sort.py / zorder.py::build_glue_params(), which derive
+# it from a registered table's own table_fqn, untouched by this change).
+# Every regular Athena query — including reads/writes against these
+# metadata tables via engine/core/control_plane.py — uses plain
+# database.table addressing; see engine/utils/athena_client.py and
+# engine/utils/local_db.py::_translate() for the corresponding fix.
 DOMAIN_REGISTRY_TABLE  = os.getenv(
     "DOMAIN_REGISTRY_TABLE",
-    "glue_catalog.zamboni_catalog.domain_registry"
+    "zamboni_catalog.domain_registry"
 )
 STREAM_REGISTRY_TABLE  = os.getenv(
     "STREAM_REGISTRY_TABLE",
-    "glue_catalog.zamboni_catalog.stream_registry"
+    "zamboni_catalog.stream_registry"
 )
 HK_CONFIG_TABLE        = os.getenv(
     "HK_CONFIG_TABLE",
-    "glue_catalog.zamboni_catalog.hk_config"
+    "zamboni_catalog.hk_config"
 )
 EXECUTION_LOG_TABLE    = os.getenv(
     "EXECUTION_LOG_TABLE",
-    "glue_catalog.zamboni_catalog.execution_log"
+    "zamboni_catalog.execution_log"
 )
 HOME_SNAPSHOT_TABLE = os.getenv(
     "ZAMBONI_HOME_SNAPSHOT_TABLE",
-    "glue_catalog.zamboni_catalog.home_snapshot"
+    "zamboni_catalog.home_snapshot"
 )
 NONPROD_REGISTRY_TABLE = os.getenv(
     "NONPROD_REGISTRY_TABLE",
-    "glue_catalog.zamboni_catalog.nonprod_registry"
+    "zamboni_catalog.nonprod_registry"
 )
-AUDIT_LOG_TABLE = os.getenv("AUDIT_LOG_TABLE", "glue_catalog.zamboni_catalog.audit_log")
+AUDIT_LOG_TABLE = os.getenv("AUDIT_LOG_TABLE", "zamboni_catalog.audit_log")
 CONTROLM_JOBS_TABLE = os.getenv(
     "CONTROLM_JOBS_TABLE",
-    "glue_catalog.zamboni_catalog.controlm_jobs"
+    "zamboni_catalog.controlm_jobs"
 )
 
 # ── S3 ────────────────────────────────────────────────────────────────────────
@@ -245,7 +256,7 @@ DDB_LOCK_TABLE               = os.getenv("DDB_LOCK_TABLE", "zamboni_maintenance_
 ORCHESTRATED_MAINTENANCE = os.getenv("ORCHESTRATED_MAINTENANCE", "true").lower() == "true"
 VACUUM_AUDIT_TABLE = os.getenv(
     "VACUUM_AUDIT_TABLE",
-    "glue_catalog.zamboni_catalog.vacuum_audit"
+    "zamboni_catalog.vacuum_audit"
 )
 
 
@@ -282,7 +293,9 @@ EXECUTION_LOG_MODE = os.getenv("EXECUTION_LOG_MODE", "auto").lower()
 # ── CloudTrail (Lifecycle Engine activity signals) ────────────────────────────
 # Set CLOUDTRAIL_TABLE if you have CloudTrail logs in Athena.
 # If not set, activity signals fall back to Glue table CreateTime only.
-# Format: glue_catalog.database.table
+# Format: database.table (2026-07-15: no catalog prefix -- see the Metadata
+# Tables section above for why. Athena resolves this against its default
+# catalog, same as every other query this app issues.)
 CLOUDTRAIL_TABLE     = os.getenv("CLOUDTRAIL_TABLE", "")
 CLOUDTRAIL_LOOKBACK_DAYS = int(os.getenv("CLOUDTRAIL_LOOKBACK_DAYS", "90"))
 

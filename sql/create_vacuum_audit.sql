@@ -4,7 +4,7 @@
 -- audit trail for the metadata-loss incident fix. Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.vacuum_audit (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.vacuum_audit (
 
     run_id                 STRING  COMMENT 'UUID — groups all operations in one engine invocation',
     table_fqn               STRING  COMMENT 'Fully qualified table name',

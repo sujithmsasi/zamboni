@@ -338,6 +338,28 @@ def _translate(sql: str) -> str:
         r'\2',
         sql,
     )
+    # 2026-07-15 fix: Zamboni's own metadata tables (config/settings.py's
+    # DOMAIN_REGISTRY_TABLE/STREAM_REGISTRY_TABLE/etc.) dropped their
+    # "glue_catalog." prefix and are now plain 2-part "zamboni_catalog.<table>"
+    # -- matching what Athena actually expects (see athena_client.py). This
+    # is load-bearing here, not cosmetic: engine/core/control_plane.py's
+    # real (non-local-mode) SQLite reads/writes for stream_registry/
+    # hk_config/domain_registry/nonprod_registry/controlm_jobs route through
+    # this same _translate(), so without this, every control-plane query
+    # would try `FROM zamboni_catalog.stream_registry` against SQLite (which
+    # has no such schema) instead of the bare table name it actually needs.
+    # Quoted form first ("zamboni_catalog"."table"), same protected-string-
+    # literal reasoning as the glue_catalog regexes above.
+    sql = re.sub(
+        r'"zamboni_catalog"\."([\w]+)"',
+        r'\1',
+        sql,
+    )
+    sql = re.sub(
+        r"(?<!')\bzamboni_catalog\.([\w]+)(?!')",
+        r'\1',
+        sql,
+    )
     # INTERVAL syntax: INTERVAL '7' DAY -> 7 (SQLite uses numeric offsets)
     sql = re.sub(
         r"INTERVAL\s+'(\d+)'\s+DAY",

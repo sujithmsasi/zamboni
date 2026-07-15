@@ -135,7 +135,7 @@ def _check_snapshots(
             COUNT(CASE WHEN made_current_at >= NOW()
                             - INTERVAL '7' DAY
                        THEN 1 END)                                     AS commits_7d
-        FROM "glue_catalog"."{database}"."{table}$snapshots"
+        FROM "{database}"."{table}$snapshots"
     """
 
     df = read_sql(sql, workgroup=workgroup, database=database)
@@ -199,7 +199,7 @@ def _check_files(
             SUM(CASE WHEN file_size_in_bytes < 64 * 1024 * 1024
                      THEN 1 ELSE 0 END)             AS small_file_count,
             ROUND(SUM(file_size_in_bytes) / 1e9, 3) AS total_size_gb
-        FROM "glue_catalog"."{database}"."{table}$files"
+        FROM "{database}"."{table}$files"
     """
 
     df = read_sql(sql, workgroup=workgroup, database=database)
@@ -314,7 +314,7 @@ def get_snapshot_count(table_fqn: str, workgroup: str = "standard") -> int:
     _, database, table = parse_table_fqn(table_fqn)
     sql = f"""
         SELECT COUNT(*) AS cnt
-        FROM "glue_catalog"."{database}"."{table}$snapshots"
+        FROM "{database}"."{table}$snapshots"
     """
     df = read_sql(sql, workgroup=workgroup, database=database)
     if df.empty:

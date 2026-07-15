@@ -53,7 +53,7 @@ Write-Host ""
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host " Zamboni -- AWS Local Demo Mode" -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
-Write-Host "[1/4] Loading $envFile ..." -ForegroundColor Yellow
+Write-Host "[1/5] Loading $envFile ..." -ForegroundColor Yellow
 Import-DotEnvFile $envFile
 $env:PYTHONPATH = $root
 Write-Host "      Loaded. ZAMBONI_MODE=$($env:ZAMBONI_MODE)" -ForegroundColor Green
@@ -85,7 +85,7 @@ Write-Host ""
 # AWS console, or chain to an existing profile), then reloads
 # .env.aws_local afterward since that script may have written a different
 # profile name into it.
-Write-Host "[2/4] Checking AWS profile '$ssoProfile'..." -ForegroundColor Yellow
+Write-Host "[2/5] Checking AWS profile '$ssoProfile'..." -ForegroundColor Yellow
 if (-not (Test-AwsProfileExists $ssoProfile)) {
     Write-Host "      Profile '$ssoProfile' does not exist on this machine yet." -ForegroundColor Red
     Write-Host "      This is expected on a fresh machine/org account -- Zamboni has no" -ForegroundColor Yellow
@@ -139,10 +139,36 @@ if ($LASTEXITCODE -ne 0) {
 $env:AWS_SSO_PROFILE = $ssoProfile
 $env:AWS_PROFILE     = $ssoProfile
 
-# ── 3. Build the React UI if it hasn't been built yet ─────────────────────────
+# ── 3. Initialize/migrate the control-plane SQLite DB ──────────────────────────
+# 2026-07-15 fix: this step was missing entirely -- the CodeDeploy path
+# (deploy/scripts/after_install.sh) always runs scripts/init_control_plane_db.py
+# before starting the app, but neither laptop launcher did, so a fresh (or
+# schema-stale) zamboni_control.db was never created/migrated here. That's
+# the real root cause behind two symptoms that look unrelated at first: an
+# "empty control plane, no S3 backup available" refusal-to-start, and
+# `stream_registry` missing a column (e.g. controlm_job_start_time) added by
+# a migration that only ever runs inside this script. It's idempotent and
+# safe to run on every launch -- CREATE TABLE IF NOT EXISTS + a guarded ALTER
+# TABLE loop, both no-ops once already applied.
+Write-Host "[3/5] Initializing control-plane DB ($($env:ZAMBONI_CONTROL_PLANE_DB))..." -ForegroundColor Yellow
+python scripts\init_control_plane_db.py
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "      Control-plane DB init/migration failed." -ForegroundColor Red
+    Write-Host "      If this is a genuinely first-ever run against an empty account (no S3" -ForegroundColor Yellow
+    Write-Host "      backup exists yet), add ZAMBONI_CONTROL_PLANE_FIRST_INSTALL=true to .env" -ForegroundColor Yellow
+    Write-Host "      (not .env.aws_local -- config/settings.py loads .env) and re-run." -ForegroundColor Yellow
+    Write-Host "      Do NOT run scripts/seed_local_db.py against this -- that script seeds" -ForegroundColor Yellow
+    Write-Host "      ZAMBONI_LOCAL_DB (the fabricated local/demo fixture), a different file" -ForegroundColor Yellow
+    Write-Host "      entirely from ZAMBONI_CONTROL_PLANE_DB, and will not fix this." -ForegroundColor Yellow
+    exit 1
+}
+Write-Host "      Control-plane DB ready." -ForegroundColor Green
+
+# ── 4. Build the React UI if it hasn't been built yet ──────────────────────────
 $uiDistIndex = Join-Path $root "ui\dist\index.html"
 if (-not (Test-Path $uiDistIndex)) {
-    Write-Host "[3/4] ui\dist not found -- building React UI..." -ForegroundColor Yellow
+    Write-Host "[4/5] ui\dist not found -- building React UI..." -ForegroundColor Yellow
     Push-Location (Join-Path $root "ui")
     npm ci
     if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Error "npm ci failed."; exit 1 }
@@ -151,11 +177,11 @@ if (-not (Test-Path $uiDistIndex)) {
     Pop-Location
     Write-Host "      Build complete." -ForegroundColor Green
 } else {
-    Write-Host "[3/4] ui\dist already built -- skipping." -ForegroundColor Gray
+    Write-Host "[4/5] ui\dist already built -- skipping." -ForegroundColor Gray
 }
 
-# ── 4. Start uvicorn (serves API + built UI on :8000) ─────────────────────────
-Write-Host "[4/4] Starting Zamboni API (mode=$($env:ZAMBONI_MODE)) on http://localhost:8000 ..." -ForegroundColor Green
+# ── 5. Start uvicorn (serves API + built UI on :8000) ──────────────────────────
+Write-Host "[5/5] Starting Zamboni API (mode=$($env:ZAMBONI_MODE)) on http://localhost:8000 ..." -ForegroundColor Green
 Write-Host ""
 Write-Host "Press Ctrl+C to stop." -ForegroundColor Gray
 Write-Host ""

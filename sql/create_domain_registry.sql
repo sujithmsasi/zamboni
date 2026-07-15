@@ -5,7 +5,7 @@
 -- Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.domain_registry (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.domain_registry (
 
     domain_name         STRING      COMMENT 'Domain identifier — lowercase, no spaces (e.g. finance, ers)',
     display_name        STRING      COMMENT 'Human-readable name (e.g. Finance, ERS)',
@@ -52,7 +52,7 @@ TBLPROPERTIES (
 -- Run after CREATE TABLE
 -- =============================================================================
 
-INSERT INTO glue_catalog.zamboni_catalog.domain_registry VALUES
+INSERT INTO zamboni_catalog.domain_registry VALUES
     ('ers',         'ERS',          'Enterprise Reporting System',          NULL, NULL, NULL, true,  7,  365, 60, 120, true, 'prod', NOW(), 'system', NOW(), 'Seeded on initial deploy'),
     ('finance',     'Finance',      'Finance and payments domain',          NULL, NULL, NULL, true,  30, 365, 60, 120, true, 'prod', NOW(), 'system', NOW(), 'Seeded on initial deploy'),
     ('financials',  'Financials',   'Financial reporting domain',           NULL, NULL, NULL, true,  30, 365, 60, 120, true, 'prod', NOW(), 'system', NOW(), 'Seeded on initial deploy'),

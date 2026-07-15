@@ -349,6 +349,33 @@ which is the exact silent-data-loss trap described above. A PASS here
 means the control-plane DB is both reachable and correctly placed outside
 CodeDeploy's wipe zone, not just "the file happens to exist right now."
 
+**2026-07-15**: `athena_workgroup` confirms `ATHENA_WG_APP` is actually
+registered and `ENABLED` in this account/region, independently of running a
+real query — worth reading closely on a new AWS account/region (org-drop,
+new env).
+
+**2026-07-15, real bug found and fixed the same day**: every Athena call
+this app made was forcing an explicit `Catalog=ATHENA_CATALOG`
+(`glue_catalog`) into its `QueryExecutionContext`, and several SQL strings
+embedded a literal `glue_catalog.` prefix — on the (wrong) assumption that
+`glue_catalog` needed to be a registered Athena Data Catalog. It doesn't:
+`glue_catalog` is the Spark/Iceberg catalog name used only *inside* AWS
+Glue ETL jobs (`compaction_engine='glue'`, see
+`engine/strategies/sort.py`/`zorder.py`), unrelated to Athena. This forced
+every real query into `CATALOG_NOT_FOUND` on any account without that
+exact (unnecessary) registration — `GET /api/executions`,
+`GET /api/health/kpis`, `GET /api/glue/tables/{db}`'s registered-table join
+against `stream_registry`, and `POST /api/tables/register` if it ever hit
+the Athena-backed path. Fixed by removing `Catalog` from
+`engine/utils/athena_client.py`'s `QueryExecutionContext` entirely and
+changing every Zamboni metadata-table constant in `config/settings.py`
+(and `.env`/`.env.example`) to plain 2-part `zamboni_catalog.<table>`
+addressing — the same addressing every Athena query in this app should
+have used from the start. If you're running against an older deploy,
+double-check your instance's real `.env` — a stale `*_TABLE=glue_catalog.
+zamboni_catalog.<table>` value there overrides the fixed code default and
+keeps the bug alive even after a redeploy.
+
 ---
 
 ## Logging (added 2026-07-12, corrected same day after review)

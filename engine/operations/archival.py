@@ -269,7 +269,7 @@ def _pre_validate(
                 SUM(CASE WHEN {partition_col} IS NULL THEN 1 ELSE 0 END)
                 * 100.0 / COUNT(*), 2
             )                                              AS null_pct
-        FROM glue_catalog.{database}.{table}
+        FROM {database}.{table}
         WHERE {partition_col} = DATE '{partition_date.isoformat()}'
     """
 
@@ -341,7 +341,7 @@ def _pre_delete_check(
     _, database, table = parse_table_fqn(table_fqn)
     sql = f"""
         SELECT COUNT(*) AS row_count
-        FROM glue_catalog.{database}.{table}
+        FROM {database}.{table}
         WHERE {partition_col} = DATE '{partition_date.isoformat()}'
     """
     df = read_sql(sql, workgroup=workgroup)
@@ -382,7 +382,7 @@ def _export_partition(
 
     sql = f"""
         SELECT *
-        FROM glue_catalog.{database}.{table}
+        FROM {database}.{table}
         WHERE {partition_col} = DATE '{partition_date.isoformat()}'
     """
 
@@ -437,7 +437,7 @@ def _delete_partition(
     _, database, table = parse_table_fqn(table_fqn)
 
     sql = f"""
-        DELETE FROM glue_catalog.{database}.{table}
+        DELETE FROM {database}.{table}
         WHERE {partition_col} = DATE '{partition_date.isoformat()}'
     """
     log.info("archival.deleting_partition", table_fqn=table_fqn,
@@ -510,7 +510,7 @@ def discover_cold_partitions(
     _, database, table = parse_table_fqn(table_fqn)
     sql = f"""
         SELECT DISTINCT {partition_col} AS partition_date
-        FROM glue_catalog.{database}.{table}
+        FROM {database}.{table}
         WHERE {cold_filter}
         ORDER BY {partition_col} ASC
     """

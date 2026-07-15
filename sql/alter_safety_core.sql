@@ -9,7 +9,7 @@
 -- =============================================================================
 
 -- stream_registry: AWS Glue table-optimizer conflict cache
-ALTER TABLE glue_catalog.zamboni_catalog.stream_registry ADD COLUMNS (
+ALTER TABLE zamboni_catalog.stream_registry ADD COLUMNS (
     aws_opt_compaction  BOOLEAN,
     aws_opt_retention   BOOLEAN,
     aws_opt_orphan      BOOLEAN,
@@ -17,7 +17,7 @@ ALTER TABLE glue_catalog.zamboni_catalog.stream_registry ADD COLUMNS (
 );
 
 -- hk_config: Gate 0 time-boxed override (contracts.md §1 D3)
-ALTER TABLE glue_catalog.zamboni_catalog.hk_config ADD COLUMNS (
+ALTER TABLE zamboni_catalog.hk_config ADD COLUMNS (
     gate0_override_until  TIMESTAMP,
     gate0_override_reason STRING,
     gate0_override_by     STRING
@@ -26,7 +26,7 @@ ALTER TABLE glue_catalog.zamboni_catalog.hk_config ADD COLUMNS (
 -- execution_log: lock + integrity verification columns (contracts.md §5-A)
 -- NOTE: execution_log has a Parquet writer mode (EXECUTION_LOG_MODE) --
 -- these columns must also flow through engine/core/execution_log_parquet.py.
-ALTER TABLE glue_catalog.zamboni_catalog.execution_log ADD COLUMNS (
+ALTER TABLE zamboni_catalog.execution_log ADD COLUMNS (
     lock_id                  STRING,
     metadata_location_before STRING,
     metadata_location_after  STRING,

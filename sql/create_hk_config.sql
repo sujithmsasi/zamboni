@@ -4,7 +4,7 @@
 -- Database: zamboni_catalog
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS glue_catalog.zamboni_catalog.hk_config (
+CREATE TABLE IF NOT EXISTS zamboni_catalog.hk_config (
 
     -- ── Identity (FK to stream_registry) ──────────────────────────────────────
     table_fqn                       STRING  COMMENT 'Matches stream_registry.table_fqn',
