@@ -200,6 +200,68 @@ step 5's `--init-control-plane-db`).
 Open `http://localhost:8000` (or `:5173` for the hot-reload dev server) and
 log in with the demo credentials shown on the login screen itself.
 
+## Running an engine (HK / Archival / Lifecycle) against real AWS
+
+There are three distinct ways an engine actually runs — pick the one that
+matches what you're doing:
+
+| Option | When to use it | How |
+|---|---|---|
+| **Manual CLI** | Testing a change, validating against real data before trusting the schedule, a one-off run | `python -m engine.scripts.run_*`, this section |
+| **EventBridge schedule** | Normal steady-state operation | `aws_ec2` only, not `aws_local` — see `data_operations_guide.md` §6's schedule table (`EnableEngineScheduling` stack parameter) |
+| **Control-M** | Orgs that already trigger HK as a post-batch job step | HK Engine's documented trigger is "EventBridge (hourly) **or** Control-M post-batch" (`.claude/CLAUDE.md`'s engine table) — Control-M invokes the identical `python -m engine.scripts.run_hk` CLI below as a job step, it's not a separate code path. `stream_registry.controlm_hk_job`/`dependent_on_controlm_job` (Table Registration → Control-M Integration) is what wires a table to its upstream Control-M job for Gate 1's dependency check, independent of which of these three actually launches the engine process |
+
+The rest of this section is the manual-CLI option, since `aws_local` has
+no EventBridge/Control-M of its own. The three engines aren't started by
+either launcher above — they're separate, one-shot CLI processes. Every
+invocation needs:
+
+```powershell
+# Must be a fresh shell, or one where step 3's .env is already loaded --
+# these scripts are run directly with `python -m`, not through
+# run_aws_local.ps1/run_ui_dev.ps1, so nothing auto-injects .env.aws_local
+# or AWS_PROFILE for you (see the gotcha in step 3 above).
+.\.venv\Scripts\Activate.ps1
+$env:AWS_PROFILE = "<the profile you set up in step 2>"
+```
+
+**Scope options** (combine freely — all optional, default is the whole
+fleet):
+
+| Flag | Effect | Engines that accept it |
+|---|---|---|
+| *(none)* | Every enabled/eligible table | All |
+| `--table <fqn>` | One specific table | HK only |
+| `--domain <name>` | Every table in a domain | HK, Archival |
+| `--domain <name> --layer staging\|datalake\|base\|master` | One domain, one layer | HK only |
+| `--tier critical\|standard\|low` | Every table in a tier | HK only |
+| `--environment prod\|preprod\|dev\|test` | Target environment (default `prod` for HK/Archival, `preprod` for the 3 Lifecycle jobs) | All |
+| `--dry-run` / `--no-dry-run` | Evaluate but don't write, vs. execute for real (default: `.env`'s `DRY_RUN_DEFAULT`) | All |
+
+There is no `--force` CLI flag on any script (an earlier version of `run_hk.py`'s own docstring documented one that was never actually implemented — fixed alongside this doc). Per-table window-check bypass is the `stream_registry.force_run` column (read by `orchestrator.py`/`hk_engine.py`'s window evaluation) — a control-plane data flag, not a CLI option, and not currently exposed in the UI either.
+
+**Always start scoped + dry-run against a real account, then widen:**
+
+```powershell
+# HK -- compaction, snapshot expiry, orphan cleanup
+python -m engine.scripts.run_hk --domain finance --dry-run
+python -m engine.scripts.run_hk --table glue_catalog.finance_db.finance_staging --dry-run
+python -m engine.scripts.run_hk --domain finance --layer staging --dry-run
+
+# Archival -- export-then-delete cold staging partitions
+python -m engine.scripts.run_archival --domain finance --dry-run
+
+# Lifecycle -- 3 sub-jobs, run in this order (each is independently scoped)
+python -m engine.scripts.run_lifecycle_scan --environment preprod --dry-run    # discover/refresh nonprod_registry
+python -m engine.scripts.run_lifecycle_cycle --environment preprod --dry-run   # evaluate state transitions + notify
+python -m engine.scripts.run_cleanup --environment preprod --dry-run          # hard-delete expired PENDING_DROP tables
+```
+
+Once a dry run looks right, drop `--dry-run` (or pass `--no-dry-run`) to
+execute for real. Full flag reference (identical to the table above, one
+line per script) also lives in each script's own docstring
+(`engine/scripts/run_*.py`) and in `data_operations_guide.md` §6.
+
 ---
 
 ## Troubleshooting

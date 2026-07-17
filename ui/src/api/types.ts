@@ -293,6 +293,19 @@ export interface RegisterResult {
   template: string;
 }
 
+export interface RegisterBulkRowResult {
+  table_fqn: string;
+  success: boolean;
+  template: string | null;
+  error: string | null;
+}
+
+export interface RegisterBulkResult {
+  results: RegisterBulkRowResult[];
+  registered: number;
+  failed: number;
+}
+
 export interface JobMappingRow {
   job: string;
   job_type: string;

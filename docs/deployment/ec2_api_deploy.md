@@ -171,6 +171,31 @@ authorized" — a stuck connection then costs you nothing but the CI/CD
 convenience layer, not the whole deploy, which is the opposite of what
 happened last time.
 
+## Create the Athena metadata tables (first deploy only, either path)
+
+`zamboni-cfn.yaml` provisions the EC2/IAM/lock-table/security-group layer
+only — it does not create the Glue database or the 9 tables inside it
+(`domain_registry`/`stream_registry`/`hk_config`/`execution_log`/
+`nonprod_registry`/`audit_log`/`vacuum_audit`/`controlm_jobs`/
+`home_snapshot`). Provision the `zamboni_catalog` Glue database by hand
+first (no automation for the database itself), then run, with `.env`'s
+`ZAMBONI_METADATA_BUCKET`/`ATHENA_RESULTS_BUCKET` already filled in:
+
+```bash
+bash deploy/create_athena_tables.sh
+```
+
+This creates all 9 tables (`CREATE TABLE IF NOT EXISTS`, safe to re-run)
+and applies the two schema-catch-up ALTER files (`sql/alter_safety_core.sql`,
+`sql/alter_control_plane_columns.sql`) — also safe to re-run, since each
+`ALTER TABLE ADD COLUMNS` statement is applied individually and a "column
+already exists" failure is reported as `SKIP`, not treated as an error.
+**If Safe VACUUM's audit write fails with a `TABLE_NOT_FOUND`-shaped error
+against `vacuum_audit`** (or any other of the 9 tables), this is the step
+that was skipped or run against an older copy of the repo before
+`create_vacuum_audit.sql`/`create_controlm_jobs.sql` existed — re-running
+this script is the fix.
+
 ## Manual path (no CFN, matches the existing docx's conventions)
 
 Everything from `docs/zamboni-direct-setup.md`'s IAM/Athena/S3/SNS/EC2

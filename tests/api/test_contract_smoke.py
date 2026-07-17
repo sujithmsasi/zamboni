@@ -8,6 +8,12 @@ CONTRACT_ROUTES = [
     ("GET", "/api/tables"),
     ("GET", "/api/tables/{fqn}"),
     ("POST", "/api/tables/register"),
+    # > ADDED (2026-07-17): bulk counterpart to POST /api/tables/register --
+    # see contracts.md's note under routers/tables.py. Batches all N
+    # AuditEvents into one audit.persist_many() Athena INSERT instead of N
+    # separate round trips (was ~2-3 min for 78 tables via the old
+    # one-request-per-table client loop).
+    ("POST", "/api/tables/register-bulk"),
     ("PUT", "/api/tables/{fqn}"),
     ("POST", "/api/tables/bulk-controlm"),
     ("POST", "/api/tables/job-mapping/import"),
@@ -98,5 +104,6 @@ def test_route_count_matches_contract():
     """Belt-and-braces: total method+path count should match the routes defined
     here (44 from contracts.md §6 + 4 domains routes added in Phase 4 + 2
     template routes added in Phase 5a + the jobs/{name}/tables drill-in +
-    lifecycle/config added in Phase 5b + 2 Glue rescan routes)."""
-    assert len(CONTRACT_ROUTES) == 54
+    lifecycle/config added in Phase 5b + 2 Glue rescan routes + the
+    2026-07-17 register-bulk route)."""
+    assert len(CONTRACT_ROUTES) == 55

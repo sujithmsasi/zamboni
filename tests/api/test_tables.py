@@ -62,6 +62,56 @@ def test_register_table_validation_error(client):
     assert body["error"]["code"] == "422"
 
 
+def test_register_tables_bulk_dry_run(client):
+    payload = {
+        "tables": [
+            {"table_fqn": "glue_catalog.finance_staging_db.zamboni_api_bulk_tbl_1"},
+            {"table_fqn": "glue_catalog.finance_staging_db.zamboni_api_bulk_tbl_2"},
+        ],
+        "domain": "finance", "layer": "staging", "tier": "standard",
+        "dry_run": True,
+    }
+    resp = client.post("/api/tables/register-bulk", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["registered"] == 2
+    assert body["failed"] == 0
+    assert {r["table_fqn"] for r in body["results"]} == {
+        "glue_catalog.finance_staging_db.zamboni_api_bulk_tbl_1",
+        "glue_catalog.finance_staging_db.zamboni_api_bulk_tbl_2",
+    }
+    assert all(r["success"] and r["template"] for r in body["results"])
+
+    # persist_many() batches all N events into one call -- confirm both
+    # rows genuinely landed in audit_log, not just the first/last one.
+    audit_rows = client.get("/api/audit?page=1&size=20&action=table_register").json()["data"]
+    audited_fqns = {row["target_id"] for row in audit_rows if row["status"] == "DRY_RUN"}
+    assert "glue_catalog.finance_staging_db.zamboni_api_bulk_tbl_1" in audited_fqns
+    assert "glue_catalog.finance_staging_db.zamboni_api_bulk_tbl_2" in audited_fqns
+
+
+def test_register_tables_bulk_real_apply_registers_both(client):
+    payload = {
+        "tables": [
+            {"table_fqn": "glue_catalog.finance_staging_db.zamboni_api_bulk_real_1"},
+            {"table_fqn": "glue_catalog.finance_staging_db.zamboni_api_bulk_real_2"},
+        ],
+        "domain": "finance", "layer": "staging", "tier": "standard",
+        "dry_run": False,
+    }
+    resp = client.post("/api/tables/register-bulk", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["registered"] == 2
+
+    for fqn in (
+        "glue_catalog.finance_staging_db.zamboni_api_bulk_real_1",
+        "glue_catalog.finance_staging_db.zamboni_api_bulk_real_2",
+    ):
+        get_resp = client.get(f"/api/tables/{fqn}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["data"]["domain"] == "finance"
+
+
 def test_update_table_dry_run(client, a_table_fqn):
     resp = client.put(f"/api/tables/{a_table_fqn}", json={"owner_email": "new@example.com", "dry_run": True})
     assert resp.status_code == 200

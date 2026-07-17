@@ -39,13 +39,34 @@ not provisioned):
 | VPC + subnet | Where the EC2 instance launches |
 | 4 S3 buckets | Athena results, staging, archive, Zamboni metadata |
 | 5 Athena workgroups | `zamboni-critical/standard/low/archival/app` |
-| Glue database + 8 metadata tables | `zamboni_catalog`'s `domain_registry`/`stream_registry`/`hk_config`/`execution_log`/`nonprod_registry`/`audit_log`/`vacuum_audit`/`controlm_jobs` — DDL in `sql/create_*.sql` + `sql/alter_*.sql` |
+| Glue database `zamboni_catalog` | Not created by anything in this repo — provision the empty database first, `deploy/create_athena_tables.sh` (below) only creates the tables inside it |
 | 2 SNS topics | `zamboni-alerts`, `zamboni-greenzone` |
 | A CodeStar/CodeConnections GitHub authorization | Console-only, one-time — CFN can't complete the OAuth handshake (`GitHubConnectionArn` parameter) |
 
-If any of these don't exist yet, provision them now — there's no
-automation for this step in the repo today (a real gap; the CFN template
-starts from "these already exist").
+The Glue database itself and the 4 S3 buckets/5 workgroups/2 SNS topics
+above have no automation in this repo — provision them by hand (or your
+org's own IaC) before continuing; the CFN template starts from "these
+already exist" and only provisions the EC2/IAM/lock-table/security-group
+layer on top.
+
+**The 9 metadata tables inside `zamboni_catalog`** (`domain_registry`/
+`stream_registry`/`hk_config`/`execution_log`/`nonprod_registry`/
+`audit_log`/`vacuum_audit`/`controlm_jobs`/`home_snapshot`) DO have
+automation — run this once the Glue database exists and `.env` has real
+`ZAMBONI_METADATA_BUCKET`/`ATHENA_RESULTS_BUCKET` values:
+
+```bash
+bash deploy/create_athena_tables.sh
+```
+
+Safe to re-run any time (`CREATE TABLE IF NOT EXISTS` for the 9 tables,
+individually-tolerant `ALTER TABLE ADD COLUMNS` for the schema-catch-up
+files afterward — a "column already exists" on a later column is expected
+and reported as `SKIP`, not a failure). If a table like `vacuum_audit` is
+missing (`TABLE_NOT_FOUND` errors from the HK Engine's Safe VACUUM audit
+writes are the most common symptom), this is the script that was never
+run, or was run before `create_vacuum_audit.sql`/`create_controlm_jobs.sql`
+existed — just re-run it.
 
 ---
 
@@ -173,12 +194,17 @@ the second of two layers gating real writes (see §2's note).
   ```bash
   python -m engine.scripts.run_hk --domain finance --dry-run
   python -m engine.scripts.run_archival --dry-run
-  python -m engine.scripts.run_lifecycle_scan
+  python -m engine.scripts.run_lifecycle_scan --dry-run
   python -m engine.scripts.run_lifecycle_cycle --dry-run
   ```
-  (`run_lifecycle_scan` has no dry-run flag — it only discovers/refreshes
-  `nonprod_registry` rows, it never mutates lifecycle state or drops
-  anything.)
+  All four take `--dry-run` and all four honor it for real — including
+  `run_lifecycle_scan`, whose `--dry-run` suppresses the actual
+  `nonprod_registry` INSERT/UPDATE in `_upsert_nonprod_registry()`
+  (`run_query(..., dry_run=self.dry_run)`). It never transitions lifecycle
+  state or drops anything regardless of the flag (that's `run_lifecycle_cycle`/
+  `run_cleanup`'s job) — but it does genuinely write discovery rows when
+  `--dry-run` isn't passed, so don't skip it thinking the flag is a no-op
+  here.
 
 **EventBridge schedule** (once `EnableEngineScheduling=true`):
 
