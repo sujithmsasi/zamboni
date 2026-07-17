@@ -7,7 +7,6 @@ import {
   Form,
   Input,
   message,
-  Progress,
   Row,
   Select,
   Statistic,
@@ -15,14 +14,14 @@ import {
   Table,
   Tag,
 } from 'antd';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { request } from '../../../api/client';
 import { useDomainsList } from '../../../api/hooks/useDomains';
 import {
   GLUE_CACHE_STALE_TIME_MS,
   useGlueDatabases,
   useGlueTables,
-  useRegisterTable,
+  useRegisterTablesBulk,
   useRescanGlueDatabases,
   useRescanGlueTables,
 } from '../../../api/hooks/useTables';
@@ -53,18 +52,29 @@ interface RowResult {
  * shows it per-row in the result list after registering, which is the
  * authoritative value rather than a guess.
  */
-export function BrowseRegisterTab() {
+export function BrowseRegisterTab({ active }: { active: boolean }) {
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [unregisteredOnly, setUnregisteredOnly] = useState(false);
   const [pattern, setPattern] = useState('');
   const [selectedFqns, setSelectedFqns] = useState<string[]>([]);
   const [results, setResults] = useState<RowResult[] | null>(null);
-  const [progress, setProgress] = useState(0);
   const [form] = Form.useForm();
+
+  // AntD Tabs keeps this pane mounted when another tab is selected, so a
+  // completed batch's success/error banner would otherwise still be
+  // showing (stale) the next time the user switches back here. Clearing on
+  // the way out (not on the way back in) so it's already gone by the time
+  // they return, rather than flashing away while they're still looking at
+  // it on this tab.
+  useEffect(() => {
+    if (!active) {
+      setResults(null);
+    }
+  }, [active]);
 
   const databases = useGlueDatabases();
   const domains = useDomainsList(true);
-  const register = useRegisterTable();
+  const registerBulk = useRegisterTablesBulk();
   const rescanDatabases = useRescanGlueDatabases();
   const rescanTables = useRescanGlueTables();
 
@@ -110,36 +120,32 @@ export function BrowseRegisterTab() {
   const handleSubmit = async () => {
     const values = await form.validateFields();
     setResults(null);
-    setProgress(0);
-    const rows: RowResult[] = [];
-    for (let i = 0; i < selectedRows.length; i++) {
-      const row = selectedRows[i];
-      try {
-        const res = await register.mutateAsync({
-          table_fqn: row.table_fqn,
-          domain: values.domain,
-          layer: values.layer,
-          tier: values.tier,
-          environment: 'prod',
-          table_format: row.format,
-          owner_email: values.owner_email || '',
-          ci_number: values.ci_number || '',
-          notes: values.notes || '',
-          controlm_pipeline_job: values.controlm_pipeline_job || null,
-          controlm_hk_job: values.controlm_hk_job || null,
-          dependent_on_controlm_job: values.dependent_on_controlm_job || values.controlm_pipeline_job || null,
-          controlm_job_start_time: values.controlm_job_start_time || '02:00',
-          controlm_expected_duration_min: values.controlm_expected_duration_min ?? 0,
-          dependent_job_type: values.dependent_job_type || 'controlm',
-          dry_run: false,
-        });
-        rows.push({ fqn: row.table_fqn, ok: true, template: res.template });
-      } catch (err) {
-        rows.push({ fqn: row.table_fqn, ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-      setProgress(Math.round(((i + 1) / selectedRows.length) * 100));
+    try {
+      const res = await registerBulk.mutateAsync({
+        tables: selectedRows.map((row) => ({ table_fqn: row.table_fqn, table_format: row.format })),
+        domain: values.domain,
+        layer: values.layer,
+        tier: values.tier,
+        environment: 'prod',
+        owner_email: values.owner_email || '',
+        ci_number: values.ci_number || '',
+        notes: values.notes || '',
+        controlm_pipeline_job: values.controlm_pipeline_job || null,
+        controlm_hk_job: values.controlm_hk_job || null,
+        dependent_on_controlm_job: values.dependent_on_controlm_job || values.controlm_pipeline_job || null,
+        controlm_job_start_time: values.controlm_job_start_time || '02:00',
+        controlm_expected_duration_min: values.controlm_expected_duration_min ?? 0,
+        dependent_job_type: values.dependent_job_type || 'controlm',
+        dry_run: false,
+      });
+      setResults(res.results.map((r) => ({ fqn: r.table_fqn, ok: r.success, template: r.template ?? undefined, error: r.error ?? undefined })));
+    } catch (err) {
+      // The whole request failed (network/validation), not an individual
+      // row -- surface it the same way a single-row failure used to.
+      setResults(selectedRows.map((row) => ({
+        fqn: row.table_fqn, ok: false, error: err instanceof Error ? err.message : String(err),
+      })));
     }
-    setResults(rows);
     setSelectedFqns([]);
     // Streamlit's register form resets to its placeholder defaults on every
     // rerun (no session_state binding); this form stays mounted across
@@ -319,14 +325,12 @@ export function BrowseRegisterTab() {
                 <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>🔗 Control-M Integration (optional)</div>
                 <ControlMFields />
                 <Form.Item name="notes" label="Notes"><Input.TextArea rows={2} /></Form.Item>
-                <Button type="primary" onClick={handleSubmit} loading={register.isPending}>
+                <Button type="primary" onClick={handleSubmit} loading={registerBulk.isPending}>
                   📥 Register Selected Tables
                 </Button>
               </Form>
             </Card>
           )}
-
-          {register.isPending && <Progress percent={progress} style={{ marginTop: 16 }} />}
 
           {results && (
             <Card size="small" title="Registration results" style={{ marginTop: 16 }}>

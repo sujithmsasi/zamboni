@@ -84,6 +84,14 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
     every selected row. Returns {"success", "template"} so the router/UI can
     show which template got applied (editable later in Policy Config).
     """
+    return _register_one(req, registered_by, dry_run)
+
+
+def _register_one(req: dict, registered_by: str, dry_run: bool) -> dict:
+    """Per-row registration logic shared by register_table() (single-row,
+    HTTP-request-scoped) and register_tables_bulk() (many rows, one
+    request). Control-plane writes only -- no audit_log write here, that's
+    the caller's job (see register_tables_bulk()'s docstring for why)."""
     ok = registry.register_table(
         table_fqn=req["table_fqn"], domain=req["domain"], layer=req["layer"], tier=req["tier"],
         environment=req.get("environment", "prod"), table_format=req.get("table_format", "iceberg"),
@@ -108,6 +116,32 @@ def register_table(req: dict, registered_by: str, dry_run: bool) -> dict:
             dry_run=dry_run,
         )
     return {"success": ok, "template": template}
+
+
+def register_tables_bulk(shared: dict, tables: list[dict], registered_by: str, dry_run: bool) -> list[dict]:
+    """
+    Bulk counterpart to register_table() -- one call registers N tables via
+    the same per-row control-plane writes (stream_registry/hk_config, cheap
+    SQLite) register_table() uses, but doesn't write audit_log itself: the
+    router collects all N results into AuditEvents and calls
+    audit.persist_many() once, instead of the N Athena round trips calling
+    register_table() N times over HTTP would cost (this function exists
+    specifically to fix that -- see api/routers/tables.py's
+    register_tables_bulk route and RegisterTablesBulkRequest's docstring).
+
+    Each row is independent -- one bad table_fqn/domain doesn't abort the
+    rest of the batch, mirroring the resilience the old per-row client-side
+    try/catch loop (BrowseRegisterTab.tsx) used to provide.
+    """
+    results = []
+    for t in tables:
+        req = {**shared, "table_fqn": t["table_fqn"], "table_format": t.get("table_format", "iceberg")}
+        try:
+            row = _register_one(req, registered_by, dry_run)
+            results.append({"table_fqn": t["table_fqn"], "success": row["success"], "template": row["template"], "error": None})
+        except Exception as e:
+            results.append({"table_fqn": t["table_fqn"], "success": False, "template": None, "error": str(e)})
+    return results
 
 
 def _guess_partition_column_for_registration(req: dict) -> str:

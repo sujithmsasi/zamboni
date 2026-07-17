@@ -3,9 +3,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from api.deps import PageParams, get_current_user
-from api.models import BulkControlMRequest, MutationResult, RegisterTableRequest, UpdateTableRequest, envelope
+from api.models import (
+    BulkControlMRequest,
+    MutationResult,
+    RegisterTableRequest,
+    RegisterTablesBulkRequest,
+    UpdateTableRequest,
+    envelope,
+)
 from api.services import tables_svc
-from engine.core.audit import AuditAction, AuditEvent, audit
+from engine.core.audit import AuditAction, AuditEvent, audit, persist_many
 
 router = APIRouter(tags=["tables"])
 
@@ -37,6 +44,37 @@ def register_table(req: RegisterTableRequest, actor: str = Depends(get_current_u
     return envelope({
         "template": result["template"],
         **MutationResult(success=result["success"], dry_run=req.dry_run, audit_id=event.audit_id).model_dump(),
+    })
+
+
+@router.post("/api/tables/register-bulk")
+def register_tables_bulk(req: RegisterTablesBulkRequest, actor: str = Depends(get_current_user)):
+    """
+    Bulk counterpart to register_table() -- see RegisterTablesBulkRequest's
+    docstring. Registering N tables via N calls to POST /api/tables/register
+    costs N synchronous Athena audit_log INSERTs (~2-3s each); this collects
+    all N AuditEvents and writes them in one audit.persist_many() call.
+    """
+    shared = req.model_dump(exclude={"tables", "dry_run"})
+    rows = tables_svc.register_tables_bulk(
+        shared, [t.model_dump() for t in req.tables], registered_by=actor, dry_run=req.dry_run,
+    )
+    events = [
+        AuditEvent(
+            actor=actor, action_type=AuditAction.TABLE_REGISTER, page_source="api",
+            target_type="table", target_id=r["table_fqn"], domain=req.domain, environment=req.environment,
+            dry_run=req.dry_run,
+            status="DRY_RUN" if req.dry_run else ("SUCCESS" if r["success"] else "FAILURE"),
+            after_value=f"template={r['template']}" if r["success"] else "",
+            error_message=r["error"] or "",
+        )
+        for r in rows
+    ]
+    persist_many(events)
+    return envelope({
+        "results": rows,
+        "registered": sum(1 for r in rows if r["success"]),
+        "failed": sum(1 for r in rows if not r["success"]),
     })
 
 

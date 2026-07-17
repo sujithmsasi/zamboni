@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { qs, request, requestMultipart, requestPaged } from '../client';
-import type { GlueTableRow, JobMappingRow, MutationResult, RegisterResult, TableRow } from '../types';
+import type { GlueTableRow, JobMappingRow, MutationResult, RegisterBulkResult, TableRow } from '../types';
 
 /**
  * Minimal search-only hook for DryRunViewer's table picker (contracts.md §6
@@ -48,11 +48,16 @@ export function useTableDetail(fqn: string | null) {
   });
 }
 
-export function useRegisterTable() {
+// Bulk counterpart of POST /api/tables/register -- one request registers
+// every selected table, with the audit trail batched into a single
+// Athena INSERT server-side instead of one per table (was ~2-3s per table
+// via N sequential single-row register calls; see
+// api/routers/tables.py::register_tables_bulk's docstring).
+export function useRegisterTablesBulk() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>
-      request<RegisterResult>('/tables/register', { method: 'POST', body: JSON.stringify(body) }),
+      request<RegisterBulkResult>('/tables/register-bulk', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
   });
 }

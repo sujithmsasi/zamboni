@@ -18,8 +18,10 @@ Usage:
     # Dry run (no writes — safe to test)
     python -m engine.scripts.run_hk --domain finance --dry-run
 
-    # Force run (override safe window)
-    python -m engine.scripts.run_hk --domain finance --force
+    # Note: there is no --force CLI flag. Per-table window-check bypass is
+    # the stream_registry.force_run column (read by orchestrator.py /
+    # hk_engine.py's window evaluation) -- a control-plane data flag, not a
+    # CLI option, and not currently exposed in the UI either.
 """
 import sys
 

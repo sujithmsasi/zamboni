@@ -97,6 +97,44 @@ class RegisterTableRequest(BaseModel):
     dry_run: bool = True
 
 
+class RegisterTableRow(BaseModel):
+    """One row of a RegisterTablesBulkRequest -- the only two fields that
+    legitimately vary per table in a Browse & Register batch (everything
+    else comes from the shared form)."""
+    table_fqn: str
+    table_format: str = "iceberg"
+
+
+class RegisterTablesBulkRequest(BaseModel):
+    """
+    Bulk counterpart to RegisterTableRequest -- see api/routers/tables.py's
+    POST /api/tables/register-bulk for why this exists: registering N
+    tables via N calls to POST /api/tables/register cost N synchronous
+    Athena audit_log INSERTs (one per request), ~2-3s each -- genuinely
+    slow at real batch sizes (reported: 78 tables, 2-3 minutes). This
+    endpoint keeps the same per-row control-plane writes but collects all
+    N AuditEvents into a single audit.persist_many() call.
+    """
+    tables: list[RegisterTableRow]
+    domain: str
+    layer: str
+    tier: str
+    environment: str = "prod"
+    owner_email: str = ""
+    ci_number: str = ""
+    hk_enabled: bool = False
+    archive_enabled: bool = False
+    archive_retention_days: int | None = None
+    notes: str = ""
+    controlm_pipeline_job: str | None = None
+    controlm_hk_job: str | None = None
+    dependent_on_controlm_job: str | None = None
+    controlm_job_start_time: str = "02:00"
+    controlm_expected_duration_min: int = 0
+    dependent_job_type: str = "controlm"
+    dry_run: bool = True
+
+
 class UpdateTableRequest(BaseModel):
     """Partial update -- only provided fields are written."""
     domain: str | None = None

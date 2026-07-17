@@ -354,6 +354,18 @@ POST   /api/tables/job-mapping/import  CSV upload (multipart) → per-row match 
 GET    /api/tables/job-mapping/export  → CSV stream
 GET    /api/glue/databases
 GET    /api/glue/tables/{db}           ?pattern&unregistered_only
+
+> ADDED (2026-07-17): registering N tables via N calls to
+> POST /api/tables/register cost N synchronous Athena audit_log INSERTs
+> (~2-3s each, one per HTTP request) -- reported as 78 tables taking 2-3
+> minutes through Browse & Register's client-side loop. See
+> api/services/tables_svc.py::register_tables_bulk()/
+> api/models.py::RegisterTablesBulkRequest's docstrings.
+POST   /api/tables/register-bulk       RegisterTablesBulkRequest (shared
+                                        fields + tables: [{table_fqn,
+                                        table_format}]) → {results, registered,
+                                        failed}, one batched audit.persist_many()
+                                        call instead of N Athena round trips
 ```
 
 ### routers/policies.py

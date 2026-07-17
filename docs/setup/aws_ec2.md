@@ -68,7 +68,24 @@ there. Get this wrong and the first deploy looks fine; the *second* deploy
 silently starts against an empty database, because CodeDeploy wipes
 `/opt/zamboni` on every revision.
 
-## 4. Validate
+## 4. Create the Athena metadata tables (first deploy only)
+
+The CFN stack does not create the Glue database or the 9 tables inside it
+(`domain_registry`, `stream_registry`, `hk_config`, `execution_log`,
+`nonprod_registry`, `audit_log`, `vacuum_audit`, `controlm_jobs`,
+`home_snapshot`) — provision the empty `zamboni_catalog` Glue database by
+hand, then:
+
+```bash
+bash deploy/create_athena_tables.sh
+```
+
+Safe to re-run any time. See `ec2_api_deploy.md`'s "Create the Athena
+metadata tables" section for detail — this is the fix if you ever see a
+`TABLE_NOT_FOUND`-shaped error against `vacuum_audit` or another of the 9
+tables.
+
+## 5. Validate
 
 ```bash
 python scripts/aws_smoke_test.py --create-lock-table --init-control-plane-db
@@ -85,6 +102,7 @@ Every check should PASS. If `control_plane_db` fails with a message about
 | EC2 instance replaced unexpectedly on an unrelated stack update | `AmiId`'s SSM parameter resolved a newer AMI than last deploy, forcing a replacement | Always pass `AmiId=<ResolvedAmiId output>` from the previous deploy on every subsequent one |
 | CodePipeline never triggers / GitHub connection stuck `PENDING` | GitHub org restricting third-party App installs, needs an org owner's approval — CloudFormation cannot complete this handshake itself | See `ec2_api_deploy.md`'s "GitHub connection setup & troubleshooting" section; the base infra + a manual first deploy work independently of this being resolved |
 | CodeDeploy `BeforeInstall` fails with "agent was not able to receive the lifecycle event" | UserData bootstrap failed silently on a replaced instance (pre-2026-07-10) | Fixed — UserData now fails loud with a `Zamboni/BootstrapSuccess` CloudWatch metric; check `/var/log/zamboni/bootstrap.log` on the instance |
+| `TABLE_NOT_FOUND` (or similar) against `vacuum_audit`, `controlm_jobs`, or any of the 9 metadata tables | `bash deploy/create_athena_tables.sh` was never run, or was run against an older repo copy before that table's `sql/create_*.sql` existed | Re-run `bash deploy/create_athena_tables.sh` — safe to re-run, `CREATE TABLE IF NOT EXISTS` |
 
 **Pulling this into an org's own AWS account/repo?** See
 `docs/ORG_DROP.md`'s Phase 7 checklist — it's the same steps above, plus the

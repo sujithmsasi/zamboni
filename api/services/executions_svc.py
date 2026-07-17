@@ -34,6 +34,28 @@ def _esc(value: str) -> str:
     return str(value).replace("'", "''")
 
 
+def _truthy(value) -> bool:
+    """
+    NA-safe equivalent of `bool(value)`. Plain `bool()`/`or` raise
+    `TypeError: boolean value of NA is ambiguous` on pandas' nullable NA --
+    unlike None/NaN, which are falsy/truthy respectively and never raise.
+    Real Athena reads via awswrangler return NA (not NaN) for a NULL
+    aggregate or a NULL nullable-dtype column (e.g. SUM() over zero
+    matching rows, or a boolean column with unpopulated rows after an
+    ALTER TABLE ADD COLUMNS) -- this class of crash only ever shows up
+    against real Athena, never local/SQLite mode, which is why it wasn't
+    caught until now.
+    """
+    if pd.isna(value):
+        return False
+    return bool(value)
+
+
+def _nz(value, default):
+    """NA-safe equivalent of `value or default` -- see _truthy()."""
+    return value if _truthy(value) else default
+
+
 # ── executions list / detail ─────────────────────────────────────────────────
 
 def list_executions(
@@ -105,10 +127,10 @@ def dry_run_view(fqn: str) -> dict | None:
     cfg_df = read_sql(f"SELECT * FROM {HK_CONFIG_TABLE} WHERE table_fqn = '{_esc(fqn)}' LIMIT 1", workgroup="app")
     cfg = cfg_df.iloc[0].to_dict() if not cfg_df.empty else {}
 
-    window_json = cfg.get("window_config") or ""
-    decision = evaluate(window_json, force=bool(reg.get("force_run", False))) if window_json else EXECUTE
+    window_json = _nz(cfg.get("window_config"), "")
+    decision = evaluate(window_json, force=_truthy(reg.get("force_run", False))) if window_json else EXECUTE
 
-    upstream = reg.get("dependent_on_controlm_job") or reg.get("controlm_pipeline_job") or reg.get("dependent_job_name")
+    upstream = _nz(reg.get("dependent_on_controlm_job"), _nz(reg.get("controlm_pipeline_job"), reg.get("dependent_job_name")))
     gates = {
         "gate1_enabled": bool(cfg.get("gate1_enabled", 0)),
         "gate2_enabled": bool(cfg.get("gate2_enabled", 1)),
@@ -120,7 +142,7 @@ def dry_run_view(fqn: str) -> dict | None:
     sql_preview = None
     if cfg.get("compaction_strategy") == "binpack":
         part_col = cfg.get("partition_column")
-        part_type = cfg.get("partition_type", "date") or "date"
+        part_type = _nz(cfg.get("partition_type", "date"), "date")
         no_filter = part_type in ("none", "identity") or not part_col
         part_filter = (
             build_hot_partition_filter(part_col, days=cfg.get("partition_filter_days"), partition_type=part_type)
@@ -194,10 +216,10 @@ def health_kpis(env: str = "prod", domain: str | None = None) -> dict:
     trend_df = read_sql(trend_sql, workgroup="app")
 
     return {
-        "total_registered": int(frow.get("total") or 0),
-        "hk_enabled": int(frow.get("enabled") or 0),
-        "iceberg_tables": int(frow.get("iceberg") or 0),
-        "in_dry_run": int(frow.get("in_dry_run") or 0),
+        "total_registered": int(_nz(frow.get("total"), 0)),
+        "hk_enabled": int(_nz(frow.get("enabled"), 0)),
+        "iceberg_tables": int(_nz(frow.get("iceberg"), 0)),
+        "in_dry_run": int(_nz(frow.get("in_dry_run"), 0)),
         "failures_7d": failures_7d,
         "conflicts": fleet_conflict_summary(),
         "coverage_by_domain": coverage_df.to_dict(orient="records"),
@@ -246,11 +268,11 @@ def _reclaimed_storage_trend(days: int = 30) -> list[dict]:
     sense (see decisions.md).
     """
     vacuum_sql = f"""
-        SELECT SUBSTR(completed_at, 1, 10) AS day, SUM(bytes_reclaimed) AS bytes_reclaimed
+        SELECT SUBSTR(CAST(completed_at AS VARCHAR), 1, 10) AS day, SUM(bytes_reclaimed) AS bytes_reclaimed
         FROM {VACUUM_AUDIT_TABLE}
         WHERE aborted = false AND dry_run = false
           AND completed_at >= CURRENT_DATE - INTERVAL '{int(days)}' DAY
-        GROUP BY SUBSTR(completed_at, 1, 10)
+        GROUP BY SUBSTR(CAST(completed_at AS VARCHAR), 1, 10)
     """
     archive_sql = f"""
         SELECT execution_date AS day, SUM(bytes_archived) AS bytes_archived
@@ -266,11 +288,11 @@ def _reclaimed_storage_trend(days: int = 30) -> list[dict]:
     for _, row in vacuum_df.iterrows():
         day = str(row["day"])
         by_day.setdefault(day, {"day": day, "vacuum_gb": 0.0, "archived_gb": 0.0})
-        by_day[day]["vacuum_gb"] = round((row["bytes_reclaimed"] or 0) / 1e9, 2)
+        by_day[day]["vacuum_gb"] = round(_nz(row["bytes_reclaimed"], 0) / 1e9, 2)
     for _, row in archive_df.iterrows():
         day = str(row["day"])
         by_day.setdefault(day, {"day": day, "vacuum_gb": 0.0, "archived_gb": 0.0})
-        by_day[day]["archived_gb"] = round((row["bytes_archived"] or 0) / 1e9, 2)
+        by_day[day]["archived_gb"] = round(_nz(row["bytes_archived"], 0) / 1e9, 2)
 
     return sorted(by_day.values(), key=lambda r: r["day"])
 
@@ -297,13 +319,13 @@ def _top_tables_by_reclaim(days: int = 30, limit: int = 10) -> list[dict]:
     by_table: dict[str, dict] = {}
     for _, row in vacuum_df.iterrows():
         fqn = row["table_fqn"]
-        by_table.setdefault(fqn, {"table_fqn": fqn, "domain": row.get("domain") or "", "bytes": 0})
-        by_table[fqn]["bytes"] += row["bytes_reclaimed"] or 0
+        by_table.setdefault(fqn, {"table_fqn": fqn, "domain": _nz(row.get("domain"), ""), "bytes": 0})
+        by_table[fqn]["bytes"] += _nz(row["bytes_reclaimed"], 0)
     for _, row in archive_df.iterrows():
         fqn = row["table_fqn"]
-        by_table.setdefault(fqn, {"table_fqn": fqn, "domain": row.get("domain") or "", "bytes": 0})
-        by_table[fqn]["domain"] = row.get("domain") or by_table[fqn]["domain"]
-        by_table[fqn]["bytes"] += row["bytes_archived"] or 0
+        by_table.setdefault(fqn, {"table_fqn": fqn, "domain": _nz(row.get("domain"), ""), "bytes": 0})
+        by_table[fqn]["domain"] = _nz(row.get("domain"), by_table[fqn]["domain"])
+        by_table[fqn]["bytes"] += _nz(row["bytes_archived"], 0)
 
     ranked = sorted(by_table.values(), key=lambda r: r["bytes"], reverse=True)[:limit]
     return [{"table_fqn": r["table_fqn"], "domain": r["domain"], "gb_reclaimed": round(r["bytes"] / 1e9, 2)} for r in ranked]
@@ -331,8 +353,8 @@ def _storage_savings_estimate() -> dict:
     archive_sql = f"SELECT SUM(bytes_archived) AS b FROM {EXECUTION_LOG_TABLE} WHERE engine = 'archival' AND status = 'SUCCESS'"
     vacuum_df = _safe_vacuum_read(vacuum_sql)
     archive_df = read_sql(archive_sql, workgroup="app")
-    vacuum_bytes = int((vacuum_df.iloc[0]["b"] or 0) if not vacuum_df.empty else 0)
-    archive_bytes = int((archive_df.iloc[0]["b"] or 0) if not archive_df.empty else 0)
+    vacuum_bytes = int(_nz(vacuum_df.iloc[0]["b"], 0)) if not vacuum_df.empty else 0
+    archive_bytes = int(_nz(archive_df.iloc[0]["b"], 0)) if not archive_df.empty else 0
     total_gb = round((vacuum_bytes + archive_bytes) / 1e9, 1)
     return {
         "total_gb_reclaimed": total_gb,
@@ -351,19 +373,23 @@ def _fleet_health_summary() -> dict:
     NEEDS_ATTENTION: at least one failure in 7d but otherwise fine.
     HEALTHY: everything else.
     """
-    def _sql(include_opt_cols: bool) -> str:
-        # aws_opt_* (sql/alter_safety_core.sql) may not have been applied
-        # yet on a fresh deployment -- engine/core/governance.py's own
-        # queries against these same columns already degrade gracefully
-        # on a missing-column failure; this mirrors that here since it's
-        # the one other call site selecting them directly.
+    def _sql(include_opt_cols: bool, include_integrity: bool) -> str:
+        # aws_opt_* (stream_registry) and integrity_status (execution_log)
+        # come from two separate ALTER TABLE statements within the same
+        # sql/alter_safety_core.sql file -- against different tables, so
+        # either can be missing independently of the other on a partially-
+        # applied deployment (e.g. one ALTER ran before an interruption,
+        # the other didn't). Toggled independently rather than assuming
+        # they're always applied together. engine/core/governance.py's own
+        # queries against aws_opt_* already degrade gracefully the same way.
         opt_select = "r.aws_opt_compaction, r.aws_opt_retention, r.aws_opt_orphan," if include_opt_cols else ""
         opt_group = ", r.aws_opt_compaction, r.aws_opt_retention, r.aws_opt_orphan" if include_opt_cols else ""
+        integrity_expr = "l.integrity_status = 'FAILED'" if include_integrity else "false"
         return f"""
             SELECT
                 r.table_fqn, r.domain, r.layer, r.tier, {opt_select}
                 SUM(CASE WHEN l.status = 'FAILURE' AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS failures_7d,
-                SUM(CASE WHEN l.integrity_status = 'FAILED' AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS integrity_failures_7d,
+                SUM(CASE WHEN {integrity_expr} AND l.execution_date >= CURRENT_DATE - INTERVAL '7' DAY THEN 1 ELSE 0 END) AS integrity_failures_7d,
                 SUM(CASE WHEN l.status = 'SUCCESS' AND l.execution_date >= CURRENT_DATE - INTERVAL '14' DAY THEN 1 ELSE 0 END) AS housekept_recently
             FROM {STREAM_REGISTRY_TABLE} r
             LEFT JOIN {EXECUTION_LOG_TABLE} l ON r.table_fqn = l.table_fqn
@@ -371,19 +397,28 @@ def _fleet_health_summary() -> dict:
             GROUP BY r.table_fqn, r.domain, r.layer, r.tier{opt_group}
         """
 
-    try:
-        df = read_sql(_sql(True), workgroup="app")
-    except Exception as e:
-        log.warning("executions_svc.fleet_health_aws_opt_columns_missing", error=str(e))
-        df = read_sql(_sql(False), workgroup="app")
+    df = None
+    last_error: Exception | None = None
+    for include_opt_cols, include_integrity in ((True, True), (False, True), (True, False), (False, False)):
+        try:
+            df = read_sql(_sql(include_opt_cols, include_integrity), workgroup="app")
+            break
+        except Exception as e:
+            last_error = e
+            log.warning(
+                "executions_svc.fleet_health_summary_query_failed",
+                include_opt_cols=include_opt_cols, include_integrity=include_integrity, error=str(e),
+            )
+    if df is None:
+        raise last_error
 
     healthy = needs_attention = at_risk = 0
     flagged: list[dict] = []
     for _, row in df.iterrows():
         conflicted = _truthy_any(row.get("aws_opt_compaction"), row.get("aws_opt_retention"), row.get("aws_opt_orphan"))
-        integrity_failed = int(row.get("integrity_failures_7d") or 0) > 0
-        never_recent = int(row.get("housekept_recently") or 0) == 0
-        failed_7d = int(row.get("failures_7d") or 0) > 0
+        integrity_failed = int(_nz(row.get("integrity_failures_7d"), 0)) > 0
+        never_recent = int(_nz(row.get("housekept_recently"), 0)) == 0
+        failed_7d = int(_nz(row.get("failures_7d"), 0)) > 0
 
         if integrity_failed or conflicted or never_recent:
             at_risk += 1
@@ -412,7 +447,11 @@ def _fleet_health_summary() -> dict:
 
 
 def _truthy_any(*values) -> bool:
-    return any(bool(v) and str(v).lower() not in ("0", "false", "none", "nan") for v in values if v is not None)
+    # NA-safe: _truthy() short-circuits before str(v) is ever reached for a
+    # null/NA value (Python's `and` stops at the first falsy operand), so a
+    # NULL aws_opt_* column (unpopulated after an ALTER TABLE ADD COLUMNS,
+    # before conflict_detector.py's live check ever runs) no longer raises.
+    return any(_truthy(v) and str(v).lower() not in ("0", "false", "none", "nan") for v in values)
 
 
 def _nonprod_lifecycle_funnel() -> list[dict]:
@@ -441,7 +480,7 @@ def _dry_run_adoption(stale_days: int = 30) -> list[dict]:
     df = read_sql(sql, workgroup="app")
     rows = df.to_dict(orient="records")
     for row in rows:
-        row["stale"] = int(row.get("max_days_waiting") or 0) > stale_days
+        row["stale"] = int(_nz(row.get("max_days_waiting"), 0)) > stale_days
     return rows
 
 
